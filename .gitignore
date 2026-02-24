@@ -1,0 +1,17 @@
+﻿# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Local Feishu KB sync
+
+lark-mcp.config.json
+
+_kb_sync/KB_CONTEXT.md
+
+_kb_sync/KB_CONTEXT.json
+
+# Local KB sync config + content cache (may contain private KB text)
+_kb_sync/kb.local.json
+_kb_sync/KB_CACHE.md
+_kb_sync/cache/
+_kb_sync/cache_index.json

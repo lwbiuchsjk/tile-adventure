@@ -1,0 +1,19 @@
+{
+  "appConfigPath": "../lark-mcp.config.json",
+
+  "spaceId": "7605421062246911165",
+
+  "includeNodeTokens": [
+    "Ud0CwL2joipMZCk2JEScCNztnYf"
+  ],
+
+  "cache": {
+    "enabled": true,
+    "forceRefresh": true,
+    "dir": "./cache",
+    "bundlePath": "./KB_CACHE.md",
+    "indexPath": "./cache_index.json",
+    "lang": 0,
+    "ttlHours": 24
+  }
+}
