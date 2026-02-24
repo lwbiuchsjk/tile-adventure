@@ -1,0 +1,22 @@
+﻿{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "KB: Sync Feishu Context",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\_kb_sync\\kb_bootstrap.ps1",
+        "-Quiet"
+      ],
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
