@@ -7,11 +7,12 @@ This folder isolates all files for project-to-Feishu knowledge-base binding.
 - `kb.local.json`: local overrides (gitignored). See `kb.local.example.json`.
 - `kb_bootstrap.ps1`: startup sync script.
 - `read_token.js`: reads user token from local `lark-mcp` auth store.
-- `KB_CONTEXT.md`: generated context summary for agents/humans.
-- `KB_CONTEXT.json`: generated raw node snapshot.
-- `KB_CACHE.md`: generated cached knowledge bundle (docx raw_content, plain text).
-- `cache/`: per-doc cache files.
-- `cache_index.json`: cache metadata index.
+- `cache/KB_CONTEXT.md`: generated context summary for agents/humans.
+- `cache/KB_CONTEXT.json`: generated raw node snapshot.
+- `cache/cache_index.json`: cache metadata index.
+- `cache/KB_CACHE.md`: generated cached knowledge bundle (docx blocks rendered to Markdown, with JSON structure sidecar).
+- `cache/`: JSON structure cache files, `KB_CONTEXT.*`, and `cache_index.json`.
+- `Design/`: readable Markdown docs for individual synced documents.
 
 ## One-time prerequisite
 - You already logged in with `lark-mcp login` for the same appId in `../lark-mcp.config.json`.
@@ -37,5 +38,5 @@ Configured via `.vscode/tasks.json` + `.vscode/settings.json`.
 
 If `_kb_sync/kb.local.json` is missing, the script falls back to `kb.binding.json` + default cache settings (cache disabled).
 
-Note: caching is enabled by default (docx raw_content), and content is refreshed on every run by default (`cache.forceRefresh=true`).
+Note: caching is enabled by default (docx blocks). Each cached doc now generates a readable Markdown file and a JSON file that retains the full block structure. Content is refreshed on every run by default (`cache.forceRefresh=true`).
 You can disable caching via `cache.enabled=false`, or keep cache but reuse local files via `cache.forceRefresh=false`.

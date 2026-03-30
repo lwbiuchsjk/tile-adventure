@@ -2,8 +2,6 @@
 .godot/
 /android/
 
-# Local Feishu KB sync
-
 lark-mcp.config.json
 
 _kb_sync/KB_CONTEXT.md
@@ -15,3 +13,16 @@ _kb_sync/kb.local.json
 _kb_sync/KB_CACHE.md
 _kb_sync/cache/
 _kb_sync/cache_index.json
+
+# Design docs/playground
+design/
+Design/
+
+# Local IDE settings
+.vscode/settings.json
+
+# Local Godot runner (path varies per machine)
+tools/run_godot.ps1
+
+# Web export output (CI handles export and deploy)
+output/

@@ -1,19 +1,18 @@
-{
-  "appConfigPath": "../lark-mcp.config.json",
-
-  "spaceId": "7605421062246911165",
-
-  "includeNodeTokens": [
-    "Ud0CwL2joipMZCk2JEScCNztnYf"
-  ],
-
-  "cache": {
-    "enabled": true,
-    "forceRefresh": true,
-    "dir": "./cache",
-    "bundlePath": "./KB_CACHE.md",
-    "indexPath": "./cache_index.json",
-    "lang": 0,
-    "ttlHours": 24
-  }
+﻿{
+    "appConfigPath":  "../lark-mcp.config.json",
+    "spaceId":  "7605864743265373126",
+    "includeNodeTokens":  [
+                              "Ud0CwL2joipMZCk2JEScCNztnYf"
+                          ],
+    "cache":  {
+                  "enabled":  true,
+                  "forceRefresh":  true,
+                  "dir":  "./cache",
+                  "bundlePath":  "./cache/KB_CACHE.md",
+                  "indexPath":  "./cache/cache_index.json",
+                  "lang":  0,
+                  "ttlHours":  24,
+                  "designDir":  "./Design"
+              }
 }
+

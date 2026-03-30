@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$Quiet
 )
 
@@ -8,8 +8,10 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir = Split-Path -Parent $scriptDir
 $bindingPath = Join-Path $scriptDir 'kb.binding.json'
 $localPath = Join-Path $scriptDir 'kb.local.json'
-$cacheMdPath = Join-Path $scriptDir 'KB_CONTEXT.md'
-$cacheJsonPath = Join-Path $scriptDir 'KB_CONTEXT.json'
+$defaultCacheDir = Join-Path $scriptDir 'cache'
+$defaultDesignDir = Join-Path $scriptDir 'Design'
+$cacheMdPath = Join-Path $defaultCacheDir 'KB_CONTEXT.md'
+$cacheJsonPath = Join-Path $defaultCacheDir 'KB_CONTEXT.json'
 $readTokenScript = Join-Path $scriptDir 'read_token.js'
 
 function LogInfo([string]$msg) {
@@ -163,6 +165,180 @@ function Invoke-FeishuGet([string]$url) {
   }
 
   throw "Feishu GET retry exhausted: $url"
+}
+
+function Join-Lines([System.Collections.Generic.List[string]]$lines) {
+  return (($lines.ToArray()) -join "`r`n")
+}
+
+function Get-SafeFileName([string]$name) {
+  # 中文说明：将在线文档标题收束为稳定文件名，便于人工检索且避免非法路径字符。
+  if (-not $name) { return 'untitled' }
+
+  $safe = $name.Trim()
+  $invalidChars = [System.IO.Path]::GetInvalidFileNameChars()
+  foreach ($ch in $invalidChars) {
+    $safe = $safe.Replace([string]$ch, '_')
+  }
+
+  $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '\s+', '_')
+  $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '_{2,}', '_')
+  $safe = $safe.Trim(' ', '.', '_')
+
+  if (-not $safe) { return 'untitled' }
+  return $safe
+}
+
+function Convert-DocxElementsToMarkdown([object[]]$elements) {
+  # 中文说明：将飞书富文本元素尽量转换为 Markdown 行内格式，作为可读缓存层。
+  if (-not $elements) { return '' }
+
+  $parts = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($el in $elements) {
+    if ($null -eq $el) { continue }
+
+    if ($el.PSObject.Properties.Name -contains 'text_run') {
+      $textRun = $el.text_run
+      $text = [string]$textRun.content
+      $style = $textRun.text_element_style
+
+      if ($style) {
+        if ([bool]$style.inline_code) { $text = '`' + $text + '`' }
+        if ([bool]$style.bold) { $text = "**$text**" }
+        if ([bool]$style.italic) { $text = "*$text*" }
+        if ([bool]$style.strikethrough) { $text = "~~$text~~" }
+        if ([bool]$style.underline) { $text = "<u>$text</u>" }
+      }
+
+      $parts.Add($text)
+      continue
+    }
+
+    if ($el.PSObject.Properties.Name -contains 'mention_user') {
+      $name = [string]$el.mention_user.name
+      if (-not $name) { $name = '用户' }
+      $parts.Add("@$name")
+      continue
+    }
+
+    if ($el.PSObject.Properties.Name -contains 'reminder') {
+      $parts.Add('[提醒]')
+      continue
+    }
+
+    if ($el.PSObject.Properties.Name -contains 'equation') {
+      $parts.Add('`' + [string]$el.equation.content + '`')
+      continue
+    }
+
+    if ($el.PSObject.Properties.Name -contains 'docs_link') {
+      $link = [string]$el.docs_link.url
+      $text = [string]$el.docs_link.text
+      if (-not $text) { $text = $link }
+      if ($link) {
+        $parts.Add("[$text]($link)")
+      } else {
+        $parts.Add($text)
+      }
+      continue
+    }
+
+    $parts.Add(($el | ConvertTo-Json -Depth 6 -Compress))
+  }
+
+  return ($parts.ToArray() -join '')
+}
+
+function Convert-DocxBlocksToMarkdown([object[]]$items, [string]$documentId) {
+  # 中文说明：Markdown 只负责“可读展示”，完整格式仍由 JSON 缓存承载。
+  $lines = New-Object 'System.Collections.Generic.List[string]'
+  if (-not $items) { return '' }
+
+  foreach ($item in $items) {
+    if (-not $item) { continue }
+    $blockType = [int]$item.block_type
+    $line = ''
+
+    switch ($blockType) {
+      1 {
+        $title = Convert-DocxElementsToMarkdown @($item.page.elements)
+        if ($title) {
+          $lines.Add("# $title")
+          $lines.Add('')
+        }
+        continue
+      }
+      2 { $line = Convert-DocxElementsToMarkdown @($item.text.elements) }
+      3 { $line = '# ' + (Convert-DocxElementsToMarkdown @($item.heading1.elements)) }
+      4 { $line = '## ' + (Convert-DocxElementsToMarkdown @($item.heading2.elements)) }
+      5 { $line = '### ' + (Convert-DocxElementsToMarkdown @($item.heading3.elements)) }
+      6 { $line = '#### ' + (Convert-DocxElementsToMarkdown @($item.heading4.elements)) }
+      7 { $line = '##### ' + (Convert-DocxElementsToMarkdown @($item.heading5.elements)) }
+      8 { $line = '###### ' + (Convert-DocxElementsToMarkdown @($item.heading6.elements)) }
+      9 { $line = '**H7** ' + (Convert-DocxElementsToMarkdown @($item.heading7.elements)) }
+      10 { $line = '**H8** ' + (Convert-DocxElementsToMarkdown @($item.heading8.elements)) }
+      11 { $line = '**H9** ' + (Convert-DocxElementsToMarkdown @($item.heading9.elements)) }
+      12 { $line = '- ' + (Convert-DocxElementsToMarkdown @($item.bullet.elements)) }
+      13 { $line = '1. ' + (Convert-DocxElementsToMarkdown @($item.ordered.elements)) }
+      14 {
+        $codeText = Convert-DocxElementsToMarkdown @($item.code.elements)
+        $lines.Add('```')
+        if ($codeText) { $lines.Add($codeText) }
+        $lines.Add('```')
+        $lines.Add('')
+        continue
+      }
+      15 { $line = '> ' + (Convert-DocxElementsToMarkdown @($item.quote.elements)) }
+      17 {
+        $todoText = Convert-DocxElementsToMarkdown @($item.todo.elements)
+        $isDone = $false
+        if ($item.todo -and $item.todo.style -and ($item.todo.style.PSObject.Properties.Name -contains 'done')) {
+          $isDone = [bool]$item.todo.style.done
+        }
+        $mark = if ($isDone) { 'x' } else { ' ' }
+        $line = "- [$mark] $todoText"
+      }
+      19 { $line = '> [!NOTE] ' + (Convert-DocxElementsToMarkdown @($item.callout.elements)) }
+      22 { $line = '---' }
+      23 { $line = "[附件块: $([string]$item.block_id)]" }
+      27 { $line = "[图片块: $([string]$item.block_id)]" }
+      31 { $line = "[表格块: $([string]$item.block_id)]" }
+      default { $line = "[未转换块 type=$blockType id=$([string]$item.block_id)]" }
+    }
+
+    if ($line -ne '') {
+      $lines.Add($line)
+      $lines.Add('')
+    }
+  }
+
+  return (Join-Lines $lines).Trim()
+}
+
+function Fetch-DocxBlocks([string]$domain, [string]$documentId) {
+  # 中文说明：分页拉取整篇文档的 block 列表，用于保存完整格式结构。
+  $items = @()
+  $pageToken = ''
+  $hasMore = $true
+
+  while ($hasMore) {
+    $url = "$domain/open-apis/docx/v1/documents/$documentId/blocks?page_size=500"
+    if ($pageToken) {
+      $url += "&page_token=$([uri]::EscapeDataString($pageToken))"
+    }
+
+    $resp = Invoke-FeishuGet $url
+    if ($resp.code -ne 0) { throw "docx blocks failed ($documentId): $($resp.msg)" }
+
+    if ($resp.data -and $resp.data.items) {
+      $items += @($resp.data.items)
+    }
+
+    $hasMore = [bool]($resp.data.has_more)
+    $pageToken = [string]($resp.data.page_token)
+  }
+
+  return ,$items
 }
 
 function Normalize-DocLang([object]$v) {
@@ -359,6 +535,34 @@ while ($q.Count -gt 0) {
 $space = $spaceResp.data.space
 $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
 
+# 中文说明：这里先统一确定缓存与展示目录，保证后续所有产物都落到约定位置。
+$cacheEnabled = $true
+$cacheDir = $defaultCacheDir
+$designDir = $defaultDesignDir
+$bundlePath = Join-Path $cacheDir 'KB_CACHE.md'
+$indexPath = Join-Path $cacheDir 'cache_index.json'
+$cacheLang = 0
+$cacheTtlHours = 24
+$cacheForceRefresh = $true
+$includeNodeTokens = @()
+$cacheAllNodes = $true
+
+$cacheEnabled = [bool](Get-CfgCache 'enabled' $cacheEnabled)
+$cacheDir = Resolve-RelPath $scriptDir ([string](Get-CfgCache 'dir' $cacheDir))
+$designDir = Resolve-RelPath $scriptDir ([string](Get-CfgCache 'designDir' $designDir))
+$bundlePath = Resolve-RelPath $scriptDir ([string](Get-CfgCache 'bundlePath' $bundlePath))
+$indexPath = Resolve-RelPath $scriptDir ([string](Get-CfgCache 'indexPath' $indexPath))
+$cacheLang = Normalize-DocLang (Get-CfgCache 'lang' $cacheLang)
+$cacheTtlHours = [int](Get-CfgCache 'ttlHours' $cacheTtlHours)
+$cacheForceRefresh = [bool](Get-CfgCache 'forceRefresh' $cacheForceRefresh)
+$includeNodeTokens = @(Get-CfgArr 'includeNodeTokens')
+$cacheAllNodes = [bool](Get-CfgCache 'allNodes' $cacheAllNodes)
+
+$cacheMdPath = Join-Path $cacheDir 'KB_CONTEXT.md'
+$cacheJsonPath = Join-Path $cacheDir 'KB_CONTEXT.json'
+New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+New-Item -ItemType Directory -Path $designDir -Force | Out-Null
+
 $md = @()
 $md += '# Feishu KB Context'
 $md += ''
@@ -395,31 +599,9 @@ $jsonOut | ConvertTo-Json -Depth 8 | Set-Content -Path $cacheJsonPath -Encoding 
 
 LogInfo "KB synced: $($space.name) / nodes=$($allNodes.Count)"
 
-# Optional: cache docx raw_content locally.
-# Default behavior is to refresh from Feishu on every run, then overwrite local cache.
-$cacheEnabled = $true
-$cacheDir = Join-Path $scriptDir 'cache'
-$bundlePath = Join-Path $scriptDir 'KB_CACHE.md'
-$indexPath = Join-Path $scriptDir 'cache_index.json'
-$cacheLang = 0
-$cacheTtlHours = 24
-$cacheForceRefresh = $true
-$includeNodeTokens = @()
-$cacheAllNodes = $true
-
-$cacheEnabled = [bool](Get-CfgCache 'enabled' $cacheEnabled)
-$cacheDir = Resolve-RelPath $scriptDir ([string](Get-CfgCache 'dir' $cacheDir))
-$bundlePath = Resolve-RelPath $scriptDir ([string](Get-CfgCache 'bundlePath' $bundlePath))
-$indexPath = Resolve-RelPath $scriptDir ([string](Get-CfgCache 'indexPath' $indexPath))
-$cacheLang = Normalize-DocLang (Get-CfgCache 'lang' $cacheLang)
-$cacheTtlHours = [int](Get-CfgCache 'ttlHours' $cacheTtlHours)
-$cacheForceRefresh = [bool](Get-CfgCache 'forceRefresh' $cacheForceRefresh)
-$includeNodeTokens = @(Get-CfgArr 'includeNodeTokens')
-$cacheAllNodes = [bool](Get-CfgCache 'allNodes' $cacheAllNodes)
-
+# 中文说明：目录已在前面统一初始化，这里直接进入缓存产物生成。
 if ($cacheEnabled) {
-  LogInfo "Caching enabled. dir=$cacheDir ttlHours=$cacheTtlHours forceRefresh=$cacheForceRefresh"
-  New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+  LogInfo "Caching enabled. cacheDir=$cacheDir designDir=$designDir ttlHours=$cacheTtlHours forceRefresh=$cacheForceRefresh"
 
   $tokenSet = @{}
   if ((-not $cacheAllNodes) -and ($includeNodeTokens.Count -gt 0)) {
@@ -432,7 +614,7 @@ if ($cacheEnabled) {
       continue
     }
 
-    # Cache everything we can. Currently only docx raw_content is fetched and stored as text.
+    # 中文说明：当前缓存仅处理 docx，但会同时输出 Markdown 可读缓存和 JSON 结构缓存。
     $isDocx = ([string]$n.obj_type) -eq 'docx'
     if (-not $isDocx) {
       $cacheIndex += [ordered]@{
@@ -441,7 +623,7 @@ if ($cacheEnabled) {
         obj_token = [string]$n.obj_token
         title = [string]$n.title
         cached = $false
-        reason = 'unsupported obj_type (only docx raw_content is cached)'
+        reason = 'unsupported obj_type (only docx blocks are cached)'
       }
       continue
     }
@@ -449,37 +631,56 @@ if ($cacheEnabled) {
     $docId = [string]$n.obj_token
     if (-not $docId) { continue }
 
-    $cacheFile = Join-Path $cacheDir ("docx_{0}.txt" -f $docId)
+    # 中文说明：文件名采用“文档标题 + 文档ID”，兼顾人工检索与稳定唯一性。
+    $safeTitle = Get-SafeFileName ([string]$n.title)
+    $cacheBaseName = "{0}_{1}" -f $safeTitle, $docId
+    $cacheFileMd = Join-Path $designDir ("{0}.md" -f $cacheBaseName)
+    $cacheFileJson = Join-Path $cacheDir ("{0}.json" -f $cacheBaseName)
     $needFetch = $true
-    if ((-not $cacheForceRefresh) -and (Test-Path $cacheFile)) {
+    if ((-not $cacheForceRefresh) -and (Test-Path $cacheFileMd) -and (Test-Path $cacheFileJson)) {
       if ($cacheTtlHours -le 0) {
         $needFetch = $false
       } else {
-        $age = (New-TimeSpan -Start (Get-Item $cacheFile).LastWriteTime -End (Get-Date)).TotalHours
+        $age = (New-TimeSpan -Start (Get-Item $cacheFileJson).LastWriteTime -End (Get-Date)).TotalHours
         if ($age -lt $cacheTtlHours) { $needFetch = $false }
       }
     }
 
     if ($needFetch) {
-      LogInfo "Fetching docx raw_content: $($n.title) ($docId)"
-      $docUrl = "$domain/open-apis/docx/v1/documents/$docId/raw_content?lang=$cacheLang"
-      $docResp = Invoke-FeishuGet $docUrl
-      if ($docResp.code -ne 0) { throw "docx raw_content failed ($docId): $($docResp.msg)" }
-      $content = [string]$docResp.data.content
-      Set-Content -Path $cacheFile -Value $content -Encoding UTF8
+      LogInfo "Fetching docx blocks: $($n.title) ($docId)"
+      $docBlocks = Fetch-DocxBlocks $domain $docId
+
+      # 中文说明：JSON 保存完整块结构，作为后续解析和格式还原的真实来源。
+      $jsonPayload = [ordered]@{
+        document_id = $docId
+        title = [string]$n.title
+        fetched_at = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        source_api = 'docx/v1/documents/{document_id}/blocks'
+        lang = $cacheLang
+        items = @($docBlocks)
+      }
+      $jsonPayload | ConvertTo-Json -Depth 12 | Set-Content -Path $cacheFileJson -Encoding UTF8
+
+      # 中文说明：Markdown 只做阅读友好缓存，方便代理和人工快速查看。
+      $markdown = Convert-DocxBlocksToMarkdown @($docBlocks) $docId
+      Set-Content -Path $cacheFileMd -Value $markdown -Encoding UTF8
     } else {
       LogInfo "Cache hit: $($n.title) ($docId)"
     }
 
-    $fi = Get-Item $cacheFile
+    $fiMd = Get-Item $cacheFileMd
+    $fiJson = Get-Item $cacheFileJson
     $cacheIndex += [ordered]@{
       node_token = [string]$n.node_token
       obj_type = [string]$n.obj_type
       obj_token = $docId
       title = [string]$n.title
-      cache_file = [string]$cacheFile
-      cached_at = $fi.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-      bytes = [int]$fi.Length
+      cache_file_md = [string]$cacheFileMd
+      cache_file_json = [string]$cacheFileJson
+      cached_at = $fiJson.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+      md_bytes = [int]$fiMd.Length
+      json_bytes = [int]$fiJson.Length
+      source_api = 'docx blocks'
       cached = $true
     }
   }
@@ -503,9 +704,12 @@ if ($cacheEnabled) {
     $bundle += "- node_token: $($e.node_token)"
     $bundle += "- obj_token: $($e.obj_token)"
     $bundle += "- cached_at: $($e.cached_at)"
+    $bundle += "- source_api: $($e.source_api)"
+    $bundle += "- cache_file_md: $($e.cache_file_md)"
+    $bundle += "- cache_file_json: $($e.cache_file_json)"
     $bundle += ''
-    $bundle += '```text'
-    $bundle += (Get-Content -Raw $e.cache_file)
+    $bundle += '```md'
+    $bundle += (Get-Content -Raw $e.cache_file_md)
     $bundle += '```'
     $bundle += ''
   }
@@ -513,3 +717,13 @@ if ($cacheEnabled) {
   Set-Content -Path $bundlePath -Value (($bundle -join "`r`n") + "`r`n") -Encoding UTF8
   LogInfo "KB cache bundle written: $bundlePath"
 }
+
+
+
+
+
+
+
+
+
+
