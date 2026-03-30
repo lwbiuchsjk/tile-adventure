@@ -1,0 +1,124 @@
+class_name MapGenerator
+## PCG 地图生成器
+## 使用 FastNoiseLite 柏林噪声生成地形分布，并通过 BFS 校验起终点通达性。
+## 通达性校验失败时自动更换种子重试，超出次数则报错返回 null。
+
+# ─────────────────────────────────────────
+# 噪声阈值常量（噪声值范围 [-1, 1]）
+# 调参说明：提高 THRESHOLD_MOUNTAIN 可减少高山密度，降低 THRESHOLD_FLATLAND 可增加洼地
+# ─────────────────────────────────────────
+const THRESHOLD_MOUNTAIN: float = 0.45   ## 高于此值 → 高山
+const THRESHOLD_HIGHLAND: float = 0.15   ## 高于此值 → 高地
+const THRESHOLD_FLATLAND: float = -0.25  ## 高于此值 → 平地，低于则 → 洼地
+
+# ─────────────────────────────────────────
+# 生成配置（内部类，支持独立实例化）
+# ─────────────────────────────────────────
+
+## PCG 生成参数配置
+class GenerateConfig:
+	## 地图宽度（列数）
+	var width: int = 32
+	## 地图高度（行数）
+	var height: int = 24
+	## 随机种子
+	var seed: int = 0
+	## A* 通达性校验起点
+	var start: Vector2i = Vector2i(1, 1)
+	## A* 通达性校验终点
+	var end: Vector2i = Vector2i(30, 22)
+	## 通达性校验失败时最大重试次数
+	var max_retries: int = 10
+
+# ─────────────────────────────────────────
+# 公共接口
+# ─────────────────────────────────────────
+
+## 生成地图。返回通过通达性校验的 MapSchema；超出重试次数则返回 null。
+static func generate(config: GenerateConfig) -> MapSchema:
+	var retry_seed: int = config.seed
+
+	for i in range(config.max_retries):
+		var schema: MapSchema = _generate_once(config, retry_seed)
+		if _validate_connectivity(schema, config.start, config.end):
+			return schema
+		# 通达性校验失败，递增种子后重试
+		retry_seed += 1
+		push_warning("MapGenerator: 通达性校验失败，第 %d 次重试（seed=%d）" % [i + 1, retry_seed])
+
+	push_error("MapGenerator: 超出最大重试次数（%d），无法生成通达地图" % config.max_retries)
+	return null
+
+# ─────────────────────────────────────────
+# 私有：单次生成
+# ─────────────────────────────────────────
+
+## 根据给定种子生成一张地图（不含通达性校验）
+static func _generate_once(config: GenerateConfig, use_seed: int) -> MapSchema:
+	var schema: MapSchema = MapSchema.new()
+	schema.init(config.width, config.height)
+
+	# 初始化柏林噪声
+	var noise: FastNoiseLite = FastNoiseLite.new()
+	noise.seed = use_seed
+	noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	noise.frequency = 0.08  ## 频率越低，地形过渡越平滑
+
+	# 遍历每格，按噪声值映射地形类型
+	for y in range(config.height):
+		for x in range(config.width):
+			var value: float = noise.get_noise_2d(float(x), float(y))
+			var terrain: MapSchema.TerrainType
+			if value > THRESHOLD_MOUNTAIN:
+				terrain = MapSchema.TerrainType.MOUNTAIN
+			elif value > THRESHOLD_HIGHLAND:
+				terrain = MapSchema.TerrainType.HIGHLAND
+			elif value > THRESHOLD_FLATLAND:
+				terrain = MapSchema.TerrainType.FLATLAND
+			else:
+				terrain = MapSchema.TerrainType.LOWLAND
+			schema.set_terrain(x, y, terrain)
+
+	return schema
+
+# ─────────────────────────────────────────
+# 私有：通达性校验（BFS）
+# ─────────────────────────────────────────
+
+## 使用 BFS 验证 start → end 是否存在可通行路径。
+## 使用 BFS 而非 A*：通达性校验只需判断连通性，无需最短路，BFS 更简洁高效。
+static func _validate_connectivity(schema: MapSchema, start: Vector2i, end: Vector2i) -> bool:
+	# 起点或终点本身不可通行，直接失败
+	if not schema.is_passable(start.x, start.y):
+		return false
+	if not schema.is_passable(end.x, end.y):
+		return false
+
+	var visited: Dictionary = {}
+	var queue: Array[Vector2i] = [start]
+	visited[start] = true
+
+	# 四方向邻居（不含斜向）
+	var directions: Array[Vector2i] = [
+		Vector2i(1, 0), Vector2i(-1, 0),
+		Vector2i(0, 1), Vector2i(0, -1),
+	]
+
+	while queue.size() > 0:
+		var current: Vector2i = queue.pop_front()
+		if current == end:
+			return true
+
+		for dir in directions:
+			var neighbor: Vector2i = current + dir
+			if visited.has(neighbor):
+				continue
+			# 越界格视为不可通行（出界处理）
+			if not schema.is_in_bounds(neighbor.x, neighbor.y):
+				continue
+			if not schema.is_passable(neighbor.x, neighbor.y):
+				continue
+			visited[neighbor] = true
+			queue.append(neighbor)
+
+	return false
