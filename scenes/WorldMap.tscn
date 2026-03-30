@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3 uid="uid://b3k2m7nqxp4ow"]
+[gd_scene format=3 uid="uid://b3k2m7nqxp4ow"]
 
-[ext_resource type="Script" path="res://scripts/map/WorldMap.gd" id="1_worldmap"]
+[ext_resource type="Script" uid="uid://cxv1i7qw1xcxt" path="res://scripts/map/WorldMap.gd" id="1_worldmap"]
 
-[node name="WorldMap" type="Node2D"]
+[node name="WorldMap" type="Node2D" unique_id=1987700247]
 script = ExtResource("1_worldmap")
+pcg_seed = 1234

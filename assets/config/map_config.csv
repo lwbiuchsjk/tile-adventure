@@ -1,0 +1,17 @@
+# 地图模式配置
+# random_generate: true=PCG随机生成, false=读取JSON静态地图
+# random_seed: 随机种子，-1=每次自动生成随机种子，>=0 则固定
+# map_width/map_height: PCG 模式下的地图尺寸（列/行）
+# start_x/start_y: 通达性校验起点坐标
+# end_x/end_y: 通达性校验终点坐标
+# json_path: 非随机模式下的 JSON 地图文件路径
+key,value
+random_generate,true
+random_seed,-1
+map_width,32
+map_height,24
+start_x,1
+start_y,1
+end_x,30
+end_y,22
+json_path,res://test/maps/test_map.json

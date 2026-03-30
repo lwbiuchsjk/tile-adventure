@@ -1,7 +1,7 @@
 class_name MapSchema
 ## 地图数据结构（Map Schema）
 ## 作为地图引擎协议核心，定义网格坐标、地形类型与交互插槽信息。
-## PCG 生成器与 JSON 加载器均向此结构输出，表现层从此结构读取。
+## 地形移动力消耗与插槽放置规则从外部 CSV 配置加载，不再硬编码。
 
 # ─────────────────────────────────────────
 # 枚举定义
@@ -9,10 +9,10 @@ class_name MapSchema
 
 ## 地形类型
 enum TerrainType {
-	MOUNTAIN = 0,  ## 高山，不可通行（移动力消耗 INF）
-	HIGHLAND = 1,  ## 高地，移动力消耗 2
-	FLATLAND = 2,  ## 平地，移动力消耗 1
-	LOWLAND  = 3,  ## 洼地，移动力消耗 2
+	MOUNTAIN = 0,  ## 高山，不可通行
+	HIGHLAND = 1,  ## 高地
+	FLATLAND = 2,  ## 平地
+	LOWLAND  = 3,  ## 洼地
 }
 
 ## 插槽类型（交互实体占位）
@@ -22,22 +22,6 @@ enum SlotType {
 	FUNCTION = 2,  ## 功能点（学习碑、小屋等）
 	SPAWN    = 3,  ## 出生点
 }
-
-# ─────────────────────────────────────────
-# 常量：默认配置
-# ─────────────────────────────────────────
-
-## 各地形默认移动力消耗。float，INF 表示不可通行。
-## 扩展点：单位可传入 unit_cost_override 覆盖对应地形的消耗值。
-const DEFAULT_TERRAIN_COST: Dictionary = {
-	TerrainType.MOUNTAIN: INF,
-	TerrainType.HIGHLAND: 2.0,
-	TerrainType.FLATLAND: 1.0,
-	TerrainType.LOWLAND:  2.0,
-}
-
-## Slot 默认允许放置的地形列表（仅平地）
-const DEFAULT_SLOT_ALLOWED_TERRAINS: Array = [TerrainType.FLATLAND]
 
 # ─────────────────────────────────────────
 # 字段
@@ -53,8 +37,13 @@ var terrain_grid: Array = []
 ## 插槽网格，行优先二维数组：slot_grid[y][x] -> SlotType
 var slot_grid: Array = []
 
-## 允许放置 Slot 的地形列表，支持外部配置覆盖
-var slot_allowed_terrains: Array = []
+## 各地形移动力消耗（从 terrain_config.csv 加载）
+## 格式：{ TerrainType(int) : float }，INF 表示不可通行
+var terrain_costs: Dictionary = {}
+
+## 各插槽类型允许放置的地形列表（从 slot_config.csv 加载）
+## 格式：{ SlotType(int) : Array[TerrainType(int)] }
+var slot_allowed_terrains: Dictionary = {}
 
 # ─────────────────────────────────────────
 # 初始化
@@ -64,7 +53,8 @@ var slot_allowed_terrains: Array = []
 func init(p_width: int, p_height: int) -> void:
 	width = p_width
 	height = p_height
-	slot_allowed_terrains = DEFAULT_SLOT_ALLOWED_TERRAINS.duplicate()
+	terrain_costs = {}
+	slot_allowed_terrains = {}
 	terrain_grid = []
 	slot_grid = []
 	for y in range(height):
@@ -121,13 +111,16 @@ func set_slot(x: int, y: int, slot: SlotType) -> void:
 # ─────────────────────────────────────────
 
 ## 获取指定坐标的移动力消耗。
-## unit_cost_override: 单位专属地形消耗表（可选），覆盖对应地形的默认消耗值。
+## unit_cost_override: 单位专属地形消耗表（可选），覆盖对应地形的消耗值。
 ## 扩展点：不同兵种/英雄可传入各自的 override 实现地形优势/劣势。
+## 未配置的地形默认视为不可通行（返回 INF）。
 func get_terrain_cost(x: int, y: int, unit_cost_override: Dictionary = {}) -> float:
 	var terrain: TerrainType = get_terrain(x, y)
 	if unit_cost_override.has(terrain):
 		return float(unit_cost_override[terrain])
-	return float(DEFAULT_TERRAIN_COST[terrain])
+	if terrain_costs.has(terrain):
+		return float(terrain_costs[terrain])
+	return INF
 
 ## 判断坐标是否可通行（使用默认移动力规则）
 func is_passable(x: int, y: int) -> bool:
@@ -137,6 +130,10 @@ func is_passable(x: int, y: int) -> bool:
 # Slot 配置查询
 # ─────────────────────────────────────────
 
-## 判断指定地形是否允许放置 Slot
-func is_slot_allowed_on(terrain: TerrainType) -> bool:
-	return slot_allowed_terrains.has(terrain)
+## 判断指定插槽类型是否允许放置在指定地形上
+func is_slot_allowed_on(slot_type: SlotType, terrain: TerrainType) -> bool:
+	var key: int = slot_type as int
+	if not slot_allowed_terrains.has(key):
+		return false
+	var allowed: Array = slot_allowed_terrains[key] as Array
+	return allowed.has(terrain as int)

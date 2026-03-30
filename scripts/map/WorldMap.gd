@@ -1,10 +1,19 @@
 class_name WorldMap
 extends Node2D
 ## 大地图主场景控制脚本
-## 支持两种初始化模式：
-##   PCG  模式 —— 以种子驱动柏林噪声随机生成地图
-##   JSON 模式 —— 从静态 JSON 文件加载手工设计关卡
+## 从 CSV 配置文件读取所有参数，支持两种初始化模式：
+##   random_generate = true  → PCG 随机生成（支持自动/固定种子）
+##   random_generate = false → 从 JSON 文件加载静态关卡
 ## 渲染使用纯色块占位，不依赖美术资源。
+
+# ─────────────────────────────────────────
+# 配置文件路径
+# ─────────────────────────────────────────
+
+const CONFIG_MAP: String = "res://assets/config/map_config.csv"
+const CONFIG_TERRAIN: String = "res://assets/config/terrain_config.csv"
+const CONFIG_SLOT: String = "res://assets/config/slot_config.csv"
+const CONFIG_PCG: String = "res://assets/config/pcg_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -32,36 +41,6 @@ const SLOT_COLORS: Dictionary = {
 const SLOT_MARGIN: int = 6
 
 # ─────────────────────────────────────────
-# 加载模式枚举
-# ─────────────────────────────────────────
-
-enum LoadMode {
-	PCG,   ## 过程生成模式
-	JSON,  ## 静态文件加载模式
-}
-
-# ─────────────────────────────────────────
-# 导出配置（Inspector 可调）
-# ─────────────────────────────────────────
-
-## 加载模式选择
-@export var load_mode: LoadMode = LoadMode.PCG
-
-## PCG 模式：随机种子
-@export var pcg_seed: int = 12345
-## PCG 模式：地图宽度（列数）
-@export var pcg_width: int = 32
-## PCG 模式：地图高度（行数）
-@export var pcg_height: int = 24
-## PCG 模式：通达性校验起点
-@export var pcg_start: Vector2i = Vector2i(1, 1)
-## PCG 模式：通达性校验终点
-@export var pcg_end: Vector2i = Vector2i(30, 22)
-
-## JSON 模式：地图文件路径
-@export var json_path: String = "res://test/maps/test_map.json"
-
-# ─────────────────────────────────────────
 # 私有状态
 # ─────────────────────────────────────────
 
@@ -73,39 +52,119 @@ var _schema: MapSchema = null
 # ─────────────────────────────────────────
 
 func _ready() -> void:
-	_load_map()
+	# 加载所有配置
+	var map_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_MAP)
+	var terrain_rows: Array = ConfigLoader.load_csv(CONFIG_TERRAIN)
+	var slot_rows: Array = ConfigLoader.load_csv(CONFIG_SLOT)
+
+	# 构建地形消耗表和 Slot 允许表
+	var terrain_costs: Dictionary = _build_terrain_costs(terrain_rows)
+	var slot_allowed: Dictionary = _build_slot_allowed(slot_rows)
+
+	# 根据配置选择加载模式
+	var is_random: bool = map_cfg.get("random_generate", "true") == "true"
+	if is_random:
+		_load_pcg(map_cfg, terrain_costs)
+	else:
+		_load_json(map_cfg)
+
+	# 将配置注入到 schema（JSON 模式下 schema 没有配置数据，此处统一设置）
+	if _schema != null:
+		_schema.terrain_costs = terrain_costs
+		_schema.slot_allowed_terrains = slot_allowed
+	else:
+		push_error("WorldMap: 地图加载失败，无法渲染")
+
 	queue_redraw()
+
+# ─────────────────────────────────────────
+# 配置解析
+# ─────────────────────────────────────────
+
+## 从 terrain_config 行数据构建地形消耗字典
+## passable=false 的地形强制使用 INF
+func _build_terrain_costs(rows: Array) -> Dictionary:
+	var costs: Dictionary = {}
+	for entry in rows:
+		var row: Dictionary = entry as Dictionary
+		var id: int = int(row.get("id", "0"))
+		var passable: bool = row.get("passable", "true") == "true"
+		if passable:
+			costs[id] = float(row.get("cost", "1"))
+		else:
+			costs[id] = INF
+	return costs
+
+## 从 slot_config 行数据构建 Slot 允许地形字典
+## allowed_terrain_ids 字段以 | 分隔多个地形 ID
+func _build_slot_allowed(rows: Array) -> Dictionary:
+	var allowed: Dictionary = {}
+	for entry in rows:
+		var row: Dictionary = entry as Dictionary
+		var id: int = int(row.get("id", "0"))
+		var terrain_str: String = row.get("allowed_terrain_ids", "") as String
+		var terrains: Array = []
+		if not terrain_str.is_empty():
+			var parts: PackedStringArray = terrain_str.split("|")
+			for p in parts:
+				var stripped: String = p.strip_edges()
+				if not stripped.is_empty():
+					terrains.append(int(stripped))
+		allowed[id] = terrains
+	return allowed
 
 # ─────────────────────────────────────────
 # 地图加载
 # ─────────────────────────────────────────
 
-## 根据 load_mode 调用对应加载逻辑
-func _load_map() -> void:
-	match load_mode:
-		LoadMode.PCG:
-			_load_pcg()
-		LoadMode.JSON:
-			_load_json()
+## PCG 模式：从 map_config + pcg_config 构建生成参数
+func _load_pcg(map_cfg: Dictionary, terrain_costs: Dictionary) -> void:
+	var pcg_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_PCG)
 
-## PCG 模式：构建配置后调用生成器
-func _load_pcg() -> void:
 	var config: MapGenerator.GenerateConfig = MapGenerator.GenerateConfig.new()
-	config.width = pcg_width
-	config.height = pcg_height
-	config.seed = pcg_seed
-	config.start = pcg_start
-	config.end = pcg_end
+	config.width = int(map_cfg.get("map_width", "32"))
+	config.height = int(map_cfg.get("map_height", "24"))
+
+	# 种子处理：-1 表示每次自动随机，其他值固定
+	var seed_value: int = int(map_cfg.get("random_seed", "-1"))
+	if seed_value == -1:
+		config.seed = randi()
+	else:
+		config.seed = seed_value
+
+	# 通达性校验起终点
+	config.start = Vector2i(
+		int(map_cfg.get("start_x", "1")),
+		int(map_cfg.get("start_y", "1"))
+	)
+	config.end = Vector2i(
+		int(map_cfg.get("end_x", "30")),
+		int(map_cfg.get("end_y", "22"))
+	)
+
+	# PCG 生成参数
+	config.threshold_mountain = float(pcg_cfg.get("threshold_mountain", "0.45"))
+	config.threshold_highland = float(pcg_cfg.get("threshold_highland", "0.15"))
+	config.threshold_flatland = float(pcg_cfg.get("threshold_flatland", "-0.25"))
+	config.noise_frequency = float(pcg_cfg.get("noise_frequency", "0.08"))
+	config.max_retries = int(pcg_cfg.get("max_retries", "10"))
+
+	# 注入地形消耗配置（BFS 通达性校验需要）
+	config.terrain_costs = terrain_costs
 
 	_schema = MapGenerator.generate(config)
 	if _schema == null:
 		push_error("WorldMap: PCG 地图生成失败")
 
-## JSON 模式：从文件加载地图
-func _load_json() -> void:
-	_schema = MapLoader.load_from_file(json_path)
+## JSON 模式：从配置中读取文件路径后加载
+func _load_json(map_cfg: Dictionary) -> void:
+	var path: String = map_cfg.get("json_path", "") as String
+	if path.is_empty():
+		push_error("WorldMap: map_config 中未配置 json_path")
+		return
+	_schema = MapLoader.load_from_file(path)
 	if _schema == null:
-		push_error("WorldMap: JSON 地图加载失败，路径：" + json_path)
+		push_error("WorldMap: JSON 地图加载失败，路径：" + path)
 
 # ─────────────────────────────────────────
 # 渲染

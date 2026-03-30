@@ -1,21 +1,13 @@
 class_name MapGenerator
 ## PCG 地图生成器
 ## 使用 FastNoiseLite 柏林噪声生成地形分布，并通过 BFS 校验起终点通达性。
-## 通达性校验失败时自动更换种子重试，超出次数则报错返回 null。
+## 所有生成参数从外部配置传入（GenerateConfig），不再硬编码常量。
 
 # ─────────────────────────────────────────
-# 噪声阈值常量（噪声值范围 [-1, 1]）
-# 调参说明：提高 THRESHOLD_MOUNTAIN 可减少高山密度，降低 THRESHOLD_FLATLAND 可增加洼地
-# ─────────────────────────────────────────
-const THRESHOLD_MOUNTAIN: float = 0.45   ## 高于此值 → 高山
-const THRESHOLD_HIGHLAND: float = 0.15   ## 高于此值 → 高地
-const THRESHOLD_FLATLAND: float = -0.25  ## 高于此值 → 平地，低于则 → 洼地
-
-# ─────────────────────────────────────────
-# 生成配置（内部类，支持独立实例化）
+# 生成配置（内部类）
 # ─────────────────────────────────────────
 
-## PCG 生成参数配置
+## PCG 生成参数配置，所有字段由 WorldMap 从 CSV 配置加载后填入
 class GenerateConfig:
 	## 地图宽度（列数）
 	var width: int = 32
@@ -23,12 +15,27 @@ class GenerateConfig:
 	var height: int = 24
 	## 随机种子
 	var seed: int = 0
-	## A* 通达性校验起点
+	## 通达性校验起点
 	var start: Vector2i = Vector2i(1, 1)
-	## A* 通达性校验终点
+	## 通达性校验终点
 	var end: Vector2i = Vector2i(30, 22)
 	## 通达性校验失败时最大重试次数
 	var max_retries: int = 10
+
+	# —— 噪声参数（从 pcg_config.csv 加载）——
+	## 高于此值 → 高山
+	var threshold_mountain: float = 0.45
+	## 高于此值 → 高地
+	var threshold_highland: float = 0.15
+	## 高于此值 → 平地，低于则 → 洼地
+	var threshold_flatland: float = -0.25
+	## 噪声频率，越低地形过渡越平滑
+	var noise_frequency: float = 0.08
+
+	# —— 地形配置（从 terrain_config.csv 加载）——
+	## 地形移动力消耗表，BFS 通达性校验时需要此数据判断可通行性
+	## 格式：{ TerrainType(int) : float }
+	var terrain_costs: Dictionary = {}
 
 # ─────────────────────────────────────────
 # 公共接口
@@ -57,23 +64,25 @@ static func generate(config: GenerateConfig) -> MapSchema:
 static func _generate_once(config: GenerateConfig, use_seed: int) -> MapSchema:
 	var schema: MapSchema = MapSchema.new()
 	schema.init(config.width, config.height)
+	# 将地形消耗配置注入 schema，供 BFS 校验时使用
+	schema.terrain_costs = config.terrain_costs.duplicate()
 
 	# 初始化柏林噪声
 	var noise: FastNoiseLite = FastNoiseLite.new()
 	noise.seed = use_seed
 	noise.noise_type = FastNoiseLite.TYPE_PERLIN
-	noise.frequency = 0.08  ## 频率越低，地形过渡越平滑
+	noise.frequency = config.noise_frequency
 
 	# 遍历每格，按噪声值映射地形类型
 	for y in range(config.height):
 		for x in range(config.width):
 			var value: float = noise.get_noise_2d(float(x), float(y))
 			var terrain: MapSchema.TerrainType
-			if value > THRESHOLD_MOUNTAIN:
+			if value > config.threshold_mountain:
 				terrain = MapSchema.TerrainType.MOUNTAIN
-			elif value > THRESHOLD_HIGHLAND:
+			elif value > config.threshold_highland:
 				terrain = MapSchema.TerrainType.HIGHLAND
-			elif value > THRESHOLD_FLATLAND:
+			elif value > config.threshold_flatland:
 				terrain = MapSchema.TerrainType.FLATLAND
 			else:
 				terrain = MapSchema.TerrainType.LOWLAND

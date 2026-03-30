@@ -1,0 +1,10 @@
+# PCG 生成参数配置
+# 噪声阈值：控制地形分布比例（噪声值范围 [-1, 1]）
+# noise_frequency：噪声频率，越低地形过渡越平滑
+# max_retries：通达性校验失败时最大重试次数
+key,value
+threshold_mountain,0.45
+threshold_highland,0.15
+threshold_flatland,-0.25
+noise_frequency,0.08
+max_retries,10
