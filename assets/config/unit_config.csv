@@ -1,0 +1,4 @@
+# 全局单位配置
+# default_movement: 每回合默认移动力（后续将迁入角色数据）
+key,value
+default_movement,6
