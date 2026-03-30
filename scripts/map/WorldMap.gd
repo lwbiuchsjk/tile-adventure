@@ -59,6 +59,12 @@ const END_BORDER_WIDTH: float = 2.0
 ## 流程结束提示颜色
 const FINISH_TEXT_COLOR: Color = Color(1.0, 0.9, 0.1)
 
+## HUD 文字颜色
+const HUD_TEXT_COLOR: Color = Color(0.9, 0.9, 0.9)
+
+## HUD 字号
+const HUD_FONT_SIZE: int = 16
+
 # ─────────────────────────────────────────
 # 私有状态
 # ─────────────────────────────────────────
@@ -327,7 +333,10 @@ func _draw() -> void:
 	if _unit != null:
 		_draw_unit_marker()
 
-	# 第五层：流程结束提示
+	# 第五层：HUD 状态栏
+	_draw_hud()
+
+	# 第六层：流程结束提示（覆盖在 HUD 之上）
 	if _game_finished:
 		_draw_finish_text()
 
@@ -377,10 +386,23 @@ func _draw_unit_marker() -> void:
 	)
 	draw_rect(rect, UNIT_COLOR)
 
+## 绘制 HUD 状态栏（地图下方）
+func _draw_hud() -> void:
+	if _unit == null or _turn_manager == null:
+		return
+	var font: Font = ThemeDB.fallback_font
+	var hud_text: String = "回合 %d | 移动力 %d/%d | [空格] 结束回合" % [
+		_turn_manager.current_turn,
+		_unit.current_movement,
+		_unit.max_movement
+	]
+	var hud_pos: Vector2 = Vector2(10, _schema.height * TILE_SIZE + 20)
+	draw_string(font, hud_pos, hud_text, HORIZONTAL_ALIGNMENT_LEFT, -1, HUD_FONT_SIZE, HUD_TEXT_COLOR)
+
 ## 绘制流程结束提示文字
 func _draw_finish_text() -> void:
 	var font: Font = ThemeDB.fallback_font
 	var text: String = "抵达终点！流程结束（回合 %d）" % _turn_manager.current_turn
 	# 在地图下方绘制提示
-	var text_pos: Vector2 = Vector2(10, _schema.height * TILE_SIZE + 30)
+	var text_pos: Vector2 = Vector2(10, _schema.height * TILE_SIZE + 45)
 	draw_string(font, text_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, FINISH_TEXT_COLOR)
