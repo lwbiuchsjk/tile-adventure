@@ -1,0 +1,10 @@
+# 地形配置表
+# id: 地形枚举值（对应 MapSchema.TerrainType）
+# name: 地形标识名
+# cost: 移动力消耗（passable=false 时此值无意义）
+# passable: 是否可通行（false 时代码中按 INF 处理）
+id,name,cost,passable
+0,MOUNTAIN,0,false
+1,HIGHLAND,2,true
+2,FLATLAND,1,true
+3,LOWLAND,2,true

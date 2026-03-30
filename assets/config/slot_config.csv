@@ -1,0 +1,9 @@
+# 插槽配置表
+# id: 插槽枚举值（对应 MapSchema.SlotType）
+# name: 插槽标识名
+# allowed_terrain_ids: 允许放置的地形 ID 列表，多值用 | 分隔，空表示不可放置
+id,name,allowed_terrain_ids
+0,NONE,
+1,RESOURCE,2
+2,FUNCTION,2
+3,SPAWN,2
