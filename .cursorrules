@@ -1,5 +1,6 @@
 # Project Agent Instructions
 
+- 用中文回答。
 - 默认模式为“只分析，不改文件”。
 - 不要主动修改当前文档。
 - 不要生成 diff 或直接应用编辑。
