@@ -14,5 +14,4 @@ start_x,1
 start_y,1
 end_x,30
 end_y,22
-slot_max_count,5
 json_path,res://test/maps/test_map.json
