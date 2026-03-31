@@ -7,6 +7,7 @@ extends Node2D
 ## 集成单位移动系统：可达高亮、点击寻路移动、回合管理。
 ## Camera2D 平滑跟随单位视觉位置，HUD 通过 CanvasLayer 固定在屏幕上。
 ## 单位移动沿路径逐格动画，动画期间锁定输入。
+## 战斗循环：关卡 Slot 触发确认弹板 → BattleResolver 结算 → 兵力损耗 → 流程判定。
 
 # ─────────────────────────────────────────
 # 配置文件路径
@@ -17,6 +18,7 @@ const CONFIG_TERRAIN: String = "res://assets/config/terrain_config.csv"
 const CONFIG_SLOT: String = "res://assets/config/slot_config.csv"
 const CONFIG_PCG: String = "res://assets/config/pcg_config.csv"
 const CONFIG_UNIT: String = "res://assets/config/unit_config.csv"
+const CONFIG_BATTLE: String = "res://assets/config/battle_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -52,11 +54,8 @@ const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
 ## 单位标记边距（像素）
 const UNIT_MARGIN: int = 4
 
-## 终点标记颜色（亮红色边框）
-const END_MARKER_COLOR: Color = Color(1.0, 0.15, 0.15)
-
-## 终点边框宽度（像素）
-const END_BORDER_WIDTH: float = 2.0
+## 已挑战关卡变暗系数（与原 Slot 颜色混合）
+const CHALLENGED_DIM: float = 0.4
 
 ## 单位逐格移动动画耗时（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
@@ -96,7 +95,7 @@ var _start_pos: Vector2i = Vector2i.ZERO
 ## 终点坐标（从 map_config 读取）
 var _end_pos: Vector2i = Vector2i.ZERO
 
-## 流程是否已结束（单位抵达终点）
+## 流程是否已结束（全部通关或部队被击败）
 var _game_finished: bool = false
 
 ## 单位视觉位置（像素坐标，Tween 动画驱动）
@@ -109,6 +108,24 @@ var _is_moving: bool = false
 ## 当前移动动画 Tween 引用（用于防止重复创建）
 var _move_tween: Tween = null
 
+## 角色数据（包含部队槽位）
+var _character: CharacterData = null
+
+## 关卡 Slot 字典 {Vector2i: LevelSlot}
+var _level_slots: Dictionary = {}
+
+## 战斗配置（从 battle_config.csv 加载）
+var _battle_config: Dictionary = {}
+
+## 战斗确认面板引用
+var _battle_panel: PanelContainer = null
+
+## 是否正在等待战斗确认（期间锁定输入）
+var _is_battle_pending: bool = false
+
+## 当前待确认的关卡（战斗确认弹板触发时记录）
+var _pending_level: LevelSlot = null
+
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -119,6 +136,7 @@ func _ready() -> void:
 	var terrain_rows: Array = ConfigLoader.load_csv(CONFIG_TERRAIN)
 	var slot_rows: Array = ConfigLoader.load_csv(CONFIG_SLOT)
 	var unit_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_UNIT)
+	_battle_config = ConfigLoader.load_csv_kv(CONFIG_BATTLE)
 
 	# 构建地形消耗表和 Slot 允许表
 	var terrain_costs: Dictionary = _build_terrain_costs(terrain_rows)
@@ -149,15 +167,31 @@ func _ready() -> void:
 		push_error("WorldMap: 地图加载失败，无法渲染")
 		return
 
+	# PCG 模式下随机放置关卡 Slot
+	if is_random:
+		var slot_max: int = int(map_cfg.get("slot_max_count", "3"))
+		var exclude: Array[Vector2i] = [_start_pos, _end_pos]
+		MapGenerator.place_level_slots(_schema, slot_max, exclude)
+
+	# 初始化关卡 Slot 数据（遍历 schema 中的 FUNCTION Slot）
+	_init_level_slots()
+
 	# 设置 Camera 边界限制（不超出地图像素范围）
 	_setup_camera_limits()
 
-	# 初始化单位
+	# 初始化单位（移动系统）
 	var default_movement: int = int(unit_cfg.get("default_movement", "6"))
 	_unit = UnitData.new()
 	_unit.position = _start_pos
 	_unit.max_movement = default_movement
 	_unit.current_movement = default_movement
+
+	# 初始化角色数据（战斗系统）
+	_character = CharacterData.new()
+	_character.id = 1
+	# 自动装配默认部队
+	var troop: TroopData = TroopData.new()
+	_character.troop = troop
 
 	# 视觉位置初始化到起点像素中心
 	_unit_visual_pos = _grid_to_pixel_center(_start_pos)
@@ -170,6 +204,9 @@ func _ready() -> void:
 	# Camera 初始位置直接设到单位位置（首帧不需要平滑）
 	_camera.position = _unit_visual_pos
 
+	# 创建战斗确认弹板（隐藏状态）
+	_create_battle_confirm_ui()
+
 	# 更新 HUD
 	_update_hud()
 
@@ -181,8 +218,8 @@ func _ready() -> void:
 # ─────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	# 动画播放中或流程结束时锁定所有输入
-	if _game_finished or _is_moving:
+	# 动画播放中、战斗确认中或流程结束时锁定所有输入
+	if _game_finished or _is_moving or _is_battle_pending:
 		return
 
 	# 鼠标左键点击：移动单位
@@ -225,21 +262,32 @@ func _setup_camera_limits() -> void:
 # HUD 更新（CanvasLayer 上的 Label 节点）
 # ─────────────────────────────────────────
 
-## 刷新 HUD 状态栏文字
+## 刷新 HUD 状态栏文字（包含兵力信息）
 func _update_hud() -> void:
 	if _hud_label == null or _unit == null or _turn_manager == null:
 		return
-	_hud_label.text = "回合 %d | 移动力 %d/%d | [空格] 结束回合" % [
+	# 兵力显示：有部队时显示当前/最大，无部队时显示 0
+	var hp_text: String = "兵力 0"
+	if _character != null and _character.has_troop():
+		hp_text = "兵力 %d/%d" % [_character.troop.current_hp, _character.troop.max_hp]
+	_hud_label.text = "回合 %d | 移动力 %d/%d | %s | [空格] 结束回合" % [
 		_turn_manager.current_turn,
 		_unit.current_movement,
-		_unit.max_movement
+		_unit.max_movement,
+		hp_text
 	]
 
-## 显示流程结束提示
-func _show_finish_text() -> void:
+## 显示流程胜利提示
+func _show_victory_text() -> void:
 	if _finish_label == null or _turn_manager == null:
 		return
-	_finish_label.text = "抵达终点！流程结束（回合 %d）" % _turn_manager.current_turn
+	_finish_label.text = "所有关卡已通关！流程胜利（回合 %d）" % _turn_manager.current_turn
+
+## 显示流程失败提示
+func _show_defeat_text() -> void:
+	if _finish_label == null or _turn_manager == null:
+		return
+	_finish_label.text = "部队被击败！流程失败（回合 %d）" % _turn_manager.current_turn
 
 # ─────────────────────────────────────────
 # 交互逻辑
@@ -315,13 +363,13 @@ func _on_move_finished() -> void:
 	_unit_visual_pos = _grid_to_pixel_center(_unit.position)
 	_camera.position = _unit_visual_pos
 
-	# 检查是否抵达终点
-	if _unit.position == _end_pos:
-		_game_finished = true
-		_reachable_tiles = {}
-		_show_finish_text()
-		queue_redraw()
-		return
+	# 检查当前位置是否有未挑战的关卡 Slot
+	var level: LevelSlot = _get_level_at(_unit.position)
+	if level != null and not level.is_challenged():
+		# 角色有部队时弹出战斗确认
+		if _character != null and _character.has_troop():
+			_show_battle_confirm(level)
+			return
 
 	# 刷新可达范围
 	_refresh_reachable()
@@ -339,6 +387,146 @@ func _refresh_reachable() -> void:
 ## 回合结束回调：刷新可达范围，更新 HUD
 func _on_turn_ended(_turn_number: int) -> void:
 	_update_hud()
+	_refresh_reachable()
+
+# ─────────────────────────────────────────
+# 关卡 Slot 管理
+# ─────────────────────────────────────────
+
+## 遍历 schema 中所有 FUNCTION Slot，创建对应的 LevelSlot 数据
+func _init_level_slots() -> void:
+	_level_slots = {}
+	if _schema == null:
+		return
+	for y in range(_schema.height):
+		for x in range(_schema.width):
+			if _schema.get_slot(x, y) == MapSchema.SlotType.FUNCTION:
+				var level: LevelSlot = LevelSlot.new()
+				level.position = Vector2i(x, y)
+				_level_slots[Vector2i(x, y)] = level
+	# 调试输出：确认关卡放置位置
+	print("WorldMap: 已放置 %d 个关卡 Slot" % _level_slots.size())
+	for pos in _level_slots:
+		print("  关卡位置: (%d, %d)" % [pos.x, pos.y])
+
+## 获取指定坐标的关卡 Slot，不存在时返回 null
+func _get_level_at(pos: Vector2i) -> LevelSlot:
+	if _level_slots.has(pos):
+		return _level_slots[pos] as LevelSlot
+	return null
+
+## 检查是否所有关卡均已挑战
+func _check_all_levels_cleared() -> bool:
+	for level in _level_slots.values():
+		var lv: LevelSlot = level as LevelSlot
+		if not lv.is_challenged():
+			return false
+	return true
+
+# ─────────────────────────────────────────
+# 战斗确认 UI
+# ─────────────────────────────────────────
+
+## 程序化创建战斗确认弹板（PanelContainer），挂载到 UILayer 下
+func _create_battle_confirm_ui() -> void:
+	var ui_layer: CanvasLayer = $UILayer
+
+	_battle_panel = PanelContainer.new()
+	_battle_panel.visible = false
+	# 居中显示：锚点设为屏幕中心，grow 双向展开
+	_battle_panel.set_anchors_and_offsets_preset(
+		Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE
+	)
+	_battle_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_battle_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+
+	var vbox: VBoxContainer = VBoxContainer.new()
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	var label: Label = Label.new()
+	label.text = "发现关卡！是否进入战斗？"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(label)
+
+	var hbox: HBoxContainer = HBoxContainer.new()
+	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	var btn_confirm: Button = Button.new()
+	btn_confirm.text = "确认战斗"
+	btn_confirm.pressed.connect(_on_battle_confirmed)
+	hbox.add_child(btn_confirm)
+
+	var btn_cancel: Button = Button.new()
+	btn_cancel.text = "取消"
+	btn_cancel.pressed.connect(_on_battle_cancelled)
+	hbox.add_child(btn_cancel)
+
+	vbox.add_child(hbox)
+	_battle_panel.add_child(vbox)
+	ui_layer.add_child(_battle_panel)
+
+## 显示战斗确认弹板
+func _show_battle_confirm(level: LevelSlot) -> void:
+	_is_battle_pending = true
+	_pending_level = level
+	if _battle_panel != null:
+		_battle_panel.visible = true
+
+## 战斗确认按钮回调
+func _on_battle_confirmed() -> void:
+	if _pending_level == null or _character == null:
+		return
+
+	# 隐藏弹板
+	_battle_panel.visible = false
+	_is_battle_pending = false
+
+	# 执行战斗结算
+	var result: BattleResolver.BattleResult = BattleResolver.resolve(
+		_character, _pending_level, _battle_config
+	)
+
+	# 扣除兵力
+	if _character.has_troop():
+		_character.troop.take_damage(result.damage_taken)
+
+		# 判定部队是否被击败
+		if _character.troop.is_defeated():
+			_character.clear_troop()
+
+	# 标记关卡为已挑战
+	_pending_level.mark_challenged()
+	_pending_level = null
+
+	# 更新 HUD
+	_update_hud()
+
+	# 判定流程终止条件
+	if not _character.has_troop():
+		# 部队被击败 → 流程失败
+		_game_finished = true
+		_reachable_tiles = {}
+		_show_defeat_text()
+		queue_redraw()
+		return
+
+	if _check_all_levels_cleared():
+		# 所有关卡已通关 → 流程胜利
+		_game_finished = true
+		_reachable_tiles = {}
+		_show_victory_text()
+		queue_redraw()
+		return
+
+	# 继续游戏，刷新可达范围
+	_refresh_reachable()
+
+## 战斗取消按钮回调：关闭弹板，恢复输入
+func _on_battle_cancelled() -> void:
+	_battle_panel.visible = false
+	_is_battle_pending = false
+	_pending_level = null
+	# 取消后刷新可达范围，玩家可继续移动
 	_refresh_reachable()
 
 # ─────────────────────────────────────────
@@ -428,7 +616,7 @@ func _load_json(map_cfg: Dictionary) -> void:
 # 渲染
 # ─────────────────────────────────────────
 
-## 主绘制入口：分层绘制地形 → 可达高亮 → 终点标记 → 单位标记
+## 主绘制入口：分层绘制地形 → 可达高亮 → 单位标记
 ## HUD 和完成提示已迁移至 CanvasLayer Label 节点，不在此绘制
 func _draw() -> void:
 	if _schema == null:
@@ -452,10 +640,7 @@ func _draw() -> void:
 		)
 		draw_rect(rect, REACHABLE_COLOR)
 
-	# 第三层：终点标记（红色边框）
-	_draw_end_marker()
-
-	# 第四层：单位标记（基于视觉位置）
+	# 第三层：单位标记（基于视觉位置）
 	if _unit != null:
 		_draw_unit_marker()
 
@@ -477,6 +662,11 @@ func _draw_tile(x: int, y: int) -> void:
 	var slot: MapSchema.SlotType = _schema.get_slot(x, y)
 	if slot != MapSchema.SlotType.NONE:
 		var slot_color: Color = SLOT_COLORS.get(slot, Color.WHITE) as Color
+		# 已挑战的关卡 Slot 变暗显示
+		var pos: Vector2i = Vector2i(x, y)
+		var level: LevelSlot = _get_level_at(pos)
+		if level != null and level.is_challenged():
+			slot_color = slot_color.darkened(CHALLENGED_DIM)
 		var slot_rect: Rect2 = Rect2(
 			x * TILE_SIZE + SLOT_MARGIN,
 			y * TILE_SIZE + SLOT_MARGIN,
@@ -484,16 +674,6 @@ func _draw_tile(x: int, y: int) -> void:
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
 		draw_rect(slot_rect, slot_color)
-
-## 绘制终点标记（红色空心边框）
-func _draw_end_marker() -> void:
-	var rect: Rect2 = Rect2(
-		_end_pos.x * TILE_SIZE,
-		_end_pos.y * TILE_SIZE,
-		TILE_SIZE - 1,
-		TILE_SIZE - 1
-	)
-	draw_rect(rect, END_MARKER_COLOR, false, END_BORDER_WIDTH)
 
 ## 绘制单位标记（基于视觉位置，支持动画中的平滑移动）
 func _draw_unit_marker() -> void:
