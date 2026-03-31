@@ -1,2 +1,5 @@
 key,value
-fixed_damage,50
+base_damage,50
+quality_k,0.2
+quality_min_factor,0.5
+default_battle_rounds,3

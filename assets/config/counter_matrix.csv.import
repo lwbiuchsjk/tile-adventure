@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://bqxudp6qm4c87"
+
+[deps]
+
+files=["res://assets/config/counter_matrix.SWORD.translation", "res://assets/config/counter_matrix.BOW.translation", "res://assets/config/counter_matrix.SPEAR.translation", "res://assets/config/counter_matrix.CAVALRY.translation", "res://assets/config/counter_matrix.SHIELD.translation"]
+
+source_file="res://assets/config/counter_matrix.csv"
+dest_files=["res://assets/config/counter_matrix.SWORD.translation", "res://assets/config/counter_matrix.BOW.translation", "res://assets/config/counter_matrix.SPEAR.translation", "res://assets/config/counter_matrix.CAVALRY.translation", "res://assets/config/counter_matrix.SHIELD.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true
