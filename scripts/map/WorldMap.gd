@@ -8,6 +8,7 @@ extends Node2D
 ## Camera2D 平滑跟随单位视觉位置，HUD 通过 CanvasLayer 固定在屏幕上。
 ## 单位移动沿路径逐格动画，动画期间锁定输入。
 ## 战斗循环：关卡 Slot 触发确认弹板 → BattleResolver 结算 → 兵力损耗 → 流程判定。
+## 多轮次：每轮生成若干关卡，全部挑战后推进下一轮，末轮通关则流程胜利。
 
 # ─────────────────────────────────────────
 # 配置文件路径
@@ -19,6 +20,7 @@ const CONFIG_SLOT: String = "res://assets/config/slot_config.csv"
 const CONFIG_PCG: String = "res://assets/config/pcg_config.csv"
 const CONFIG_UNIT: String = "res://assets/config/unit_config.csv"
 const CONFIG_BATTLE: String = "res://assets/config/battle_config.csv"
+const CONFIG_ROUND: String = "res://assets/config/round_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -54,11 +56,14 @@ const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
 ## 单位标记边距（像素）
 const UNIT_MARGIN: int = 4
 
-## 已挑战关卡变暗系数（与原 Slot 颜色混合）
+## 已挑战关卡变暗系数（同一轮内已挑战但尚未切换的关卡）
 const CHALLENGED_DIM: float = 0.4
 
 ## 单位逐格移动动画耗时（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
+
+## 轮次过渡提示显示时长（秒）
+const ROUND_HINT_DURATION: float = 1.5
 
 # ─────────────────────────────────────────
 # 节点引用
@@ -126,6 +131,9 @@ var _is_battle_pending: bool = false
 ## 当前待确认的关卡（战斗确认弹板触发时记录）
 var _pending_level: LevelSlot = null
 
+## 轮次管理器
+var _round_manager: RoundManager = null
+
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -137,6 +145,7 @@ func _ready() -> void:
 	var slot_rows: Array = ConfigLoader.load_csv(CONFIG_SLOT)
 	var unit_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_UNIT)
 	_battle_config = ConfigLoader.load_csv_kv(CONFIG_BATTLE)
+	var round_rows: Array = ConfigLoader.load_csv(CONFIG_ROUND)
 
 	# 构建地形消耗表和 Slot 允许表
 	var terrain_costs: Dictionary = _build_terrain_costs(terrain_rows)
@@ -167,14 +176,11 @@ func _ready() -> void:
 		push_error("WorldMap: 地图加载失败，无法渲染")
 		return
 
-	# PCG 模式下随机放置关卡 Slot
-	if is_random:
-		var slot_max: int = int(map_cfg.get("slot_max_count", "3"))
-		var exclude: Array[Vector2i] = [_start_pos, _end_pos]
-		MapGenerator.place_level_slots(_schema, slot_max, exclude)
-
-	# 初始化关卡 Slot 数据（遍历 schema 中的 FUNCTION Slot）
-	_init_level_slots()
+	# 初始化轮次管理器
+	_round_manager = RoundManager.new()
+	_round_manager.init_from_config(round_rows)
+	_round_manager.round_started.connect(_on_round_started)
+	_round_manager.all_rounds_cleared.connect(_on_all_rounds_cleared)
 
 	# 设置 Camera 边界限制（不超出地图像素范围）
 	_setup_camera_limits()
@@ -206,6 +212,9 @@ func _ready() -> void:
 
 	# 创建战斗确认弹板（隐藏状态）
 	_create_battle_confirm_ui()
+
+	# 启动第一轮（触发 _on_round_started → 生成关卡）
+	_round_manager.start_current_round()
 
 	# 更新 HUD
 	_update_hud()
@@ -262,7 +271,7 @@ func _setup_camera_limits() -> void:
 # HUD 更新（CanvasLayer 上的 Label 节点）
 # ─────────────────────────────────────────
 
-## 刷新 HUD 状态栏文字（包含兵力信息）
+## 刷新 HUD 状态栏文字（包含轮次、关卡、兵力信息）
 func _update_hud() -> void:
 	if _hud_label == null or _unit == null or _turn_manager == null:
 		return
@@ -270,7 +279,17 @@ func _update_hud() -> void:
 	var hp_text: String = "兵力 0"
 	if _character != null and _character.has_troop():
 		hp_text = "兵力 %d/%d" % [_character.troop.current_hp, _character.troop.max_hp]
-	_hud_label.text = "回合 %d | 移动力 %d/%d | %s | [空格] 结束回合" % [
+	# 轮次与关卡进度
+	var round_text: String = ""
+	if _round_manager != null:
+		round_text = "轮次 %d/%d | 关卡 %d/%d | " % [
+			_round_manager.get_current_round() + 1,
+			_round_manager.get_total_rounds(),
+			_round_manager.get_cleared_count(),
+			_round_manager.get_current_level_count()
+		]
+	_hud_label.text = "%s回合 %d | 移动力 %d/%d | %s | [空格] 结束回合" % [
+		round_text,
 		_turn_manager.current_turn,
 		_unit.current_movement,
 		_unit.max_movement,
@@ -281,7 +300,8 @@ func _update_hud() -> void:
 func _show_victory_text() -> void:
 	if _finish_label == null or _turn_manager == null:
 		return
-	_finish_label.text = "所有关卡已通关！流程胜利（回合 %d）" % _turn_manager.current_turn
+	var total_rounds: int = _round_manager.get_total_rounds() if _round_manager != null else 1
+	_finish_label.text = "全部 %d 轮通关！流程胜利（回合 %d）" % [total_rounds, _turn_manager.current_turn]
 
 ## 显示流程失败提示
 func _show_defeat_text() -> void:
@@ -393,19 +413,41 @@ func _on_turn_ended(_turn_number: int) -> void:
 # 关卡 Slot 管理
 # ─────────────────────────────────────────
 
-## 遍历 schema 中所有 FUNCTION Slot，创建对应的 LevelSlot 数据
-func _init_level_slots() -> void:
-	_level_slots = {}
+## 清除当前地图上所有关卡 Slot（FUNCTION → NONE），并清空 _level_slots 字典
+func _clear_level_slots() -> void:
 	if _schema == null:
 		return
-	for y in range(_schema.height):
-		for x in range(_schema.width):
-			if _schema.get_slot(x, y) == MapSchema.SlotType.FUNCTION:
-				var level: LevelSlot = LevelSlot.new()
-				level.position = Vector2i(x, y)
-				_level_slots[Vector2i(x, y)] = level
-	# 调试输出：确认关卡放置位置
-	print("WorldMap: 已放置 %d 个关卡 Slot" % _level_slots.size())
+	for pos in _level_slots:
+		var p: Vector2i = pos as Vector2i
+		_schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
+	_level_slots = {}
+
+## 生成关卡并初始化 LevelSlot 数据
+## count: 本轮关卡数量
+## 抽象为独立方法，方便后续扩展生成规则（如出现在特定建筑旁）
+func _generate_level_slots(count: int) -> void:
+	if _schema == null:
+		return
+	# 构建排除列表：起点、终点、玩家当前位置
+	var exclude: Array[Vector2i] = [_start_pos, _end_pos]
+	if _unit != null and not exclude.has(_unit.position):
+		exclude.append(_unit.position)
+
+	# 在地图上随机放置关卡 Slot
+	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, count, exclude)
+
+	# 根据放置结果创建 LevelSlot 数据
+	_level_slots = {}
+	for pos in placed:
+		var level: LevelSlot = LevelSlot.new()
+		level.position = pos
+		_level_slots[pos] = level
+
+	# 调试输出
+	print("WorldMap: 第 %d 轮，已放置 %d 个关卡 Slot" % [
+		_round_manager.get_current_round() + 1 if _round_manager != null else 0,
+		_level_slots.size()
+	])
 	for pos in _level_slots:
 		print("  关卡位置: (%d, %d)" % [pos.x, pos.y])
 
@@ -415,13 +457,44 @@ func _get_level_at(pos: Vector2i) -> LevelSlot:
 		return _level_slots[pos] as LevelSlot
 	return null
 
-## 检查是否所有关卡均已挑战
-func _check_all_levels_cleared() -> bool:
-	for level in _level_slots.values():
-		var lv: LevelSlot = level as LevelSlot
-		if not lv.is_challenged():
-			return false
-	return true
+# ─────────────────────────────────────────
+# 轮次管理
+# ─────────────────────────────────────────
+
+## 轮次开始回调：清除旧关卡，生成本轮新关卡
+func _on_round_started(round_index: int) -> void:
+	# 清除上一轮的关卡 Slot
+	_clear_level_slots()
+
+	# 生成本轮关卡
+	var level_count: int = _round_manager.get_current_level_count()
+	_generate_level_slots(level_count)
+
+	print("WorldMap: 第 %d 轮开始，关卡数 %d" % [round_index + 1, level_count])
+	queue_redraw()
+
+## 所有轮次通关回调：流程胜利
+func _on_all_rounds_cleared() -> void:
+	_game_finished = true
+	_reachable_tiles = {}
+	_show_victory_text()
+	queue_redraw()
+
+## 显示轮次过渡提示（短暂显示后自动隐藏）
+func _show_round_hint() -> void:
+	if _finish_label == null or _round_manager == null:
+		return
+	_finish_label.text = "第 %d 轮开始！" % (_round_manager.get_current_round() + 1)
+	# 延时隐藏提示文字
+	var timer: SceneTreeTimer = get_tree().create_timer(ROUND_HINT_DURATION)
+	timer.timeout.connect(_on_round_hint_timeout)
+
+## 轮次提示超时回调：清除提示文字，刷新可达范围
+func _on_round_hint_timeout() -> void:
+	if _finish_label != null:
+		_finish_label.text = ""
+	_update_hud()
+	_refresh_reachable()
 
 # ─────────────────────────────────────────
 # 战斗确认 UI
@@ -501,22 +574,29 @@ func _on_battle_confirmed() -> void:
 	# 更新 HUD
 	_update_hud()
 
-	# 判定流程终止条件
+	# 判定流程终止条件：部队被击败 → 流程失败
 	if not _character.has_troop():
-		# 部队被击败 → 流程失败
 		_game_finished = true
 		_reachable_tiles = {}
 		_show_defeat_text()
 		queue_redraw()
 		return
 
-	if _check_all_levels_cleared():
-		# 所有关卡已通关 → 流程胜利
-		_game_finished = true
-		_reachable_tiles = {}
-		_show_victory_text()
-		queue_redraw()
-		return
+	# 通知轮次管理器，检查本轮是否全部挑战
+	if _round_manager != null:
+		var round_cleared: bool = _round_manager.on_level_cleared()
+		_update_hud()
+		if round_cleared:
+			# 本轮全部挑战完毕，尝试推进下一轮
+			# advance_round() 内部判断是否末轮：
+			#   末轮 → 发出 all_rounds_cleared 信号（由 _on_all_rounds_cleared 处理）
+			#   非末轮 → 发出 round_started 信号（由 _on_round_started 处理）
+			if not _round_manager.advance_round():
+				# 末轮已通关，_on_all_rounds_cleared 已处理
+				return
+			# 非末轮，显示轮次过渡提示
+			_show_round_hint()
+			return
 
 	# 继续游戏，刷新可达范围
 	_refresh_reachable()
