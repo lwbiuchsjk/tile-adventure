@@ -12,3 +12,9 @@
 - 新增文档应当放在 `Design` 目录下。
 - 本项目中生成、改动代码时，需要在代码中生成注释。需要有函数级注释，并在逻辑中关键位置做出特别说明。注释使用中文。
 - 本项目 Godot 统一通过 `tools/run_godot.ps1` 调用，不要假设系统 PATH 中存在 `godot`。
+- 在本项目中，若 `apply_patch` 报错 `CreateProcessWithLogonW failed: 1385`，视为 Windows 沙箱/权限导致的工具执行失败，不要连续重复重试。
+- 遇到上述情况时，创建或更新文档可改用 PowerShell 原生命令写入，如 `Set-Content` / `Add-Content`，并统一使用 UTF-8 编码。
+- 使用 PowerShell 写入文件后，必须立即校验：
+  - `Get-Item` 检查文件是否存在及大小
+  - `Get-Content -Encoding UTF8` 抽查内容是否正常
+- 若是代码文件编辑，优先再次判断是否必须修改；如必须修改且 `apply_patch` 不可用，再选择安全的替代方式，并明确说明原因。
