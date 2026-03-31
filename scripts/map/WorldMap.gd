@@ -21,6 +21,10 @@ const CONFIG_PCG: String = "res://assets/config/pcg_config.csv"
 const CONFIG_UNIT: String = "res://assets/config/unit_config.csv"
 const CONFIG_BATTLE: String = "res://assets/config/battle_config.csv"
 const CONFIG_ROUND: String = "res://assets/config/round_config.csv"
+const CONFIG_COUNTER: String = "res://assets/config/counter_matrix.csv"
+const CONFIG_ENEMY_POOL: String = "res://assets/config/enemy_troop_pool.csv"
+const CONFIG_ENEMY_SPAWN: String = "res://assets/config/enemy_spawn_config.csv"
+const CONFIG_PLAYER: String = "res://assets/config/player_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -134,6 +138,9 @@ var _pending_level: LevelSlot = null
 ## 轮次管理器
 var _round_manager: RoundManager = null
 
+## 敌方部队生成器
+var _enemy_generator: EnemyTroopGenerator = null
+
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -146,10 +153,21 @@ func _ready() -> void:
 	var unit_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_UNIT)
 	_battle_config = ConfigLoader.load_csv_kv(CONFIG_BATTLE)
 	var round_rows: Array = ConfigLoader.load_csv(CONFIG_ROUND)
+	var counter_rows: Array = ConfigLoader.load_csv(CONFIG_COUNTER)
+	var enemy_pool_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_POOL)
+	var enemy_spawn_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_ENEMY_SPAWN)
+	var player_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_PLAYER)
 
 	# 构建地形消耗表和 Slot 允许表
 	var terrain_costs: Dictionary = _build_terrain_costs(terrain_rows)
 	var slot_allowed: Dictionary = _build_slot_allowed(slot_rows)
+
+	# 加载克制矩阵
+	BattleResolver.load_counter_matrix(counter_rows)
+
+	# 初始化敌方部队生成器
+	_enemy_generator = EnemyTroopGenerator.new()
+	_enemy_generator.init_from_config(enemy_pool_rows, enemy_spawn_cfg)
 
 	# 读取起终点坐标
 	_start_pos = Vector2i(
@@ -192,12 +210,8 @@ func _ready() -> void:
 	_unit.max_movement = default_movement
 	_unit.current_movement = default_movement
 
-	# 初始化角色数据（战斗系统）
-	_character = CharacterData.new()
-	_character.id = 1
-	# 自动装配默认部队
-	var troop: TroopData = TroopData.new()
-	_character.troop = troop
+	# 初始化玩家角色和部队（从配置读取）
+	_init_player(player_cfg)
 
 	# 视觉位置初始化到起点像素中心
 	_unit_visual_pos = _grid_to_pixel_center(_start_pos)
@@ -275,10 +289,14 @@ func _setup_camera_limits() -> void:
 func _update_hud() -> void:
 	if _hud_label == null or _unit == null or _turn_manager == null:
 		return
-	# 兵力显示：有部队时显示当前/最大，无部队时显示 0
+	# 兵力显示：有部队时显示兵种和当前/最大，无部队时显示 0
 	var hp_text: String = "兵力 0"
 	if _character != null and _character.has_troop():
-		hp_text = "兵力 %d/%d" % [_character.troop.current_hp, _character.troop.max_hp]
+		hp_text = "%s 兵力 %d/%d" % [
+			_character.troop.get_display_text(),
+			_character.troop.current_hp,
+			_character.troop.max_hp
+		]
 	# 轮次与关卡进度
 	var round_text: String = ""
 	if _round_manager != null:
@@ -436,11 +454,14 @@ func _generate_level_slots(count: int) -> void:
 	# 在地图上随机放置关卡 Slot
 	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, count, exclude)
 
-	# 根据放置结果创建 LevelSlot 数据
+	# 根据放置结果创建 LevelSlot 数据，并为每个关卡生成敌方部队
 	_level_slots = {}
 	for pos in placed:
 		var level: LevelSlot = LevelSlot.new()
 		level.position = pos
+		# 为关卡生成敌方部队
+		if _enemy_generator != null:
+			level.troops = _enemy_generator.generate_troops()
 		_level_slots[pos] = level
 
 	# 调试输出
@@ -449,7 +470,8 @@ func _generate_level_slots(count: int) -> void:
 		_level_slots.size()
 	])
 	for pos in _level_slots:
-		print("  关卡位置: (%d, %d)" % [pos.x, pos.y])
+		var lv: LevelSlot = _level_slots[pos] as LevelSlot
+		print("  关卡(%d,%d): %s" % [pos.x, pos.y, lv.get_troops_display()])
 
 ## 获取指定坐标的关卡 Slot，不存在时返回 null
 func _get_level_at(pos: Vector2i) -> LevelSlot:
@@ -516,10 +538,11 @@ func _create_battle_confirm_ui() -> void:
 	var vbox: VBoxContainer = VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	var label: Label = Label.new()
-	label.text = "发现关卡！是否进入战斗？"
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(label)
+	var _battle_label: Label = Label.new()
+	_battle_label.name = "BattleInfoLabel"
+	_battle_label.text = "发现关卡！是否进入战斗？"
+	_battle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(_battle_label)
 
 	var hbox: HBoxContainer = HBoxContainer.new()
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -538,11 +561,15 @@ func _create_battle_confirm_ui() -> void:
 	_battle_panel.add_child(vbox)
 	ui_layer.add_child(_battle_panel)
 
-## 显示战斗确认弹板
+## 显示战斗确认弹板（含敌方部队信息）
 func _show_battle_confirm(level: LevelSlot) -> void:
 	_is_battle_pending = true
 	_pending_level = level
 	if _battle_panel != null:
+		# 更新弹板上的敌方部队信息
+		var info_label: Label = _battle_panel.find_child("BattleInfoLabel", true, false) as Label
+		if info_label != null:
+			info_label.text = "发现关卡！是否进入战斗？\n敌方：%s" % level.get_troops_display()
 		_battle_panel.visible = true
 
 ## 战斗确认按钮回调
@@ -554,9 +581,9 @@ func _on_battle_confirmed() -> void:
 	_battle_panel.visible = false
 	_is_battle_pending = false
 
-	# 执行战斗结算
+	# 执行战斗结算（公式驱动：我方部队 vs 敌方部队列表）
 	var result: BattleResolver.BattleResult = BattleResolver.resolve(
-		_character, _pending_level, _battle_config
+		_character.troop, _pending_level.troops, _battle_config
 	)
 
 	# 扣除兵力
@@ -608,6 +635,23 @@ func _on_battle_cancelled() -> void:
 	_pending_level = null
 	# 取消后刷新可达范围，玩家可继续移动
 	_refresh_reachable()
+
+# ─────────────────────────────────────────
+# 玩家初始化
+# ─────────────────────────────────────────
+
+## 从 player_config 初始化玩家角色和部队
+## 抽象为独立方法，方便后续扩展（多角色、抽取等）
+func _init_player(player_cfg: Dictionary) -> void:
+	_character = CharacterData.new()
+	_character.id = 1
+
+	var troop: TroopData = TroopData.new()
+	troop.troop_type = int(player_cfg.get("initial_troop_type", "0")) as TroopData.TroopType
+	troop.quality = int(player_cfg.get("initial_troop_quality", "0")) as TroopData.Quality
+	_character.troop = troop
+
+	print("WorldMap: 玩家初始部队 - %s" % troop.get_display_text())
 
 # ─────────────────────────────────────────
 # 配置解析

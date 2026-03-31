@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://dq3ebgy4pa5ce"
+
+[deps]
+
+files=["res://assets/config/enemy_troop_pool.quality.translation", "res://assets/config/enemy_troop_pool.weight.translation"]
+
+source_file="res://assets/config/enemy_troop_pool.csv"
+dest_files=["res://assets/config/enemy_troop_pool.quality.translation", "res://assets/config/enemy_troop_pool.weight.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true
