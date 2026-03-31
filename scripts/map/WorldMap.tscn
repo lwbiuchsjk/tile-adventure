@@ -1,6 +1,40 @@
-[gd_scene format=3 uid="uid://1u6xb00bb4sf"]
+[gd_scene load_steps=2 format=3 uid="uid://1u6xb00bb4sf"]
 
 [ext_resource type="Script" uid="uid://cxv1i7qw1xcxt" path="res://scripts/map/WorldMap.gd" id="1_worldmap"]
 
-[node name="WorldMap" type="Node2D" unique_id=1987700247]
+[node name="WorldMap" type="Node2D"]
 script = ExtResource("1_worldmap")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+enabled = true
+position_smoothing_enabled = true
+position_smoothing_speed = 8.0
+
+[node name="UILayer" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="HudLabel" type="Label" parent="UILayer"]
+offset_left = 10.0
+offset_top = -40.0
+offset_right = 600.0
+offset_bottom = -10.0
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
+theme_override_font_sizes/font_size = 16
+text = ""
+
+[node name="FinishLabel" type="Label" parent="UILayer"]
+offset_left = 10.0
+offset_top = -70.0
+offset_right = 600.0
+offset_bottom = -42.0
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+grow_vertical = 0
+theme_override_colors/font_color = Color(1, 0.9, 0.1, 1)
+theme_override_font_sizes/font_size = 20
+text = ""

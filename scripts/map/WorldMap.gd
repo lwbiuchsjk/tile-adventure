@@ -5,6 +5,8 @@ extends Node2D
 ##   random_generate = true  → PCG 随机生成（支持自动/固定种子）
 ##   random_generate = false → 从 JSON 文件加载静态关卡
 ## 集成单位移动系统：可达高亮、点击寻路移动、回合管理。
+## Camera2D 平滑跟随单位视觉位置，HUD 通过 CanvasLayer 固定在屏幕上。
+## 单位移动沿路径逐格动画，动画期间锁定输入。
 
 # ─────────────────────────────────────────
 # 配置文件路径
@@ -56,14 +58,21 @@ const END_MARKER_COLOR: Color = Color(1.0, 0.15, 0.15)
 ## 终点边框宽度（像素）
 const END_BORDER_WIDTH: float = 2.0
 
-## 流程结束提示颜色
-const FINISH_TEXT_COLOR: Color = Color(1.0, 0.9, 0.1)
+## 单位逐格移动动画耗时（秒/格）
+const MOVE_STEP_DURATION: float = 0.1
 
-## HUD 文字颜色
-const HUD_TEXT_COLOR: Color = Color(0.9, 0.9, 0.9)
+# ─────────────────────────────────────────
+# 节点引用
+# ─────────────────────────────────────────
 
-## HUD 字号
-const HUD_FONT_SIZE: int = 16
+## Camera2D 节点（场景中配置，已开启 position_smoothing）
+@onready var _camera: Camera2D = $Camera2D
+
+## HUD 状态栏 Label（CanvasLayer 下，固定在屏幕底部）
+@onready var _hud_label: Label = $UILayer/HudLabel
+
+## 流程结束提示 Label（CanvasLayer 下）
+@onready var _finish_label: Label = $UILayer/FinishLabel
 
 # ─────────────────────────────────────────
 # 私有状态
@@ -89,6 +98,16 @@ var _end_pos: Vector2i = Vector2i.ZERO
 
 ## 流程是否已结束（单位抵达终点）
 var _game_finished: bool = false
+
+## 单位视觉位置（像素坐标，Tween 动画驱动）
+## 与逻辑位置（UnitData.position）分离，_draw 基于此渲染单位
+var _unit_visual_pos: Vector2 = Vector2.ZERO
+
+## 是否正在播放移动动画（期间锁定所有输入）
+var _is_moving: bool = false
+
+## 当前移动动画 Tween 引用（用于防止重复创建）
+var _move_tween: Tween = null
 
 # ─────────────────────────────────────────
 # 生命周期
@@ -130,6 +149,9 @@ func _ready() -> void:
 		push_error("WorldMap: 地图加载失败，无法渲染")
 		return
 
+	# 设置 Camera 边界限制（不超出地图像素范围）
+	_setup_camera_limits()
+
 	# 初始化单位
 	var default_movement: int = int(unit_cfg.get("default_movement", "6"))
 	_unit = UnitData.new()
@@ -137,10 +159,19 @@ func _ready() -> void:
 	_unit.max_movement = default_movement
 	_unit.current_movement = default_movement
 
+	# 视觉位置初始化到起点像素中心
+	_unit_visual_pos = _grid_to_pixel_center(_start_pos)
+
 	# 初始化回合管理器
 	_turn_manager = TurnManager.new()
 	_turn_manager.register_unit(_unit)
 	_turn_manager.turn_ended.connect(_on_turn_ended)
+
+	# Camera 初始位置直接设到单位位置（首帧不需要平滑）
+	_camera.position = _unit_visual_pos
+
+	# 更新 HUD
+	_update_hud()
 
 	# 计算初始可达范围
 	_refresh_reachable()
@@ -150,7 +181,8 @@ func _ready() -> void:
 # ─────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	if _game_finished:
+	# 动画播放中或流程结束时锁定所有输入
+	if _game_finished or _is_moving:
 		return
 
 	# 鼠标左键点击：移动单位
@@ -166,17 +198,62 @@ func _input(event: InputEvent) -> void:
 			_turn_manager.end_turn()
 
 # ─────────────────────────────────────────
+# 坐标工具
+# ─────────────────────────────────────────
+
+## 将格坐标转为像素中心坐标
+func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
+	return Vector2(
+		grid_pos.x * TILE_SIZE + TILE_SIZE / 2,
+		grid_pos.y * TILE_SIZE + TILE_SIZE / 2
+	)
+
+# ─────────────────────────────────────────
+# 镜头控制
+# ─────────────────────────────────────────
+
+## 根据地图像素尺寸设置 Camera 边界
+func _setup_camera_limits() -> void:
+	if _schema == null or _camera == null:
+		return
+	_camera.limit_left = 0
+	_camera.limit_top = 0
+	_camera.limit_right = _schema.width * TILE_SIZE
+	_camera.limit_bottom = _schema.height * TILE_SIZE
+
+# ─────────────────────────────────────────
+# HUD 更新（CanvasLayer 上的 Label 节点）
+# ─────────────────────────────────────────
+
+## 刷新 HUD 状态栏文字
+func _update_hud() -> void:
+	if _hud_label == null or _unit == null or _turn_manager == null:
+		return
+	_hud_label.text = "回合 %d | 移动力 %d/%d | [空格] 结束回合" % [
+		_turn_manager.current_turn,
+		_unit.current_movement,
+		_unit.max_movement
+	]
+
+## 显示流程结束提示
+func _show_finish_text() -> void:
+	if _finish_label == null or _turn_manager == null:
+		return
+	_finish_label.text = "抵达终点！流程结束（回合 %d）" % _turn_manager.current_turn
+
+# ─────────────────────────────────────────
 # 交互逻辑
 # ─────────────────────────────────────────
 
-## 处理点击事件：转换坐标 → 寻路 → 移动 → 刷新
+## 处理点击事件：屏幕坐标 → Camera 逆变换 → 世界坐标 → 格坐标
 func _handle_click(screen_pos: Vector2) -> void:
 	if _schema == null or _unit == null:
 		return
 
-	# 屏幕坐标转网格坐标
-	var grid_x: int = int(screen_pos.x) / TILE_SIZE
-	var grid_y: int = int(screen_pos.y) / TILE_SIZE
+	# 屏幕坐标经 Canvas + 全局变换逆变换，转为世界坐标
+	var world_pos: Vector2 = (get_canvas_transform() * get_global_transform()).affine_inverse() * screen_pos
+	var grid_x: int = int(world_pos.x) / TILE_SIZE
+	var grid_y: int = int(world_pos.y) / TILE_SIZE
 	var target: Vector2i = Vector2i(grid_x, grid_y)
 
 	# 点击当前位置或不可达格无响应
@@ -190,16 +267,63 @@ func _handle_click(screen_pos: Vector2) -> void:
 	if path_result.path.size() < 2:
 		return
 
-	# 执行移动
+	# 执行逻辑移动（立即更新逻辑位置和移动力）
 	MovementSystem.execute_move(_unit, path_result.path, _schema)
+
+	# 更新 HUD（移动力已扣除）
+	_update_hud()
+
+	# 清空可达高亮（动画期间不显示）
+	_reachable_tiles = {}
+	queue_redraw()
+
+	# 启动视觉移动动画
+	_start_move_animation(path_result.path)
+
+## 启动沿路径逐格移动的 Tween 动画
+func _start_move_animation(path: Array[Vector2i]) -> void:
+	_is_moving = true
+
+	# 终止可能残留的旧 Tween
+	if _move_tween != null and _move_tween.is_valid():
+		_move_tween.kill()
+
+	_move_tween = create_tween()
+
+	# 从路径第二个点开始（第一个是出发点），逐格插值视觉位置
+	for i in range(1, path.size()):
+		var target_pixel: Vector2 = _grid_to_pixel_center(path[i])
+		# 每步动画：移动视觉位置到下一格中心
+		_move_tween.tween_property(self, "_unit_visual_pos", target_pixel, MOVE_STEP_DURATION)
+		# 每步回调：同步 Camera 位置并重绘
+		_move_tween.tween_callback(_on_move_step)
+
+	# 动画全部完成后的回调
+	_move_tween.tween_callback(_on_move_finished)
+
+## 每移动一格时的回调：同步 Camera 并重绘
+func _on_move_step() -> void:
+	# Camera 跟随视觉位置（平滑由 Camera2D 内置处理）
+	_camera.position = _unit_visual_pos
+	queue_redraw()
+
+## 移动动画全部完成后的回调
+func _on_move_finished() -> void:
+	_is_moving = false
+
+	# 确保视觉位置精确对齐到逻辑位置
+	_unit_visual_pos = _grid_to_pixel_center(_unit.position)
+	_camera.position = _unit_visual_pos
 
 	# 检查是否抵达终点
 	if _unit.position == _end_pos:
 		_game_finished = true
 		_reachable_tiles = {}
+		_show_finish_text()
 		queue_redraw()
 		return
 
+	# 刷新可达范围
 	_refresh_reachable()
 
 ## 刷新可达范围并触发重绘
@@ -212,8 +336,9 @@ func _refresh_reachable() -> void:
 		_reachable_tiles = {}
 	queue_redraw()
 
-## 回合结束回调：刷新可达范围
+## 回合结束回调：刷新可达范围，更新 HUD
 func _on_turn_ended(_turn_number: int) -> void:
+	_update_hud()
 	_refresh_reachable()
 
 # ─────────────────────────────────────────
@@ -303,7 +428,8 @@ func _load_json(map_cfg: Dictionary) -> void:
 # 渲染
 # ─────────────────────────────────────────
 
-## 主绘制入口：分层绘制地形 → 可达高亮 → 终点标记 → 单位标记 → 完成提示
+## 主绘制入口：分层绘制地形 → 可达高亮 → 终点标记 → 单位标记
+## HUD 和完成提示已迁移至 CanvasLayer Label 节点，不在此绘制
 func _draw() -> void:
 	if _schema == null:
 		return
@@ -329,16 +455,9 @@ func _draw() -> void:
 	# 第三层：终点标记（红色边框）
 	_draw_end_marker()
 
-	# 第四层：单位标记
+	# 第四层：单位标记（基于视觉位置）
 	if _unit != null:
 		_draw_unit_marker()
-
-	# 第五层：HUD 状态栏
-	_draw_hud()
-
-	# 第六层：流程结束提示（覆盖在 HUD 之上）
-	if _game_finished:
-		_draw_finish_text()
 
 ## 绘制单格地形色块及 Slot 标记
 func _draw_tile(x: int, y: int) -> void:
@@ -376,33 +495,12 @@ func _draw_end_marker() -> void:
 	)
 	draw_rect(rect, END_MARKER_COLOR, false, END_BORDER_WIDTH)
 
-## 绘制单位标记（白色实心方块）
+## 绘制单位标记（基于视觉位置，支持动画中的平滑移动）
 func _draw_unit_marker() -> void:
 	var rect: Rect2 = Rect2(
-		_unit.position.x * TILE_SIZE + UNIT_MARGIN,
-		_unit.position.y * TILE_SIZE + UNIT_MARGIN,
+		_unit_visual_pos.x - TILE_SIZE / 2 + UNIT_MARGIN,
+		_unit_visual_pos.y - TILE_SIZE / 2 + UNIT_MARGIN,
 		TILE_SIZE - UNIT_MARGIN * 2 - 1,
 		TILE_SIZE - UNIT_MARGIN * 2 - 1
 	)
 	draw_rect(rect, UNIT_COLOR)
-
-## 绘制 HUD 状态栏（地图下方）
-func _draw_hud() -> void:
-	if _unit == null or _turn_manager == null:
-		return
-	var font: Font = ThemeDB.fallback_font
-	var hud_text: String = "回合 %d | 移动力 %d/%d | [空格] 结束回合" % [
-		_turn_manager.current_turn,
-		_unit.current_movement,
-		_unit.max_movement
-	]
-	var hud_pos: Vector2 = Vector2(10, _schema.height * TILE_SIZE + 20)
-	draw_string(font, hud_pos, hud_text, HORIZONTAL_ALIGNMENT_LEFT, -1, HUD_FONT_SIZE, HUD_TEXT_COLOR)
-
-## 绘制流程结束提示文字
-func _draw_finish_text() -> void:
-	var font: Font = ThemeDB.fallback_font
-	var text: String = "抵达终点！流程结束（回合 %d）" % _turn_manager.current_turn
-	# 在地图下方绘制提示
-	var text_pos: Vector2 = Vector2(10, _schema.height * TILE_SIZE + 45)
-	draw_string(font, text_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, FINISH_TEXT_COLOR)

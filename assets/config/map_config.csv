@@ -8,8 +8,8 @@
 key,value
 random_generate,true
 random_seed,-1
-map_width,32
-map_height,24
+map_width,128
+map_height,128
 start_x,1
 start_y,1
 end_x,30
