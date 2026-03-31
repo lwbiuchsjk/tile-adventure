@@ -8,10 +8,11 @@
 key,value
 random_generate,true
 random_seed,-1
-map_width,128
-map_height,128
+map_width,32
+map_height,32
 start_x,1
 start_y,1
 end_x,30
 end_y,22
+slot_max_count,5
 json_path,res://test/maps/test_map.json

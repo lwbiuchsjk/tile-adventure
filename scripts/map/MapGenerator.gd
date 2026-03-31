@@ -56,6 +56,40 @@ static func generate(config: GenerateConfig) -> MapSchema:
 	push_error("MapGenerator: 超出最大重试次数（%d），无法生成通达地图" % config.max_retries)
 	return null
 
+## 在已生成的地图上随机放置关卡 Slot（FUNCTION 类型）
+## schema: 目标地图
+## count: 最大放置数量
+## exclude: 需要排除的坐标列表（如起点、终点）
+## 返回实际放置的坐标列表
+static func place_level_slots(schema: MapSchema, count: int, exclude: Array[Vector2i]) -> Array[Vector2i]:
+	# 收集所有可通行且不在排除列表中的格子
+	var candidates: Array[Vector2i] = []
+	for y in range(schema.height):
+		for x in range(schema.width):
+			var pos: Vector2i = Vector2i(x, y)
+			if exclude.has(pos):
+				continue
+			# 仅在可通行格上放置
+			if not schema.is_passable(x, y):
+				continue
+			# 已有 Slot 的格子跳过
+			if schema.get_slot(x, y) != MapSchema.SlotType.NONE:
+				continue
+			candidates.append(pos)
+
+	# 随机打乱候选列表
+	candidates.shuffle()
+
+	# 取前 count 个，放置 FUNCTION 类型 Slot
+	var placed: Array[Vector2i] = []
+	var actual_count: int = mini(count, candidates.size())
+	for i in range(actual_count):
+		var pos: Vector2i = candidates[i]
+		schema.set_slot(pos.x, pos.y, MapSchema.SlotType.FUNCTION)
+		placed.append(pos)
+
+	return placed
+
 # ─────────────────────────────────────────
 # 私有：单次生成
 # ─────────────────────────────────────────
