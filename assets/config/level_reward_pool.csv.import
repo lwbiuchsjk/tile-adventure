@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://b2yurbah83lch"
+
+[deps]
+
+files=["res://assets/config/level_reward_pool.item.translation", "res://assets/config/level_reward_pool.count.translation", "res://assets/config/level_reward_pool.weight.translation"]
+
+source_file="res://assets/config/level_reward_pool.csv"
+dest_files=["res://assets/config/level_reward_pool.item.translation", "res://assets/config/level_reward_pool.count.translation", "res://assets/config/level_reward_pool.weight.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

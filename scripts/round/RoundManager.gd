@@ -24,6 +24,9 @@ var _current_round: int = 0
 ## 当前轮已挑战的关卡数
 var _cleared_count: int = 0
 
+## 当前轮次的预生成胜利奖励
+var _round_rewards: Array[ItemData] = []
+
 # ─────────────────────────────────────────
 # 初始化
 # ─────────────────────────────────────────
@@ -101,3 +104,15 @@ func advance_round() -> bool:
 ## 后续可覆写此方法实现：切换确认弹板、轮次间结算等
 func on_round_transition() -> bool:
 	return true
+
+# ─────────────────────────────────────────
+# 轮次奖励
+# ─────────────────────────────────────────
+
+## 设置当前轮次的预生成奖励（由外部在轮次开始时调用）
+func set_round_rewards(rewards: Array[ItemData]) -> void:
+	_round_rewards = rewards
+
+## 获取当前轮次的预生成奖励
+func get_round_rewards() -> Array[ItemData]:
+	return _round_rewards

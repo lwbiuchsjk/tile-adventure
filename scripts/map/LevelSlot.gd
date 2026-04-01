@@ -20,6 +20,12 @@ var state: State = State.UNCHALLENGED
 ## 敌方部队列表（1~N 支）
 var troops: Array[TroopData] = []
 
+## 关卡难度（由轮次索引决定，影响 base_damage）
+var difficulty: int = 0
+
+## 关卡胜利奖励列表（初始化时预生成）
+var rewards: Array[ItemData] = []
+
 ## 预留：敌方角色（当前为 null，后续支持敌方角色）
 var character = null
 
@@ -52,4 +58,16 @@ func get_troops_display() -> String:
 			parts.append("%s×%d" % [k, count])
 		else:
 			parts.append(k)
+	return ", ".join(parts)
+
+## 获取奖励的显示文本
+func get_rewards_display() -> String:
+	if rewards.is_empty():
+		return "无奖励"
+	var parts: Array[String] = []
+	for item in rewards:
+		if item.stack_count > 1:
+			parts.append("%s×%d" % [item.get_display_text(), item.stack_count])
+		else:
+			parts.append(item.get_display_text())
 	return ", ".join(parts)
