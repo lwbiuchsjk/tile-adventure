@@ -89,51 +89,108 @@ static func get_effective_base_damage(base_damage: float, difficulty: int, damag
 static func resolve(player_troops: Array[TroopData], enemy_troops: Array[TroopData], config: Dictionary, difficulty: int = 0, damage_increment: float = 0.0) -> BattleResult:
 	var result: BattleResult = BattleResult.new()
 	result.victory = true
-	result.damages = []
-	result.enemy_damages = []
 
 	# 读取配置参数
 	var base_damage: float = float(config.get("base_damage", "50"))
 	var quality_k: float = float(config.get("quality_k", "0.2"))
 	var quality_min: float = float(config.get("quality_min_factor", "0.5"))
-	var battle_rounds: int = int(config.get("default_battle_rounds", "3"))
+	var max_rounds: int = int(config.get("default_battle_rounds", "3"))
 
 	# 计算有效基础伤害（含难度修正）
 	var effective_base: float = get_effective_base_damage(base_damage, difficulty, damage_increment)
 
-	# ── 敌方 → 我方伤害 ──
-	var grand_total: int = 0
-	for player_troop in player_troops:
-		var troop_damage: float = 0.0
-		for enemy in enemy_troops:
-			# 克制系数：敌方兵种 → 我方兵种
-			var counter: float = get_counter_factor(
-				enemy.troop_type as int, player_troop.troop_type as int
-			)
-			# 品质差系数：敌品质越高，对我方伤害越大
-			var quality_diff: float = float(enemy.quality as int - player_troop.quality as int)
-			var quality_factor: float = maxf(quality_min, 1.0 + quality_k * quality_diff)
-			var damage: float = effective_base * counter * quality_factor * float(battle_rounds)
-			troop_damage += damage
-		var int_damage: int = int(troop_damage)
-		result.damages.append(int_damage)
-		grand_total += int_damage
-	result.damage_taken = grand_total
+	# 初始化累计伤害数组
+	var player_count: int = player_troops.size()
+	var enemy_count: int = enemy_troops.size()
+	var player_total_dmg: Array[float] = []
+	var enemy_total_dmg: Array[float] = []
+	for i in range(player_count):
+		player_total_dmg.append(0.0)
+	for i in range(enemy_count):
+		enemy_total_dmg.append(0.0)
 
-	# ── 我方 → 敌方伤害（反向计算：攻防方向互换） ──
-	for enemy in enemy_troops:
-		var enemy_dmg: float = 0.0
-		for player_troop in player_troops:
-			# 克制系数：我方兵种 → 敌方兵种（方向互换）
-			var counter: float = get_counter_factor(
-				player_troop.troop_type as int, enemy.troop_type as int
-			)
-			# 品质差系数：我方品质越高，对敌方伤害越大（方向互换）
-			var quality_diff: float = float(player_troop.quality as int - enemy.quality as int)
-			var quality_factor: float = maxf(quality_min, 1.0 + quality_k * quality_diff)
-			var damage: float = effective_base * counter * quality_factor * float(battle_rounds)
-			enemy_dmg += damage
-		result.enemy_damages.append(int(enemy_dmg))
+	# 模拟用临时兵力（不修改原始数据）
+	var player_hp: Array[int] = []
+	var enemy_hp: Array[int] = []
+	for t in player_troops:
+		player_hp.append(t.current_hp)
+	for t in enemy_troops:
+		enemy_hp.append(t.current_hp)
+
+	# ── 逐回合模拟 ──
+	for _round in range(max_rounds):
+		# 判断存活部队（兵力 > 0）
+		var any_player_alive: bool = false
+		var any_enemy_alive: bool = false
+		for hp in player_hp:
+			if hp > 0:
+				any_player_alive = true
+				break
+		for hp in enemy_hp:
+			if hp > 0:
+				any_enemy_alive = true
+				break
+		# 任一方全灭则结束模拟
+		if not any_player_alive or not any_enemy_alive:
+			break
+
+		# 本回合伤害（先全部算完再扣血，同时结算）
+		var round_player_dmg: Array[float] = []
+		var round_enemy_dmg: Array[float] = []
+		for i in range(player_count):
+			round_player_dmg.append(0.0)
+		for i in range(enemy_count):
+			round_enemy_dmg.append(0.0)
+
+		# 敌方 → 我方伤害（仅存活部队参与）
+		for pi in range(player_count):
+			if player_hp[pi] <= 0:
+				continue
+			for ei in range(enemy_count):
+				if enemy_hp[ei] <= 0:
+					continue
+				var counter: float = get_counter_factor(
+					enemy_troops[ei].troop_type as int, player_troops[pi].troop_type as int
+				)
+				var quality_diff: float = float(enemy_troops[ei].quality as int - player_troops[pi].quality as int)
+				var quality_factor: float = maxf(quality_min, 1.0 + quality_k * quality_diff)
+				round_player_dmg[pi] += effective_base * counter * quality_factor
+
+		# 我方 → 敌方伤害（仅存活部队参与）
+		for ei in range(enemy_count):
+			if enemy_hp[ei] <= 0:
+				continue
+			for pi in range(player_count):
+				if player_hp[pi] <= 0:
+					continue
+				var counter: float = get_counter_factor(
+					player_troops[pi].troop_type as int, enemy_troops[ei].troop_type as int
+				)
+				var quality_diff: float = float(player_troops[pi].quality as int - enemy_troops[ei].quality as int)
+				var quality_factor: float = maxf(quality_min, 1.0 + quality_k * quality_diff)
+				round_enemy_dmg[ei] += effective_base * counter * quality_factor
+
+		# 同时扣血并累计伤害
+		for pi in range(player_count):
+			var dmg: int = int(round_player_dmg[pi])
+			player_total_dmg[pi] += dmg
+			player_hp[pi] = maxi(0, player_hp[pi] - dmg)
+		for ei in range(enemy_count):
+			var dmg: int = int(round_enemy_dmg[ei])
+			enemy_total_dmg[ei] += dmg
+			enemy_hp[ei] = maxi(0, enemy_hp[ei] - dmg)
+
+	# 汇总结果
+	result.damages = []
+	result.enemy_damages = []
+	var grand_total: int = 0
+	for i in range(player_count):
+		var d: int = int(player_total_dmg[i])
+		result.damages.append(d)
+		grand_total += d
+	for i in range(enemy_count):
+		result.enemy_damages.append(int(enemy_total_dmg[i]))
+	result.damage_taken = grand_total
 
 	return result
 

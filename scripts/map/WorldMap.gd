@@ -806,7 +806,7 @@ func _show_battle_confirm(level: LevelSlot) -> void:
 			text += "\n击败奖励：%s" % level.get_rewards_display()
 		info_label.text = text
 
-	# 更新击退预览（击退全灭时不显示）
+	# 更新击退预览（击退全灭时不显示单独的击退栏）
 	var repel_label: Label = _battle_panel.find_child("RepelPreviewLabel", true, false) as Label
 	if repel_label != null:
 		if repel_wipes:
@@ -818,18 +818,25 @@ func _show_battle_confirm(level: LevelSlot) -> void:
 			)
 			repel_label.visible = true
 
-	# 更新击败预览（无法全灭时不显示）
+	# 更新击败预览
 	var defeat_label: Label = _battle_panel.find_child("DefeatPreviewLabel", true, false) as Label
 	if defeat_label != null:
-		if not defeat_wipes:
+		if repel_wipes:
+			# 击退即可全灭：按击退倍率结算，显示击退倍率的伤害预览
+			defeat_label.text = "── 击败（低损耗全灭）──\n%s" % _format_battle_preview(
+				player_troops, repel_result, level.troops
+			)
+			defeat_label.visible = true
+		elif defeat_wipes:
+			# 需要全力才能击败
+			defeat_label.text = "── 击败 ──\n%s" % _format_battle_preview(
+				player_troops, defeat_result, level.troops
+			)
+			defeat_label.visible = true
+		else:
+			# 100% 伤害也无法全灭
 			defeat_label.text = ""
 			defeat_label.visible = false
-		else:
-			var defeat_header: String = "── 击败 ──" if not repel_wipes else "── 击败（击退即可全灭）──"
-			defeat_label.text = "%s\n%s" % [defeat_header, _format_battle_preview(
-				player_troops, defeat_result, level.troops
-			)]
-			defeat_label.visible = true
 
 	# 控制按钮显示
 	var btn_repel: Button = _battle_panel.find_child("BtnRepel", true, false) as Button
@@ -837,7 +844,8 @@ func _show_battle_confirm(level: LevelSlot) -> void:
 		btn_repel.visible = not repel_wipes
 	var btn_defeat: Button = _battle_panel.find_child("BtnDefeat", true, false) as Button
 	if btn_defeat != null:
-		btn_defeat.visible = defeat_wipes
+		# 击退全灭或击败全灭时都显示击败按钮
+		btn_defeat.visible = repel_wipes or defeat_wipes
 
 	_battle_panel.visible = true
 
@@ -892,19 +900,26 @@ func _on_battle_repel() -> void:
 	_post_battle_settlement()
 
 ## 击败按钮回调
+## 击退即可全灭时按击退倍率结算（低损耗全灭），否则按 100% 结算
 func _on_battle_defeat() -> void:
 	if _pending_level == null or _pending_full_result == null:
 		return
 	_battle_panel.visible = false
 	_is_battle_pending = false
 
-	# 击败按 100% 伤害结算
-	var result: BattleResolver.BattleResult = _pending_full_result
+	# 判断是否击退即可全灭，决定使用哪套倍率
+	var repel_result: BattleResolver.BattleResult = _pending_full_result.apply_damage_rate(
+		_repel_player_damage_rate, _repel_enemy_damage_rate
+	)
+	var repel_wipes: bool = BattleResolver.would_wipe_enemies(
+		_pending_level.troops, repel_result.enemy_damages
+	)
+	var result: BattleResolver.BattleResult = repel_result if repel_wipes else _pending_full_result
 
 	# 我方扣血
 	_apply_player_damages(result)
 
-	# 敌方扣血（击败时全额，部队全灭）
+	# 敌方扣血
 	_pending_level.apply_enemy_damages(result.enemy_damages)
 	_pending_level.remove_defeated_troops()
 
