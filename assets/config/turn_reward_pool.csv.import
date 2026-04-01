@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://dycp1ikjgyw0k"
+
+[deps]
+
+files=["res://assets/config/turn_reward_pool.item.translation", "res://assets/config/turn_reward_pool.count.translation", "res://assets/config/turn_reward_pool.weight.translation"]
+
+source_file="res://assets/config/turn_reward_pool.csv"
+dest_files=["res://assets/config/turn_reward_pool.item.translation", "res://assets/config/turn_reward_pool.count.translation", "res://assets/config/turn_reward_pool.weight.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

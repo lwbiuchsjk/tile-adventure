@@ -16,7 +16,7 @@ layer = 10
 [node name="HudLabel" type="Label" parent="UILayer"]
 offset_left = 10.0
 offset_top = -40.0
-offset_right = 600.0
+offset_right = 1200.0
 offset_bottom = -10.0
 anchors_preset = 2
 anchor_top = 1.0
@@ -29,7 +29,7 @@ text = ""
 [node name="FinishLabel" type="Label" parent="UILayer"]
 offset_left = 10.0
 offset_top = -70.0
-offset_right = 600.0
+offset_right = 1200.0
 offset_bottom = -42.0
 anchors_preset = 2
 anchor_top = 1.0
