@@ -1,0 +1,62 @@
+name: Deploy Web to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.6.1
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup export templates
+        env:
+          HOME: /root
+        run: |
+          mkdir -p /root/.local/share/godot/export_templates/4.6.1.stable
+          mv /root/.local/share/godot/templates/4.6.1.stable/* \
+             /root/.local/share/godot/export_templates/4.6.1.stable/ || true
+
+      - name: Import project
+        env:
+          HOME: /root
+        run: godot --headless --import 2>&1 || true
+
+      - name: Export Web
+        env:
+          HOME: /root
+        run: |
+          mkdir -p output
+          godot --headless --export-release "Web" output/index.html
+
+      - name: Inject coi-serviceworker
+        run: |
+          COI_URL="https://cdn.jsdelivr.net/npm/coi-serviceworker@0.1.7/coi-serviceworker.min.js"
+          curl -sL "$COI_URL" -o output/coi-serviceworker.min.js
+          sed -i 's|</head>|<script src="coi-serviceworker.min.js"></script></head>|' output/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: output
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
