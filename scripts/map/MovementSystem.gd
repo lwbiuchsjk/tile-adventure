@@ -11,7 +11,8 @@ class_name MovementSystem
 ## 计算从 position 出发、在 movement 移动力预算内可到达的所有格子。
 ## 返回字典 {Vector2i: float}，值为到达该格的最小消耗。
 ## unit_cost_override: 单位专属地形消耗表（可选）
-static func get_reachable_tiles(schema: MapSchema, position: Vector2i, movement: float, unit_cost_override: Dictionary = {}) -> Dictionary:
+## blocked_positions: 额外阻挡位置集合 {Vector2i: any}（可选，如击退关卡）
+static func get_reachable_tiles(schema: MapSchema, position: Vector2i, movement: float, unit_cost_override: Dictionary = {}, blocked_positions: Dictionary = {}) -> Dictionary:
 	var reachable: Dictionary = {}
 	var visited: Dictionary = {}
 	# 简易优先队列：[{pos: Vector2i, cost: float}]
@@ -42,6 +43,9 @@ static func get_reachable_tiles(schema: MapSchema, position: Vector2i, movement:
 			if visited.has(neighbor):
 				continue
 			if not schema.is_in_bounds(neighbor.x, neighbor.y):
+				continue
+			# 额外阻挡位置检查（如击退状态的关卡）
+			if blocked_positions.has(neighbor):
 				continue
 
 			var move_cost: float = schema.get_terrain_cost(neighbor.x, neighbor.y, unit_cost_override)
