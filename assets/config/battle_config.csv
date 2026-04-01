@@ -6,3 +6,5 @@ default_battle_rounds,3
 repel_player_damage_rate,0.1
 repel_enemy_damage_rate,0.9
 repel_cooldown_turns,3
+enemy_movement_enabled,1
+enemy_movement_points,6

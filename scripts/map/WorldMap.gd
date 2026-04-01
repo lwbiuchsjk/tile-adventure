@@ -174,6 +174,33 @@ var _repel_enemy_damage_rate: float = 0.6
 ## 击退冷却回合数配置
 var _repel_cooldown_turns: int = 3
 
+## 敌方移动开关（从配置读取）
+var _enemy_movement_enabled: bool = false
+
+## 敌方移动力（从配置读取）
+var _enemy_movement_points: int = 6
+
+## 敌方是否已激活移动能力（首次战斗后全局激活）
+var _enemy_can_move: bool = false
+
+## 是否正在执行敌方移动阶段
+var _is_enemy_moving: bool = false
+
+## 敌方移动队列（按距离排序的待移动关卡列表）
+var _enemy_move_queue: Array[LevelSlot] = []
+
+## 当前正在移动的敌方关卡的视觉位置（像素坐标）
+var _enemy_visual_pos: Vector2 = Vector2.ZERO
+
+## 当前正在移动的敌方关卡引用
+var _moving_enemy_level: LevelSlot = null
+
+## 是否为敌方主动触发的强制战斗（禁止取消）
+var _is_forced_battle: bool = false
+
+## 敌方关卡占据位置的原始 SlotType（用于移动后恢复）
+var _original_slot_types: Dictionary = {}
+
 ## 预计算的完整战斗结果（100% 伤害，供预览和结算使用）
 var _pending_full_result: BattleResolver.BattleResult = null
 
@@ -254,6 +281,10 @@ func _ready() -> void:
 	_repel_player_damage_rate = float(_battle_config.get("repel_player_damage_rate", "0.6"))
 	_repel_enemy_damage_rate = float(_battle_config.get("repel_enemy_damage_rate", "0.6"))
 	_repel_cooldown_turns = int(_battle_config.get("repel_cooldown_turns", "3"))
+
+	# 加载敌方移动配置
+	_enemy_movement_enabled = int(_battle_config.get("enemy_movement_enabled", "0")) == 1
+	_enemy_movement_points = int(_battle_config.get("enemy_movement_points", "6"))
 
 	# 初始化奖励生成器
 	_reward_generator = RewardGenerator.new()
@@ -342,8 +373,8 @@ func _ready() -> void:
 # ─────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	# 动画播放中、战斗确认中、管理面板打开中或流程结束时锁定所有输入
-	if _game_finished or _is_moving or _is_battle_pending or _is_manage_open:
+	# 动画播放中、战斗确认中、敌方移动中、管理面板打开中或流程结束时锁定所有输入
+	if _game_finished or _is_moving or _is_battle_pending or _is_manage_open or _is_enemy_moving:
 		return
 
 	# 鼠标左键点击：移动单位
@@ -581,8 +612,193 @@ func _on_turn_end_settlement() -> void:
 	# 递减击退关卡的冷却回合数
 	_tick_repelled_cooldowns()
 
-	# 结束回合
-	_turn_manager.end_turn()
+	# 敌方移动阶段（异步，完成后再 end_turn）
+	if _enemy_can_move and _enemy_movement_enabled:
+		_start_enemy_move_phase()
+	else:
+		_turn_manager.end_turn()
+
+# ─────────────────────────────────────────
+# 敌方移动
+# ─────────────────────────────────────────
+
+## 启动敌方移动阶段
+## 收集所有可移动关卡，按距离排序后逐个执行移动
+func _start_enemy_move_phase() -> void:
+	_is_enemy_moving = true
+	_enemy_move_queue = _get_sorted_movable_levels()
+	# 开始处理移动队列
+	_process_next_enemy_move()
+
+## 获取可移动关卡列表，按距离玩家从近到远排序
+## 距离相同时按格坐标 y→x 排序
+func _get_sorted_movable_levels() -> Array[LevelSlot]:
+	var movable: Array[LevelSlot] = []
+	for pos in _level_slots:
+		var lv: LevelSlot = _level_slots[pos] as LevelSlot
+		# 仅 UNCHALLENGED 状态的关卡参与移动
+		if lv.state == LevelSlot.State.UNCHALLENGED:
+			movable.append(lv)
+
+	if _unit == null:
+		return movable
+
+	var player_pos: Vector2i = _unit.position
+	# 按曼哈顿距离升序排序，距离相同按 y→x 排序
+	movable.sort_custom(func(a: LevelSlot, b: LevelSlot) -> bool:
+		var dist_a: int = absi(a.position.x - player_pos.x) + absi(a.position.y - player_pos.y)
+		var dist_b: int = absi(b.position.x - player_pos.x) + absi(b.position.y - player_pos.y)
+		if dist_a != dist_b:
+			return dist_a < dist_b
+		if a.position.y != b.position.y:
+			return a.position.y < b.position.y
+		return a.position.x < b.position.x
+	)
+	return movable
+
+## 处理移动队列中的下一个敌方关卡
+## 队列为空时结束敌方移动阶段
+func _process_next_enemy_move() -> void:
+	# 游戏结束则终止后续移动
+	if _game_finished:
+		_finish_enemy_move_phase()
+		return
+
+	# 队列为空，敌方移动阶段结束
+	if _enemy_move_queue.is_empty():
+		_finish_enemy_move_phase()
+		return
+
+	var level: LevelSlot = _enemy_move_queue.pop_front()
+
+	# 关卡状态可能在前序战斗中被改变（如被击败），跳过无效关卡
+	if level.state != LevelSlot.State.UNCHALLENGED:
+		_process_next_enemy_move()
+		return
+
+	# 寻路：目标为玩家位置，阻挡位置包含其他所有关卡
+	var blocked: Dictionary = _get_enemy_blocked_positions(level)
+	var path_result: Pathfinder.PathResult = Pathfinder.find_path(
+		_schema, level.position, _unit.position, {}, blocked
+	)
+
+	# 无通路或已在玩家位置，跳过
+	if path_result.path.size() < 2:
+		_process_next_enemy_move()
+		return
+
+	# 按移动力截断路径
+	var move_path: Array[Vector2i] = _truncate_path_by_movement(
+		path_result.path, _enemy_movement_points
+	)
+
+	# 敌方不进入玩家所在格，停在相邻格触发战斗
+	# 避免击退后 REPELLED 关卡堵在玩家位置上
+	if move_path.size() >= 2 and move_path[move_path.size() - 1] == _unit.position:
+		move_path.resize(move_path.size() - 1)
+
+	# 截断后无法移动，跳过
+	if move_path.size() < 2:
+		_process_next_enemy_move()
+		return
+
+	# 记录当前移动的关卡，更新逻辑位置
+	_moving_enemy_level = level
+	var old_pos: Vector2i = level.position
+	var new_pos: Vector2i = move_path[move_path.size() - 1]
+
+	# 更新 _level_slots 字典键和关卡位置
+	_level_slots.erase(old_pos)
+	level.position = new_pos
+	_level_slots[new_pos] = level
+
+	# 更新地图 Slot 标记（保留原始类型以便恢复）
+	# 恢复旧位置的原始 Slot 类型，若无记录则置为 NONE
+	var restored_type: int = _original_slot_types.get(old_pos, MapSchema.SlotType.NONE) as int
+	_schema.set_slot(old_pos.x, old_pos.y, restored_type as MapSchema.SlotType)
+	_original_slot_types.erase(old_pos)
+	# 保存新位置的原始 Slot 类型（仅首次覆盖时记录）
+	if not _original_slot_types.has(new_pos):
+		_original_slot_types[new_pos] = _schema.get_slot(new_pos.x, new_pos.y)
+	_schema.set_slot(new_pos.x, new_pos.y, MapSchema.SlotType.FUNCTION)
+
+	# 播放移动动画
+	_start_enemy_move_animation(move_path)
+
+## 获取敌方关卡移动时的阻挡位置
+## 排除自身，包含所有其他关卡（UNCHALLENGED + REPELLED）
+func _get_enemy_blocked_positions(exclude_level: LevelSlot) -> Dictionary:
+	var blocked: Dictionary = {}
+	for pos in _level_slots:
+		var p: Vector2i = pos as Vector2i
+		var lv: LevelSlot = _level_slots[p] as LevelSlot
+		if lv == exclude_level:
+			continue
+		# 所有其他关卡均阻挡（未挑战和击退状态）
+		if lv.state == LevelSlot.State.UNCHALLENGED or lv.is_repelled():
+			blocked[p] = true
+	return blocked
+
+## 按移动力和地形消耗截断路径
+## 返回截断后的路径（含起点），至少包含起点
+func _truncate_path_by_movement(full_path: Array[Vector2i], movement: int) -> Array[Vector2i]:
+	var truncated: Array[Vector2i] = [full_path[0]]
+	var remaining: float = float(movement)
+	for i in range(1, full_path.size()):
+		var cost: float = _schema.get_terrain_cost(full_path[i].x, full_path[i].y)
+		if cost >= INF or cost > remaining:
+			break
+		remaining -= cost
+		truncated.append(full_path[i])
+	return truncated
+
+## 播放敌方关卡移动动画
+func _start_enemy_move_animation(path: Array[Vector2i]) -> void:
+	_enemy_visual_pos = _grid_to_pixel_center(path[0])
+
+	if _move_tween != null and _move_tween.is_valid():
+		_move_tween.kill()
+
+	_move_tween = create_tween()
+	for i in range(1, path.size()):
+		var target_pixel: Vector2 = _grid_to_pixel_center(path[i])
+		_move_tween.tween_property(self, "_enemy_visual_pos", target_pixel, MOVE_STEP_DURATION)
+		_move_tween.tween_callback(queue_redraw)
+
+	_move_tween.tween_callback(_on_enemy_move_finished)
+
+## 敌方关卡移动动画完成回调
+func _on_enemy_move_finished() -> void:
+	if _moving_enemy_level == null:
+		_process_next_enemy_move()
+		return
+
+	var level_pos: Vector2i = _moving_enemy_level.position
+	var player_pos: Vector2i = _unit.position
+	# 判断是否与玩家相邻（曼哈顿距离 = 1）
+	var dist: int = absi(level_pos.x - player_pos.x) + absi(level_pos.y - player_pos.y)
+	var adjacent_to_player: bool = dist == 1
+
+	_moving_enemy_level = null
+	queue_redraw()
+
+	if adjacent_to_player:
+		# 敌方到达玩家相邻格，触发强制战斗
+		var level: LevelSlot = _get_level_at(level_pos)
+		if level != null and level.is_interactable() and _has_any_troop():
+			_is_forced_battle = true
+			_show_battle_confirm(level)
+			return
+	# 继续处理下一个关卡
+	_process_next_enemy_move()
+
+## 结束敌方移动阶段，执行回合结束
+func _finish_enemy_move_phase() -> void:
+	_is_enemy_moving = false
+	_moving_enemy_level = null
+	_enemy_move_queue = []
+	if not _game_finished:
+		_turn_manager.end_turn()
 
 # ─────────────────────────────────────────
 # 关卡 Slot 管理
@@ -600,8 +816,10 @@ func _clear_level_slots() -> void:
 			# 保留击退关卡
 			keep[p] = lv
 		else:
-			# 清除已击败/已挑战的关卡 Slot
-			_schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
+			# 清除已击败/已挑战的关卡 Slot，恢复原始类型
+			var orig_type: int = _original_slot_types.get(p, MapSchema.SlotType.NONE) as int
+			_schema.set_slot(p.x, p.y, orig_type as MapSchema.SlotType)
+			_original_slot_types.erase(p)
 	_level_slots = keep
 
 ## 生成关卡并初始化 LevelSlot 数据
@@ -765,6 +983,7 @@ func _create_battle_confirm_ui() -> void:
 	hbox.add_child(btn_defeat)
 
 	var btn_cancel: Button = Button.new()
+	btn_cancel.name = "BtnCancel"
 	btn_cancel.text = "取消"
 	btn_cancel.pressed.connect(_on_battle_cancelled)
 	hbox.add_child(btn_cancel)
@@ -846,6 +1065,11 @@ func _show_battle_confirm(level: LevelSlot) -> void:
 	if btn_defeat != null:
 		# 击退全灭或击败全灭时都显示击败按钮
 		btn_defeat.visible = repel_wipes or defeat_wipes
+
+	# 强制战斗时隐藏取消按钮（敌方主动触发，玩家必须完成选择）
+	var btn_cancel: Button = _battle_panel.find_child("BtnCancel", true, false) as Button
+	if btn_cancel != null:
+		btn_cancel.visible = not _is_forced_battle
 
 	_battle_panel.visible = true
 
@@ -983,10 +1207,17 @@ func _grant_level_rewards() -> void:
 		_show_notice("战斗胜利！获得奖励：%s" % reward_text)
 
 ## 战斗后共用处理：更新 HUD、失败判定、轮次推进
+## 若处于敌方移动阶段的强制战斗，结算后继续处理移动队列
 func _post_battle_settlement() -> void:
 	_pending_full_result = null
 	var defeated_level: bool = _pending_level != null and _pending_level.is_defeated()
+	var was_forced: bool = _is_forced_battle
 	_pending_level = null
+	_is_forced_battle = false
+
+	# 首次战斗完成后激活敌方移动能力
+	if not _enemy_can_move and _enemy_movement_enabled:
+		_enemy_can_move = true
 
 	_update_hud()
 	queue_redraw()
@@ -998,10 +1229,17 @@ func _post_battle_settlement() -> void:
 			_reachable_tiles = {}
 			_show_defeat_text()
 			queue_redraw()
+			# 敌方移动阶段中全灭，终止移动
+			if was_forced:
+				_finish_enemy_move_phase()
 			return
 		else:
 			_show_notice("部队被击败，请打开管理面板 [M] 装配新部队")
-			_refresh_reachable()
+			# 敌方移动阶段中战败但有备用部队，继续移动队列
+			if was_forced:
+				_process_next_enemy_move()
+			else:
+				_refresh_reachable()
 			return
 
 	# 击败时才通知轮次管理器（击退不算通关进度）
@@ -1011,11 +1249,20 @@ func _post_battle_settlement() -> void:
 		if round_cleared:
 			_grant_round_rewards()
 			if not _round_manager.advance_round():
+				# 全部轮次通关，即使在敌方移动阶段也直接结束
+				if was_forced:
+					_finish_enemy_move_phase()
 				return
 			_show_round_hint()
+			if was_forced:
+				_process_next_enemy_move()
 			return
 
-	_refresh_reachable()
+	# 敌方移动阶段中，继续处理下一个关卡
+	if was_forced:
+		_process_next_enemy_move()
+	else:
+		_refresh_reachable()
 
 ## 战斗取消按钮回调：关闭弹板，恢复输入
 func _on_battle_cancelled() -> void:
@@ -1341,6 +1588,9 @@ func _on_abandon() -> void:
 # ─────────────────────────────────────────
 
 func _unhandled_key_input(event: InputEvent) -> void:
+	# 敌方移动阶段锁定所有快捷键输入
+	if _is_enemy_moving:
+		return
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
 		if key.pressed and not key.echo:
@@ -1465,7 +1715,11 @@ func _draw() -> void:
 		)
 		draw_rect(rect, REACHABLE_COLOR)
 
-	# 第三层：单位标记（基于视觉位置）
+	# 第三层：敌方关卡移动动画标记
+	if _moving_enemy_level != null:
+		_draw_enemy_move_marker()
+
+	# 第四层：单位标记（基于视觉位置）
 	if _unit != null:
 		_draw_unit_marker()
 
@@ -1490,6 +1744,9 @@ func _draw_tile(x: int, y: int) -> void:
 		var pos: Vector2i = Vector2i(x, y)
 		var level: LevelSlot = _get_level_at(pos)
 		if level != null:
+			# 正在移动的关卡跳过静态渲染（由 _draw_enemy_move_marker 负责）
+			if level == _moving_enemy_level:
+				return
 			if level.is_defeated():
 				# 已击败：变暗显示
 				slot_color = slot_color.darkened(CHALLENGED_DIM)
@@ -1503,6 +1760,17 @@ func _draw_tile(x: int, y: int) -> void:
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
 		draw_rect(slot_rect, slot_color)
+
+## 绘制正在移动的敌方关卡标记（基于 _enemy_visual_pos 的动画位置）
+func _draw_enemy_move_marker() -> void:
+	var slot_color: Color = SLOT_COLORS.get(2, Color.WHITE) as Color  # FUNCTION 类型颜色
+	var rect: Rect2 = Rect2(
+		_enemy_visual_pos.x - TILE_SIZE / 2 + SLOT_MARGIN,
+		_enemy_visual_pos.y - TILE_SIZE / 2 + SLOT_MARGIN,
+		TILE_SIZE - SLOT_MARGIN * 2 - 1,
+		TILE_SIZE - SLOT_MARGIN * 2 - 1
+	)
+	draw_rect(rect, slot_color)
 
 ## 绘制单位标记（基于视觉位置，支持动画中的平滑移动）
 func _draw_unit_marker() -> void:
