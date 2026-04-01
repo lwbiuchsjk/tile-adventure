@@ -880,6 +880,9 @@ func _on_battle_repel() -> void:
 		_repel_player_damage_rate, _repel_enemy_damage_rate
 	)
 
+	# 保存敌方部队快照（扣血前），用于抽取部队奖励
+	var troop_snapshot: Array[TroopData] = _pending_level.troops.duplicate()
+
 	# 我方扣血
 	_apply_player_damages(result)
 
@@ -892,6 +895,8 @@ func _on_battle_repel() -> void:
 		# 击退但全灭 → 转为击败，发放奖励
 		_pending_level.mark_defeated()
 		_grant_level_rewards()
+		# 从敌方部队中随机抽取 1 支作为部队道具奖励
+		_grant_troop_reward(troop_snapshot)
 	else:
 		# 标记为击退，设置冷却
 		_pending_level.mark_repelled(_repel_cooldown_turns)
@@ -916,6 +921,9 @@ func _on_battle_defeat() -> void:
 	)
 	var result: BattleResolver.BattleResult = repel_result if repel_wipes else _pending_full_result
 
+	# 保存敌方部队快照（扣血前），用于抽取部队奖励
+	var troop_snapshot: Array[TroopData] = _pending_level.troops.duplicate()
+
 	# 我方扣血
 	_apply_player_damages(result)
 
@@ -928,6 +936,9 @@ func _on_battle_defeat() -> void:
 
 	# 发放关卡胜利奖励
 	_grant_level_rewards()
+
+	# 从敌方部队中随机抽取 1 支作为部队道具奖励
+	_grant_troop_reward(troop_snapshot)
 
 	# 后处理
 	_post_battle_settlement()
@@ -942,6 +953,25 @@ func _apply_player_damages(result: BattleResolver.BattleResult) -> void:
 				if ch.troop.is_defeated():
 					ch.clear_troop()
 			troop_index += 1
+
+## 从敌方部队快照中随机抽取 1 支，转为 TROOP 道具加入背包
+## 背包已满时直接丢弃
+func _grant_troop_reward(troop_snapshot: Array[TroopData]) -> void:
+	if troop_snapshot.is_empty():
+		return
+	# 随机抽取 1 支敌方部队
+	var picked: TroopData = troop_snapshot[randi_range(0, troop_snapshot.size() - 1)]
+	# 转为 TROOP 道具
+	var item: ItemData = ItemData.new()
+	item.type = ItemData.ItemType.TROOP
+	item.troop_type = int(picked.troop_type)
+	item.quality = int(picked.quality)
+	item.display_name = picked.get_display_text()
+	item.stack_count = 1
+	# 尝试加入背包（满则丢弃）
+	var added: int = _inventory.add_items([item])
+	if added > 0:
+		_show_notice("获得部队奖励：%s" % item.get_display_text())
 
 ## 发放当前待确认关卡的胜利奖励
 func _grant_level_rewards() -> void:
