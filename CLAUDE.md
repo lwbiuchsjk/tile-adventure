@@ -12,7 +12,7 @@ Godot 4.6，GDScript，Git 版本控制
 - scripts/      脚本文件
 - assets/       资源文件（图片、音效等）
 - test/         测试文件
-- Design/       本地设计文件。创建文档时优先放在这里
+- Design/       本地设计文件。创建文档时优先放在这里。该目录被 .gitignore 忽略，不纳入 git 提交
 - _kb_sync/     本地在线知识库缓存功能。更新知识库中通常使用本路径下的方法
 - _kb_sync/cache/KB_CACHE.md   在线知识库缓存主入口。这里可以看到所有在线知识库的缓存。
 - _kb_sync/Design/              在线知识库缓存的单个md文件。查询文件指定文件时，可以优先在这里查找文件。
