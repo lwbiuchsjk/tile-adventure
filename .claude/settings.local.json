@@ -3,6 +3,7 @@
     "allow": [
       "Edit",
       "Write",
+      "Read",
       "Bash(*)",
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:github.com)",
