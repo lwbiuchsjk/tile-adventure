@@ -46,18 +46,20 @@ const CONFIG_TURN_REWARD: String = "res://assets/config/turn_reward_config.csv"
 const TILE_SIZE: int = 24
 
 ## 各地形渲染颜色（纯色块占位）
+## key 使用整数字面量对应 MapSchema.TerrainType 枚举值
 const TERRAIN_COLORS: Dictionary = {
-	MapSchema.TerrainType.MOUNTAIN: Color(0.40, 0.35, 0.30),  ## 灰褐：高山
-	MapSchema.TerrainType.HIGHLAND: Color(0.50, 0.65, 0.30),  ## 黄绿：高地
-	MapSchema.TerrainType.FLATLAND: Color(0.35, 0.72, 0.40),  ## 绿色：平地
-	MapSchema.TerrainType.LOWLAND:  Color(0.30, 0.55, 0.75),  ## 蓝色：洼地
+	0: Color(0.40, 0.35, 0.30),  ## MOUNTAIN：灰褐：高山
+	1: Color(0.50, 0.65, 0.30),  ## HIGHLAND：黄绿：高地
+	2: Color(0.35, 0.72, 0.40),  ## FLATLAND：绿色：平地
+	3: Color(0.30, 0.55, 0.75),  ## LOWLAND：蓝色：洼地
 }
 
 ## Slot 标记颜色（小方块叠加在地形色上）
+## key 使用整数字面量对应 MapSchema.SlotType 枚举值
 const SLOT_COLORS: Dictionary = {
-	MapSchema.SlotType.RESOURCE: Color(1.00, 0.85, 0.00),  ## 金色：资源点
-	MapSchema.SlotType.FUNCTION: Color(0.80, 0.40, 1.00),  ## 紫色：功能点
-	MapSchema.SlotType.SPAWN:    Color(1.00, 0.30, 0.30),  ## 红色：出生点
+	1: Color(1.00, 0.85, 0.00),  ## RESOURCE：金色：资源点
+	2: Color(0.80, 0.40, 1.00),  ## FUNCTION：紫色：功能点
+	3: Color(1.00, 0.30, 0.30),  ## SPAWN：红色：出生点
 }
 
 ## Slot 标记在格内的边距（像素）
@@ -165,6 +167,16 @@ var _reward_generator: RewardGenerator = null
 ## 难度配置：每轮增加的 base_damage 值
 var _damage_increment: float = 0.0
 
+## 击退倍率配置
+var _repel_player_damage_rate: float = 0.6
+var _repel_enemy_damage_rate: float = 0.6
+
+## 击退冷却回合数配置
+var _repel_cooldown_turns: int = 3
+
+## 预计算的完整战斗结果（100% 伤害，供预览和结算使用）
+var _pending_full_result: BattleResolver.BattleResult = null
+
 ## 关卡奖励池原始行数据（缓存，按 round_id 过滤用）
 var _level_reward_pool_rows: Array = []
 
@@ -237,6 +249,11 @@ func _ready() -> void:
 
 	# 加载难度配置
 	_damage_increment = float(difficulty_cfg.get("damage_increment", "10"))
+
+	# 加载击退/击败配置
+	_repel_player_damage_rate = float(_battle_config.get("repel_player_damage_rate", "0.6"))
+	_repel_enemy_damage_rate = float(_battle_config.get("repel_enemy_damage_rate", "0.6"))
+	_repel_cooldown_turns = int(_battle_config.get("repel_cooldown_turns", "3"))
 
 	# 初始化奖励生成器
 	_reward_generator = RewardGenerator.new()
@@ -454,8 +471,9 @@ func _handle_click(screen_pos: Vector2) -> void:
 	if not _reachable_tiles.has(target):
 		return
 
-	# 寻路
-	var path_result: Pathfinder.PathResult = Pathfinder.find_path(_schema, _unit.position, target)
+	# 寻路（传入击退关卡阻挡位置）
+	var blocked: Dictionary = _get_blocked_positions()
+	var path_result: Pathfinder.PathResult = Pathfinder.find_path(_schema, _unit.position, target, {}, blocked)
 	if path_result.path.size() < 2:
 		return
 
@@ -507,10 +525,10 @@ func _on_move_finished() -> void:
 	_unit_visual_pos = _grid_to_pixel_center(_unit.position)
 	_camera.position = _unit_visual_pos
 
-	# 检查当前位置是否有未挑战的关卡 Slot
+	# 检查当前位置是否有可交互的关卡 Slot
 	var level: LevelSlot = _get_level_at(_unit.position)
-	if level != null and not level.is_challenged():
-		# 有任意角色装配了部队时弹出战斗确认
+	if level != null and level.is_interactable():
+		# 有任意角色装配了部队时弹出战斗预览
 		if _has_any_troop():
 			_show_battle_confirm(level)
 			return
@@ -519,14 +537,25 @@ func _on_move_finished() -> void:
 	_refresh_reachable()
 
 ## 刷新可达范围并触发重绘
+## 击退状态的关卡格视为不可通行
 func _refresh_reachable() -> void:
 	if _unit != null and _schema != null and not _game_finished:
+		var blocked: Dictionary = _get_blocked_positions()
 		_reachable_tiles = MovementSystem.get_reachable_tiles(
-			_schema, _unit.position, float(_unit.current_movement)
+			_schema, _unit.position, float(_unit.current_movement), {}, blocked
 		)
 	else:
 		_reachable_tiles = {}
 	queue_redraw()
+
+## 获取所有阻挡位置（击退状态的关卡格）
+func _get_blocked_positions() -> Dictionary:
+	var blocked: Dictionary = {}
+	for pos in _level_slots:
+		var lv: LevelSlot = _level_slots[pos] as LevelSlot
+		if lv.is_repelled():
+			blocked[pos] = true
+	return blocked
 
 ## 回合结束回调：刷新可达范围，更新 HUD
 func _on_turn_ended(_turn_number: int) -> void:
@@ -549,6 +578,9 @@ func _on_turn_end_settlement() -> void:
 			var reward_text: String = _format_rewards_text(rewards)
 			_show_notice("回合奖励：%s" % reward_text)
 
+	# 递减击退关卡的冷却回合数
+	_tick_repelled_cooldowns()
+
 	# 结束回合
 	_turn_manager.end_turn()
 
@@ -556,25 +588,39 @@ func _on_turn_end_settlement() -> void:
 # 关卡 Slot 管理
 # ─────────────────────────────────────────
 
-## 清除当前地图上所有关卡 Slot（FUNCTION → NONE），并清空 _level_slots 字典
+## 清除地图上已击败的关卡 Slot（FUNCTION → NONE），保留击退状态的关卡
 func _clear_level_slots() -> void:
 	if _schema == null:
 		return
+	var keep: Dictionary = {}
 	for pos in _level_slots:
 		var p: Vector2i = pos as Vector2i
-		_schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
-	_level_slots = {}
+		var lv: LevelSlot = _level_slots[p] as LevelSlot
+		if lv.is_repelled():
+			# 保留击退关卡
+			keep[p] = lv
+		else:
+			# 清除已击败/已挑战的关卡 Slot
+			_schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
+	_level_slots = keep
 
 ## 生成关卡并初始化 LevelSlot 数据
 ## count: 本轮关卡数量
-## 抽象为独立方法，方便后续扩展生成规则（如出现在特定建筑旁）
+## 保留击退状态的旧关卡，新关卡避开已占格子
 func _generate_level_slots(count: int) -> void:
 	if _schema == null:
 		return
-	# 构建排除列表：起点、终点、玩家当前位置
+	# 构建排除列表：起点、终点、玩家当前位置 + 已有击退关卡的格子
 	var exclude: Array[Vector2i] = [_start_pos, _end_pos]
 	if _unit != null and not exclude.has(_unit.position):
 		exclude.append(_unit.position)
+	# 保留击退关卡，排除其占据的格子
+	for pos in _level_slots:
+		var p: Vector2i = pos as Vector2i
+		var lv: LevelSlot = _level_slots[p] as LevelSlot
+		if lv.is_repelled():
+			if not exclude.has(p):
+				exclude.append(p)
 
 	# 在地图上随机放置关卡 Slot
 	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, count, exclude)
@@ -583,8 +629,15 @@ func _generate_level_slots(count: int) -> void:
 	var round_index: int = _round_manager.get_current_round() if _round_manager != null else 0
 	var round_id: int = round_index + 1
 
-	# 根据放置结果创建 LevelSlot 数据
-	_level_slots = {}
+	# 构建新关卡字典（保留击退关卡 + 新增本轮关卡）
+	var new_slots: Dictionary = {}
+	# 先保留击退状态的旧关卡
+	for pos in _level_slots:
+		var p: Vector2i = pos as Vector2i
+		var lv: LevelSlot = _level_slots[p] as LevelSlot
+		if lv.is_repelled():
+			new_slots[p] = lv
+	# 新增本轮关卡
 	for pos in placed:
 		var level: LevelSlot = LevelSlot.new()
 		level.position = pos
@@ -599,7 +652,8 @@ func _generate_level_slots(count: int) -> void:
 				_level_reward_pool_rows, round_id,
 				_level_reward_count_min, _level_reward_count_max
 			)
-		_level_slots[pos] = level
+		new_slots[pos] = level
+	_level_slots = new_slots
 
 
 ## 获取指定坐标的关卡 Slot，不存在时返回 null
@@ -659,12 +713,12 @@ func _on_round_hint_timeout() -> void:
 # ─────────────────────────────────────────
 
 ## 程序化创建战斗确认弹板（PanelContainer），挂载到 UILayer 下
+## 弹板展示击退/击败两种结果的双方伤害预览
 func _create_battle_confirm_ui() -> void:
 	var ui_layer: CanvasLayer = $UILayer
 
 	_battle_panel = PanelContainer.new()
 	_battle_panel.visible = false
-	# 居中显示：锚点设为屏幕中心，grow 双向展开
 	_battle_panel.set_anchors_and_offsets_preset(
 		Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE
 	)
@@ -674,19 +728,41 @@ func _create_battle_confirm_ui() -> void:
 	var vbox: VBoxContainer = VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 
+	# 战斗信息标签（敌方部队 + 奖励）
 	var battle_label: Label = Label.new()
 	battle_label.name = "BattleInfoLabel"
-	battle_label.text = "发现关卡！是否进入战斗？"
+	battle_label.text = ""
 	battle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(battle_label)
 
+	# 击退预览标签
+	var repel_label: Label = Label.new()
+	repel_label.name = "RepelPreviewLabel"
+	repel_label.text = ""
+	vbox.add_child(repel_label)
+
+	# 击败预览标签
+	var defeat_label: Label = Label.new()
+	defeat_label.name = "DefeatPreviewLabel"
+	defeat_label.text = ""
+	vbox.add_child(defeat_label)
+
+	# 按钮区域
 	var hbox: HBoxContainer = HBoxContainer.new()
+	hbox.name = "BattleButtonArea"
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	var btn_confirm: Button = Button.new()
-	btn_confirm.text = "确认战斗"
-	btn_confirm.pressed.connect(_on_battle_confirmed)
-	hbox.add_child(btn_confirm)
+	var btn_repel: Button = Button.new()
+	btn_repel.name = "BtnRepel"
+	btn_repel.text = "击退"
+	btn_repel.pressed.connect(_on_battle_repel)
+	hbox.add_child(btn_repel)
+
+	var btn_defeat: Button = Button.new()
+	btn_defeat.name = "BtnDefeat"
+	btn_defeat.text = "击败"
+	btn_defeat.pressed.connect(_on_battle_defeat)
+	hbox.add_child(btn_defeat)
 
 	var btn_cancel: Button = Button.new()
 	btn_cancel.text = "取消"
@@ -697,67 +773,178 @@ func _create_battle_confirm_ui() -> void:
 	_battle_panel.add_child(vbox)
 	ui_layer.add_child(_battle_panel)
 
-## 显示战斗确认弹板（含敌方部队信息和预期奖励）
+## 显示战斗预览弹板（展示击退和击败两种结果的双方伤害预览）
 func _show_battle_confirm(level: LevelSlot) -> void:
 	_is_battle_pending = true
 	_pending_level = level
-	if _battle_panel != null:
-		# 更新弹板上的敌方部队信息和预期奖励
-		var info_label: Label = _battle_panel.find_child("BattleInfoLabel", true, false) as Label
-		if info_label != null:
-			var text: String = "发现关卡！是否进入战斗？\n敌方：%s" % level.get_troops_display()
-			# 显示预期奖励
-			if not level.rewards.is_empty():
-				text += "\n奖励：%s" % level.get_rewards_display()
-			info_label.text = text
-		_battle_panel.visible = true
-
-## 战斗确认按钮回调
-func _on_battle_confirmed() -> void:
-	if _pending_level == null:
+	if _battle_panel == null:
 		return
 
-	# 隐藏弹板
+	# 预计算完整战斗结果（100% 伤害）
+	var player_troops: Array[TroopData] = _get_active_troops()
+	_pending_full_result = BattleResolver.resolve(
+		player_troops, level.troops, _battle_config,
+		level.difficulty, _damage_increment
+	)
+
+	# 计算击退和击败两套结果
+	var repel_result: BattleResolver.BattleResult = _pending_full_result.apply_damage_rate(
+		_repel_player_damage_rate, _repel_enemy_damage_rate
+	)
+	var defeat_result: BattleResolver.BattleResult = _pending_full_result
+
+	# 判断击退倍率下是否已能全灭敌方
+	var repel_wipes: bool = BattleResolver.would_wipe_enemies(level.troops, repel_result.enemy_damages)
+	# 判断击败（100%伤害）是否能全灭敌方
+	var defeat_wipes: bool = BattleResolver.would_wipe_enemies(level.troops, defeat_result.enemy_damages)
+
+	# 更新战斗信息标签
+	var info_label: Label = _battle_panel.find_child("BattleInfoLabel", true, false) as Label
+	if info_label != null:
+		var text: String = "发现关卡！\n敌方：%s" % level.get_troops_detail_display()
+		if not level.rewards.is_empty():
+			text += "\n击败奖励：%s" % level.get_rewards_display()
+		info_label.text = text
+
+	# 更新击退预览（击退全灭时不显示）
+	var repel_label: Label = _battle_panel.find_child("RepelPreviewLabel", true, false) as Label
+	if repel_label != null:
+		if repel_wipes:
+			repel_label.text = ""
+			repel_label.visible = false
+		else:
+			repel_label.text = "── 击退（不获得奖励）──\n%s" % _format_battle_preview(
+				player_troops, repel_result, level.troops
+			)
+			repel_label.visible = true
+
+	# 更新击败预览（无法全灭时不显示）
+	var defeat_label: Label = _battle_panel.find_child("DefeatPreviewLabel", true, false) as Label
+	if defeat_label != null:
+		if not defeat_wipes:
+			defeat_label.text = ""
+			defeat_label.visible = false
+		else:
+			var defeat_header: String = "── 击败 ──" if not repel_wipes else "── 击败（击退即可全灭）──"
+			defeat_label.text = "%s\n%s" % [defeat_header, _format_battle_preview(
+				player_troops, defeat_result, level.troops
+			)]
+			defeat_label.visible = true
+
+	# 控制按钮显示
+	var btn_repel: Button = _battle_panel.find_child("BtnRepel", true, false) as Button
+	if btn_repel != null:
+		btn_repel.visible = not repel_wipes
+	var btn_defeat: Button = _battle_panel.find_child("BtnDefeat", true, false) as Button
+	if btn_defeat != null:
+		btn_defeat.visible = defeat_wipes
+
+	_battle_panel.visible = true
+
+## 格式化战斗预览文本（展示双方各部队的预计伤害）
+func _format_battle_preview(player_troops: Array[TroopData], result: BattleResolver.BattleResult, enemy_troops: Array[TroopData]) -> String:
+	var lines: Array[String] = []
+	# 我方伤害预览
+	lines.append("  我方损耗：")
+	for i in range(player_troops.size()):
+		var t: TroopData = player_troops[i]
+		var dmg: int = result.damages[i] if i < result.damages.size() else 0
+		var remaining: int = maxi(0, t.current_hp - dmg)
+		lines.append("    %s: -%d (%d→%d)" % [t.get_display_text(), dmg, t.current_hp, remaining])
+	# 敌方伤害预览
+	lines.append("  敌方损耗：")
+	for i in range(enemy_troops.size()):
+		var e: TroopData = enemy_troops[i]
+		var dmg: int = result.enemy_damages[i] if i < result.enemy_damages.size() else 0
+		var remaining: int = maxi(0, e.current_hp - dmg)
+		lines.append("    %s: -%d (%d→%d)" % [e.get_display_text(), dmg, e.current_hp, remaining])
+	return "\n".join(lines)
+
+## 击退按钮回调
+func _on_battle_repel() -> void:
+	if _pending_level == null or _pending_full_result == null:
+		return
 	_battle_panel.visible = false
 	_is_battle_pending = false
 
-	# 收集所有已装配部队的角色的部队列表
-	var player_troops: Array[TroopData] = _get_active_troops()
-	if player_troops.is_empty():
-		_pending_level = null
-		_refresh_reachable()
-		return
-
-	# 执行战斗结算（公式驱动：多我方部队 vs 敌方部队列表，含难度修正）
-	var result: BattleResolver.BattleResult = BattleResolver.resolve(
-		player_troops, _pending_level.troops, _battle_config,
-		_pending_level.difficulty, _damage_increment
+	# 按击退倍率缩放伤害
+	var result: BattleResolver.BattleResult = _pending_full_result.apply_damage_rate(
+		_repel_player_damage_rate, _repel_enemy_damage_rate
 	)
 
-	# 遍历结果，为每支我方部队扣除兵力
+	# 我方扣血
+	_apply_player_damages(result)
+
+	# 敌方扣血
+	_pending_level.apply_enemy_damages(result.enemy_damages)
+	# 移除被消灭的敌方部队
+	var all_wiped: bool = _pending_level.remove_defeated_troops()
+
+	if all_wiped:
+		# 击退但全灭 → 转为击败，发放奖励
+		_pending_level.mark_defeated()
+		_grant_level_rewards()
+	else:
+		# 标记为击退，设置冷却
+		_pending_level.mark_repelled(_repel_cooldown_turns)
+
+	# 后处理（共用逻辑）
+	_post_battle_settlement()
+
+## 击败按钮回调
+func _on_battle_defeat() -> void:
+	if _pending_level == null or _pending_full_result == null:
+		return
+	_battle_panel.visible = false
+	_is_battle_pending = false
+
+	# 击败按 100% 伤害结算
+	var result: BattleResolver.BattleResult = _pending_full_result
+
+	# 我方扣血
+	_apply_player_damages(result)
+
+	# 敌方扣血（击败时全额，部队全灭）
+	_pending_level.apply_enemy_damages(result.enemy_damages)
+	_pending_level.remove_defeated_troops()
+
+	# 标记为击败
+	_pending_level.mark_defeated()
+
+	# 发放关卡胜利奖励
+	_grant_level_rewards()
+
+	# 后处理
+	_post_battle_settlement()
+
+## 为我方部队应用伤害（从 BattleResult 中提取 damages）
+func _apply_player_damages(result: BattleResolver.BattleResult) -> void:
 	var troop_index: int = 0
 	for ch in _characters:
 		if ch.has_troop():
 			if troop_index < result.damages.size():
 				ch.troop.take_damage(result.damages[troop_index])
-				# 判定部队是否被击败
 				if ch.troop.is_defeated():
 					ch.clear_troop()
 			troop_index += 1
 
-	# 标记关卡为已挑战
-	_pending_level.mark_challenged()
-
-	# 发放关卡胜利奖励
+## 发放当前待确认关卡的胜利奖励
+func _grant_level_rewards() -> void:
+	if _pending_level == null:
+		return
 	if not _pending_level.rewards.is_empty():
 		var added: int = _inventory.add_items(_pending_level.rewards)
 		var reward_text: String = _format_rewards_text(_pending_level.rewards)
 		_show_notice("战斗胜利！获得奖励：%s" % reward_text)
 
+## 战斗后共用处理：更新 HUD、失败判定、轮次推进
+func _post_battle_settlement() -> void:
+	_pending_full_result = null
+	var defeated_level: bool = _pending_level != null and _pending_level.is_defeated()
 	_pending_level = null
 
-	# 更新 HUD
 	_update_hud()
+	queue_redraw()
 
 	# 判定失败条件：所有角色均未装配 且 背包无部队道具
 	if not _has_any_troop():
@@ -768,27 +955,21 @@ func _on_battle_confirmed() -> void:
 			queue_redraw()
 			return
 		else:
-			# 有部队道具，提示玩家装配
 			_show_notice("部队被击败，请打开管理面板 [M] 装配新部队")
 			_refresh_reachable()
 			return
 
-	# 通知轮次管理器，检查本轮是否全部挑战
-	if _round_manager != null:
+	# 击败时才通知轮次管理器（击退不算通关进度）
+	if defeated_level and _round_manager != null:
 		var round_cleared: bool = _round_manager.on_level_cleared()
 		_update_hud()
 		if round_cleared:
-			# 发放轮次胜利奖励
 			_grant_round_rewards()
-			# 尝试推进下一轮
 			if not _round_manager.advance_round():
-				# 末轮已通关
 				return
-			# 非末轮，显示轮次过渡提示
 			_show_round_hint()
 			return
 
-	# 继续游戏，刷新可达范围
 	_refresh_reachable()
 
 ## 战斗取消按钮回调：关闭弹板，恢复输入
@@ -796,7 +977,7 @@ func _on_battle_cancelled() -> void:
 	_battle_panel.visible = false
 	_is_battle_pending = false
 	_pending_level = null
-	# 取消后刷新可达范围，玩家可继续移动
+	_pending_full_result = null
 	_refresh_reachable()
 
 # ─────────────────────────────────────────
@@ -1015,6 +1196,18 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	_inventory.remove_item(item, 1)
 	# 刷新面板
 	_refresh_manage_ui()
+
+# ─────────────────────────────────────────
+# 击退冷却管理
+# ─────────────────────────────────────────
+
+## 递减所有击退关卡的冷却回合数，冷却结束则恢复为可交互
+func _tick_repelled_cooldowns() -> void:
+	for pos in _level_slots:
+		var lv: LevelSlot = _level_slots[pos] as LevelSlot
+		if lv.is_repelled():
+			lv.tick_cooldown()
+	queue_redraw()
 
 # ─────────────────────────────────────────
 # 玩家初始化
@@ -1249,11 +1442,15 @@ func _draw_tile(x: int, y: int) -> void:
 	var slot: MapSchema.SlotType = _schema.get_slot(x, y)
 	if slot != MapSchema.SlotType.NONE:
 		var slot_color: Color = SLOT_COLORS.get(slot, Color.WHITE) as Color
-		# 已挑战的关卡 Slot 变暗显示
 		var pos: Vector2i = Vector2i(x, y)
 		var level: LevelSlot = _get_level_at(pos)
-		if level != null and level.is_challenged():
-			slot_color = slot_color.darkened(CHALLENGED_DIM)
+		if level != null:
+			if level.is_defeated():
+				# 已击败：变暗显示
+				slot_color = slot_color.darkened(CHALLENGED_DIM)
+			elif level.is_repelled():
+				# 已击退冷却中：半透明显示
+				slot_color = Color(slot_color.r, slot_color.g, slot_color.b, 0.4)
 		var slot_rect: Rect2 = Rect2(
 			x * TILE_SIZE + SLOT_MARGIN,
 			y * TILE_SIZE + SLOT_MARGIN,

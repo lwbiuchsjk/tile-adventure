@@ -21,7 +21,8 @@ class PathResult:
 ## 计算从 start 到 end 的最短路径。
 ## 返回 PathResult，无路径时 path 为空。
 ## unit_cost_override: 单位专属地形消耗表（可选）
-static func find_path(schema: MapSchema, start: Vector2i, end: Vector2i, unit_cost_override: Dictionary = {}) -> PathResult:
+## blocked_positions: 额外阻挡位置集合 {Vector2i: any}（可选，如击退关卡）
+static func find_path(schema: MapSchema, start: Vector2i, end: Vector2i, unit_cost_override: Dictionary = {}, blocked_positions: Dictionary = {}) -> PathResult:
 	var result: PathResult = PathResult.new()
 
 	# 起终点合法性检查
@@ -66,6 +67,9 @@ static func find_path(schema: MapSchema, start: Vector2i, end: Vector2i, unit_co
 			var neighbor: Vector2i = current + dir
 
 			if not schema.is_in_bounds(neighbor.x, neighbor.y):
+				continue
+			# 额外阻挡位置检查（如击退状态的关卡）
+			if blocked_positions.has(neighbor):
 				continue
 
 			var move_cost: float = schema.get_terrain_cost(neighbor.x, neighbor.y, unit_cost_override)
