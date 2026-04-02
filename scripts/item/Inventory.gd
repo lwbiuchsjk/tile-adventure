@@ -16,6 +16,10 @@ var _items: Array[ItemData] = []
 func init_from_config(cfg: Dictionary) -> void:
 	max_capacity = int(cfg.get("max_capacity", "20"))
 
+## 获取所有道具列表（只读）
+func get_items() -> Array[ItemData]:
+	return _items
+
 ## 获取当前占用格数
 func get_used_slots() -> int:
 	return _items.size()

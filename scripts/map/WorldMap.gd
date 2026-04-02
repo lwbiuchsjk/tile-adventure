@@ -93,11 +93,16 @@ const NOTICE_DURATION: float = 2.5
 ## Camera2D 节点（场景中配置，已开启 position_smoothing）
 @onready var _camera: Camera2D = $Camera2D
 
-## HUD 状态栏 Label（CanvasLayer 下，固定在屏幕底部）
-@onready var _hud_label: Label = $UILayer/HudLabel
+## HUD 分区标签
+@onready var _hud_round: Label = $UILayer/HudBar/HBox/RoundInfo
+@onready var _hud_troop: Label = $UILayer/HudBar/HBox/TroopInfo
+@onready var _hud_keys: Label = $UILayer/HudBar/HBox/KeyHints
 
-## 流程结束提示 Label（CanvasLayer 下）
-@onready var _finish_label: Label = $UILayer/FinishLabel
+## 通知底板容器（CanvasLayer 下，HUD 栏上方居中）
+@onready var _notice_bar: PanelContainer = $UILayer/NoticeBar
+
+## 通知/流程结束提示 Label
+@onready var _finish_label: Label = $UILayer/NoticeBar/NoticeLabel
 
 # ─────────────────────────────────────────
 # 私有状态
@@ -419,26 +424,32 @@ func _setup_camera_limits() -> void:
 
 ## 刷新 HUD 状态栏文字（包含轮次、关卡、多角色兵力信息）
 func _update_hud() -> void:
-	if _hud_label == null or _unit == null or _turn_manager == null:
+	if _unit == null or _turn_manager == null:
 		return
-	# 多角色兵力显示
-	var troops_text: String = _get_all_troops_display()
-	# 轮次与关卡进度
-	var round_text: String = ""
+
+	# 左区：轮次 / 关卡 / 回合 / 移动力
+	var round_parts: Array[String] = []
 	if _round_manager != null:
-		round_text = "轮次 %d/%d | 关卡 %d/%d | " % [
+		round_parts.append("轮次 %d/%d" % [
 			_round_manager.get_current_round() + 1,
-			_round_manager.get_total_rounds(),
+			_round_manager.get_total_rounds()
+		])
+		round_parts.append("关卡 %d/%d" % [
 			_round_manager.get_cleared_count(),
 			_round_manager.get_current_level_count()
-		]
-	_hud_label.text = "%s回合 %d | 移动力 %d/%d | %s | [空格]结束回合 [M]管理 [Q]放弃" % [
-		round_text,
-		_turn_manager.current_turn,
-		_unit.current_movement,
-		_unit.max_movement,
-		troops_text
-	]
+		])
+	round_parts.append("回合 %d" % _turn_manager.current_turn)
+	round_parts.append("移动力 %d/%d" % [_unit.current_movement, _unit.max_movement])
+	if _hud_round != null:
+		_hud_round.text = "  ".join(round_parts)
+
+	# 中区：部队状态
+	if _hud_troop != null:
+		_hud_troop.text = _get_all_troops_display()
+
+	# 右区：快捷键提示
+	if _hud_keys != null:
+		_hud_keys.text = "[空格]结束回合  [M]管理  [Q]放弃"
 
 ## 获取所有角色部队的显示文本
 func _get_all_troops_display() -> String:
@@ -461,18 +472,24 @@ func _show_victory_text() -> void:
 		return
 	var total_rounds: int = _round_manager.get_total_rounds() if _round_manager != null else 1
 	_finish_label.text = "全部 %d 轮通关！流程胜利（回合 %d）" % [total_rounds, _turn_manager.current_turn]
+	if _notice_bar != null:
+		_notice_bar.visible = true
 
 ## 显示流程失败提示
 func _show_defeat_text() -> void:
 	if _finish_label == null or _turn_manager == null:
 		return
 	_finish_label.text = "流程失败（回合 %d）" % _turn_manager.current_turn
+	if _notice_bar != null:
+		_notice_bar.visible = true
 
 ## 显示醒目提示文字（短暂显示后自动隐藏）
 func _show_notice(text: String, duration: float = NOTICE_DURATION) -> void:
 	if _finish_label == null:
 		return
 	_finish_label.text = text
+	if _notice_bar != null:
+		_notice_bar.visible = true
 	var timer: SceneTreeTimer = get_tree().create_timer(duration)
 	timer.timeout.connect(_on_notice_timeout)
 
@@ -480,6 +497,8 @@ func _show_notice(text: String, duration: float = NOTICE_DURATION) -> void:
 func _on_notice_timeout() -> void:
 	if _finish_label != null and not _game_finished:
 		_finish_label.text = ""
+		if _notice_bar != null:
+			_notice_bar.visible = false
 
 # ─────────────────────────────────────────
 # 交互逻辑
@@ -915,6 +934,8 @@ func _show_round_hint() -> void:
 	if _finish_label == null or _round_manager == null:
 		return
 	_finish_label.text = "第 %d 轮开始！" % (_round_manager.get_current_round() + 1)
+	if _notice_bar != null:
+		_notice_bar.visible = true
 	# 延时隐藏提示文字
 	var timer: SceneTreeTimer = get_tree().create_timer(ROUND_HINT_DURATION)
 	timer.timeout.connect(_on_round_hint_timeout)
@@ -923,6 +944,8 @@ func _show_round_hint() -> void:
 func _on_round_hint_timeout() -> void:
 	if _finish_label != null:
 		_finish_label.text = ""
+		if _notice_bar != null:
+			_notice_bar.visible = false
 	_update_hud()
 	_refresh_reachable()
 
@@ -942,9 +965,25 @@ func _create_battle_confirm_ui() -> void:
 	)
 	_battle_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_battle_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_battle_panel.custom_minimum_size = Vector2(360, 0)
 
 	var vbox: VBoxContainer = VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 6)
+
+	# 标题
+	var title: Label = Label.new()
+	title.name = "BattleTitleLabel"
+	title.text = "遭遇战斗"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.30))
+	vbox.add_child(title)
+
+	# 分隔线
+	var sep1: HSeparator = HSeparator.new()
+	sep1.add_theme_constant_override("separation", 8)
+	vbox.add_child(sep1)
 
 	# 战斗信息标签（敌方部队 + 奖励）
 	var battle_label: Label = Label.new()
@@ -953,38 +992,63 @@ func _create_battle_confirm_ui() -> void:
 	battle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(battle_label)
 
-	# 击退预览标签
+	# 分隔线
+	var sep2: HSeparator = HSeparator.new()
+	sep2.add_theme_constant_override("separation", 6)
+	vbox.add_child(sep2)
+
+	# 击退预览标签（蓝色调表示保守选项）
 	var repel_label: Label = Label.new()
 	repel_label.name = "RepelPreviewLabel"
 	repel_label.text = ""
+	repel_label.add_theme_color_override("font_color", Color(0.65, 0.80, 0.95))
 	vbox.add_child(repel_label)
 
-	# 击败预览标签
+	# 击败预览标签（橙色调表示激进选项）
 	var defeat_label: Label = Label.new()
 	defeat_label.name = "DefeatPreviewLabel"
 	defeat_label.text = ""
+	defeat_label.add_theme_color_override("font_color", Color(0.95, 0.75, 0.45))
 	vbox.add_child(defeat_label)
+
+	# 分隔线
+	var sep3: HSeparator = HSeparator.new()
+	sep3.add_theme_constant_override("separation", 6)
+	vbox.add_child(sep3)
 
 	# 按钮区域
 	var hbox: HBoxContainer = HBoxContainer.new()
 	hbox.name = "BattleButtonArea"
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.add_theme_constant_override("separation", 12)
 
+	# 击退按钮（蓝色调）
 	var btn_repel: Button = Button.new()
 	btn_repel.name = "BtnRepel"
 	btn_repel.text = "击退"
+	btn_repel.custom_minimum_size = Vector2(80, 32)
+	btn_repel.add_theme_color_override("font_color", Color(0.65, 0.80, 0.95))
+	btn_repel.add_theme_color_override("font_hover_color", Color(0.80, 0.92, 1.0))
 	btn_repel.pressed.connect(_on_battle_repel)
 	hbox.add_child(btn_repel)
 
+	# 击败按钮（橙色调）
 	var btn_defeat: Button = Button.new()
 	btn_defeat.name = "BtnDefeat"
 	btn_defeat.text = "击败"
+	btn_defeat.custom_minimum_size = Vector2(80, 32)
+	btn_defeat.add_theme_color_override("font_color", Color(0.95, 0.75, 0.45))
+	btn_defeat.add_theme_color_override("font_hover_color", Color(1.0, 0.85, 0.55))
 	btn_defeat.pressed.connect(_on_battle_defeat)
 	hbox.add_child(btn_defeat)
 
+	# 取消按钮（灰色调）
 	var btn_cancel: Button = Button.new()
 	btn_cancel.name = "BtnCancel"
 	btn_cancel.text = "取消"
+	btn_cancel.custom_minimum_size = Vector2(80, 32)
+	btn_cancel.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+	btn_cancel.add_theme_color_override("font_hover_color", Color(0.75, 0.75, 0.75))
 	btn_cancel.pressed.connect(_on_battle_cancelled)
 	hbox.add_child(btn_cancel)
 
@@ -1017,10 +1081,15 @@ func _show_battle_confirm(level: LevelSlot) -> void:
 	# 判断击败（100%伤害）是否能全灭敌方
 	var defeat_wipes: bool = BattleResolver.would_wipe_enemies(level.troops, defeat_result.enemy_damages)
 
+	# 更新标题（区分主动/被动战斗）
+	var title_label: Label = _battle_panel.find_child("BattleTitleLabel", true, false) as Label
+	if title_label != null:
+		title_label.text = "敌方来袭！" if _is_forced_battle else "遭遇战斗"
+
 	# 更新战斗信息标签
 	var info_label: Label = _battle_panel.find_child("BattleInfoLabel", true, false) as Label
 	if info_label != null:
-		var text: String = "发现关卡！\n敌方：%s" % level.get_troops_detail_display()
+		var text: String = "敌方：%s" % level.get_troops_detail_display()
 		if not level.rewards.is_empty():
 			text += "\n击败奖励：%s" % level.get_rewards_display()
 		info_label.text = text
@@ -1289,55 +1358,96 @@ func _create_manage_ui() -> void:
 	)
 	_manage_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_manage_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_manage_panel.custom_minimum_size = Vector2(500, 500)
+	_manage_panel.custom_minimum_size = Vector2(420, 480)
 
-	# 外层 VBox：滚动区域 + 关闭按钮
+	# 外层 VBox：标题 + 滚动区域 + 关闭按钮
 	var outer_vbox: VBoxContainer = VBoxContainer.new()
+	outer_vbox.add_theme_constant_override("separation", 8)
+
+	# 标题
+	var title: Label = Label.new()
+	title.text = "装配管理"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.30))
+	outer_vbox.add_child(title)
+
+	var sep_top: HSeparator = HSeparator.new()
+	sep_top.add_theme_constant_override("separation", 4)
+	outer_vbox.add_child(sep_top)
 
 	# 滚动容器（包裹所有内容，确保长列表可滚动）
 	var scroll: ScrollContainer = ScrollContainer.new()
 	scroll.name = "ManageScroll"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size = Vector2(0, 400)
+	scroll.custom_minimum_size = Vector2(0, 360)
 
 	var vbox: VBoxContainer = VBoxContainer.new()
 	vbox.name = "ManageVBox"
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var title: Label = Label.new()
-	title.text = "── 装配管理 ──"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(title)
+	vbox.add_theme_constant_override("separation", 6)
 
 	# 角色状态区域
+	var char_title: Label = Label.new()
+	char_title.name = "CharTitleLabel"
+	char_title.text = "部队状态"
+	char_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	char_title.add_theme_color_override("font_color", Color(0.75, 0.85, 0.95))
+	vbox.add_child(char_title)
+
 	var char_label: Label = Label.new()
 	char_label.name = "CharStatusLabel"
 	char_label.text = ""
 	vbox.add_child(char_label)
 
+	var sep_char: HSeparator = HSeparator.new()
+	sep_char.add_theme_constant_override("separation", 6)
+	vbox.add_child(sep_char)
+
 	# 背包区域
+	var inv_title: Label = Label.new()
+	inv_title.name = "InvTitleLabel"
+	inv_title.text = "背包"
+	inv_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	inv_title.add_theme_color_override("font_color", Color(0.75, 0.85, 0.95))
+	vbox.add_child(inv_title)
+
 	var inv_label: Label = Label.new()
 	inv_label.name = "InventoryLabel"
 	inv_label.text = ""
 	vbox.add_child(inv_label)
 
-	# 操作标题
+	var sep_inv: HSeparator = HSeparator.new()
+	sep_inv.add_theme_constant_override("separation", 6)
+	vbox.add_child(sep_inv)
+
+	# 操作区域标题
 	var op_title: Label = Label.new()
-	op_title.text = "── 可用操作 ──"
+	op_title.name = "OpTitleLabel"
+	op_title.text = "可用操作"
 	op_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	op_title.add_theme_color_override("font_color", Color(0.75, 0.85, 0.95))
 	vbox.add_child(op_title)
 
 	# 操作按钮区域
 	var op_vbox: VBoxContainer = VBoxContainer.new()
 	op_vbox.name = "OperationArea"
+	op_vbox.add_theme_constant_override("separation", 4)
 	vbox.add_child(op_vbox)
 
 	scroll.add_child(vbox)
 	outer_vbox.add_child(scroll)
 
-	# 关闭按钮（固定在面板底部，不随内容滚动）
+	# 底部分隔线 + 关闭按钮
+	var sep_bottom: HSeparator = HSeparator.new()
+	sep_bottom.add_theme_constant_override("separation", 4)
+	outer_vbox.add_child(sep_bottom)
+
 	var btn_close: Button = Button.new()
 	btn_close.text = "关闭 [M]"
+	btn_close.custom_minimum_size = Vector2(0, 32)
+	btn_close.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+	btn_close.add_theme_color_override("font_hover_color", Color(0.75, 0.75, 0.75))
 	btn_close.pressed.connect(_on_manage_closed)
 	outer_vbox.add_child(btn_close)
 
@@ -1367,7 +1477,7 @@ func _refresh_manage_ui() -> void:
 	# 更新角色状态
 	var char_label: Label = _manage_panel.find_child("CharStatusLabel", true, false) as Label
 	if char_label != null:
-		var lines: Array[String] = ["── 角色状态 ──"]
+		var lines: Array[String] = []
 		for i in range(_characters.size()):
 			var ch: CharacterData = _characters[i]
 			if ch.has_troop():
@@ -1375,21 +1485,32 @@ func _refresh_manage_ui() -> void:
 				var exp_info: String = ""
 				var threshold: int = t.get_upgrade_threshold()
 				if threshold > 0:
-					exp_info = " 经验 %d/%d" % [t.exp, threshold]
-				lines.append("角色%d: %s 兵力 %d/%d%s" % [
+					exp_info = "  经验 %d/%d" % [t.exp, threshold]
+				lines.append("  角色%d: %s  兵力 %d/%d%s" % [
 					i + 1, t.get_display_text(), t.current_hp, t.max_hp, exp_info
 				])
 			else:
-				lines.append("角色%d: 空" % (i + 1))
+				lines.append("  角色%d: 空" % (i + 1))
 		char_label.text = "\n".join(lines)
 
-	# 更新背包
+	# 更新背包标题（含容量）
+	var inv_title: Label = _manage_panel.find_child("InvTitleLabel", true, false) as Label
+	if inv_title != null:
+		inv_title.text = "背包 (%d/%d)" % [_inventory.get_used_slots(), _inventory.max_capacity]
+
+	# 更新背包内容
 	var inv_label: Label = _manage_panel.find_child("InventoryLabel", true, false) as Label
 	if inv_label != null:
-		inv_label.text = "── 背包 (%d/%d) ──\n%s" % [
-			_inventory.get_used_slots(), _inventory.max_capacity,
-			_inventory.get_display_text()
-		]
+		if _inventory.get_used_slots() == 0:
+			inv_label.text = "  背包为空"
+		else:
+			var item_lines: Array[String] = []
+			for item in _inventory.get_items():
+				if item.stack_count > 1:
+					item_lines.append("  · %s ×%d" % [item.get_display_text(), item.stack_count])
+				else:
+					item_lines.append("  · %s" % item.get_display_text())
+			inv_label.text = "\n".join(item_lines)
 
 	# 重建操作按钮区域（移除旧容器，创建新容器，避免 queue_free 延迟问题）
 	var old_op_area: VBoxContainer = _manage_panel.find_child("OperationArea", true, false) as VBoxContainer
@@ -1411,43 +1532,66 @@ func _refresh_manage_ui() -> void:
 		for i in range(_characters.size()):
 			var ch: CharacterData = _characters[i]
 
+			# 角色标识
+			var ch_name: String = "角色%d" % (i + 1)
+			var ch_troop_text: String = ch.troop.get_display_text() if ch.has_troop() else "空"
+
 			# 空槽位 + 背包有部队道具 → 显示装配按钮
 			if not ch.has_troop():
 				var troop_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.TROOP)
 				for item in troop_items:
-					var btn: Button = Button.new()
-					btn.text = "角色%d: 装配 %s" % [i + 1, item.get_display_text()]
+					var card: VBoxContainer = _create_op_card(
+						ch_name, "", "空槽位",
+						"装配 %s" % item.get_display_text(),
+						Color(0.45, 0.80, 0.50)
+					)
+					var btn: Button = card.get_child(1) as Button
 					btn.pressed.connect(_on_equip_troop.bind(ch, item))
-					op_area.add_child(btn)
+					op_area.add_child(card)
 					button_count += 1
 			else:
+				var t: TroopData = ch.troop
 				# 已装配 → 显示替换按钮
 				var troop_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.TROOP)
 				for item in troop_items:
-					var btn: Button = Button.new()
-					btn.text = "角色%d: 替换为 %s" % [i + 1, item.get_display_text()]
+					var card: VBoxContainer = _create_op_card(
+						ch_name, ch_troop_text, "兵力 %d/%d" % [t.current_hp, t.max_hp],
+						"替换为 %s（丢弃当前）" % item.get_display_text(),
+						Color(0.95, 0.75, 0.45)
+					)
+					var btn: Button = card.get_child(1) as Button
 					btn.pressed.connect(_on_equip_troop.bind(ch, item))
-					op_area.add_child(btn)
+					op_area.add_child(card)
 					button_count += 1
 
 				# 经验道具
+				var exp_threshold: int = t.get_upgrade_threshold()
+				var exp_status: String = "经验 %d/%d" % [t.exp, exp_threshold] if exp_threshold > 0 else "已满级"
 				var exp_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.EXP)
 				for item in exp_items:
-					if item.can_use_on(ch.troop):
-						var btn: Button = Button.new()
-						btn.text = "角色%d: 使用 %s" % [i + 1, item.get_display_text()]
+					if item.can_use_on(t):
+						var card: VBoxContainer = _create_op_card(
+							ch_name, ch_troop_text, exp_status,
+							"使用 %s" % item.get_display_text(),
+							Color(0.65, 0.80, 0.95)
+						)
+						var btn: Button = card.get_child(1) as Button
 						btn.pressed.connect(_on_use_item.bind(ch, item))
-						op_area.add_child(btn)
+						op_area.add_child(card)
 						button_count += 1
 
 				# 兵力恢复道具
 				var hp_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.HP_RESTORE)
 				for item in hp_items:
-					if item.can_use_on(ch.troop):
-						var btn: Button = Button.new()
-						btn.text = "角色%d: 使用 %s" % [i + 1, item.get_display_text()]
+					if item.can_use_on(t):
+						var card: VBoxContainer = _create_op_card(
+							ch_name, ch_troop_text, "兵力 %d/%d" % [t.current_hp, t.max_hp],
+							"使用 %s" % item.get_display_text(),
+							Color(0.50, 0.85, 0.50)
+						)
+						var btn: Button = card.get_child(1) as Button
 						btn.pressed.connect(_on_use_item.bind(ch, item))
-						op_area.add_child(btn)
+						op_area.add_child(card)
 						button_count += 1
 
 		# 无可用操作时显示提示
@@ -1455,8 +1599,52 @@ func _refresh_manage_ui() -> void:
 			var hint: Label = Label.new()
 			hint.text = "（当前无可用操作）"
 			hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			hint.add_theme_color_override("font_color", Color(0.50, 0.50, 0.50))
 			op_area.add_child(hint)
 
+
+## 创建操作卡片（上方角色/兵种/状态信息 + 下方操作按钮）
+## char_name: 角色名称（如 "角色1"）
+## troop_name: 兵种显示名（如 "剑兵(R)"），空槽位传空字符串
+## status: 数值状态（如 "兵力 15/20"）
+## action: 操作描述文字
+## color: 按钮颜色
+func _create_op_card(char_name: String, troop_name: String, status: String, action: String, color: Color) -> VBoxContainer:
+	var card: VBoxContainer = VBoxContainer.new()
+	card.add_theme_constant_override("separation", 1)
+	# 角色 + 兵种 + 状态信息行
+	var info_hbox: HBoxContainer = HBoxContainer.new()
+	info_hbox.add_theme_constant_override("separation", 4)
+	# 角色名称（暖白醒目）
+	var name_label: Label = Label.new()
+	name_label.text = char_name
+	name_label.add_theme_font_size_override("font_size", 13)
+	name_label.add_theme_color_override("font_color", Color(0.85, 0.82, 0.75))
+	info_hbox.add_child(name_label)
+	# 兵种名（金色凸显）
+	if troop_name != "":
+		var troop_label: Label = Label.new()
+		troop_label.text = troop_name
+		troop_label.add_theme_font_size_override("font_size", 13)
+		troop_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.45))
+		info_hbox.add_child(troop_label)
+	# 数值状态（灰色辅助）
+	if status != "":
+		var status_label: Label = Label.new()
+		status_label.text = status
+		status_label.add_theme_font_size_override("font_size", 13)
+		status_label.add_theme_color_override("font_color", Color(0.55, 0.58, 0.55))
+		info_hbox.add_child(status_label)
+	card.add_child(info_hbox)
+	# 操作按钮
+	var btn: Button = Button.new()
+	btn.text = "  %s" % action
+	btn.custom_minimum_size = Vector2(0, 28)
+	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn.add_theme_color_override("font_color", color)
+	btn.add_theme_color_override("font_hover_color", color.lightened(0.3))
+	card.add_child(btn)
+	return card
 
 ## 装配部队操作回调
 func _on_equip_troop(character: CharacterData, item: ItemData) -> void:

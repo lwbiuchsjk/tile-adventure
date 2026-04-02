@@ -1,6 +1,20 @@
-[gd_scene load_steps=2 format=3 uid="uid://1u6xb00bb4sf"]
+[gd_scene load_steps=4 format=3 uid="uid://1u6xb00bb4sf"]
 
 [ext_resource type="Script" uid="uid://cxv1i7qw1xcxt" path="res://scripts/map/WorldMap.gd" id="1_worldmap"]
+[ext_resource type="Theme" path="res://theme/default_theme.tres" id="2_theme"]
+
+[sub_resource type="StyleBoxFlat" id="hud_bg"]
+bg_color = Color(0.08, 0.10, 0.14, 0.85)
+border_color = Color(0.55, 0.45, 0.20, 0.5)
+border_width_top = 1
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
 
 [node name="WorldMap" type="Node2D"]
 script = ExtResource("1_worldmap")
@@ -13,28 +27,68 @@ position_smoothing_speed = 8.0
 [node name="UILayer" type="CanvasLayer" parent="."]
 layer = 10
 
-[node name="HudLabel" type="Label" parent="UILayer"]
-offset_left = 10.0
-offset_top = -40.0
-offset_right = 1200.0
-offset_bottom = -10.0
-anchors_preset = 2
+[node name="HudBar" type="PanelContainer" parent="UILayer"]
+anchors_preset = 12
 anchor_top = 1.0
+anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
 grow_vertical = 0
-theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
-theme_override_font_sizes/font_size = 16
+theme = ExtResource("2_theme")
+theme_override_styles/panel = SubResource("hud_bg")
+
+[node name="HBox" type="HBoxContainer" parent="UILayer/HudBar"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="RoundInfo" type="Label" parent="UILayer/HudBar/HBox"]
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_colors/font_color = Color(0.75, 0.85, 0.95, 1)
+theme_override_font_sizes/font_size = 14
 text = ""
 
-[node name="FinishLabel" type="Label" parent="UILayer"]
-offset_left = 10.0
-offset_top = -70.0
-offset_right = 1200.0
-offset_bottom = -42.0
-anchors_preset = 2
+[node name="Sep1" type="VSeparator" parent="UILayer/HudBar/HBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="TroopInfo" type="Label" parent="UILayer/HudBar/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.90, 0.88, 0.80, 1)
+theme_override_font_sizes/font_size = 14
+text = ""
+
+[node name="Sep2" type="VSeparator" parent="UILayer/HudBar/HBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="KeyHints" type="Label" parent="UILayer/HudBar/HBox"]
+layout_mode = 2
+size_flags_horizontal = 0
+horizontal_alignment = 2
+theme_override_colors/font_color = Color(0.60, 0.58, 0.52, 1)
+theme_override_font_sizes/font_size = 13
+text = ""
+
+[node name="NoticeBar" type="PanelContainer" parent="UILayer"]
+anchors_preset = 7
+anchor_left = 0.5
 anchor_top = 1.0
+anchor_right = 0.5
 anchor_bottom = 1.0
+offset_left = -250.0
+offset_top = -80.0
+offset_right = 250.0
+offset_bottom = -50.0
+grow_horizontal = 2
 grow_vertical = 0
-theme_override_colors/font_color = Color(1, 0.9, 0.1, 1)
-theme_override_font_sizes/font_size = 20
+visible = false
+theme_override_styles/panel = SubResource("hud_bg")
+
+[node name="NoticeLabel" type="Label" parent="UILayer/NoticeBar"]
+layout_mode = 2
+horizontal_alignment = 1
+theme_override_colors/font_color = Color(1, 0.92, 0.30, 1)
+theme_override_font_sizes/font_size = 16
 text = ""
