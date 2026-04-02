@@ -77,6 +77,18 @@ const UNIT_MARGIN: int = 4
 ## 已挑战关卡变暗系数（同一轮内已挑战但尚未切换的关卡）
 const CHALLENGED_DIM: float = 0.4
 
+## 敌方关卡边框颜色（亮红，增强辨识度）
+const ENEMY_BORDER_COLOR: Color = Color(1.0, 0.25, 0.20, 0.8)
+
+## 敌方关卡移动时的高亮颜色（亮红橙）
+const ENEMY_MOVE_COLOR: Color = Color(1.0, 0.35, 0.20)
+
+## 敌方关卡移动时的外圈光晕颜色
+const ENEMY_GLOW_COLOR: Color = Color(1.0, 0.30, 0.15, 0.35)
+
+## 击退冷却关卡边框颜色（暗淡）
+const REPELLED_BORDER_COLOR: Color = Color(0.6, 0.3, 0.3, 0.5)
+
 ## 单位逐格移动动画耗时（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
 
@@ -1935,15 +1947,19 @@ func _draw_tile(x: int, y: int) -> void:
 		var slot_color: Color = SLOT_COLORS.get(slot, Color.WHITE) as Color
 		var pos: Vector2i = Vector2i(x, y)
 		var level: LevelSlot = _get_level_at(pos)
+		var is_enemy: bool = false
+		var is_repelled: bool = false
 		if level != null:
 			# 正在移动的关卡跳过静态渲染（由 _draw_enemy_move_marker 负责）
 			if level == _moving_enemy_level:
 				return
+			is_enemy = true
 			if level.is_defeated():
 				# 已击败：变暗显示
 				slot_color = slot_color.darkened(CHALLENGED_DIM)
 			elif level.is_repelled():
 				# 已击退冷却中：半透明显示
+				is_repelled = true
 				slot_color = Color(slot_color.r, slot_color.g, slot_color.b, 0.4)
 		var slot_rect: Rect2 = Rect2(
 			x * TILE_SIZE + SLOT_MARGIN,
@@ -1952,17 +1968,33 @@ func _draw_tile(x: int, y: int) -> void:
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
 		draw_rect(slot_rect, slot_color)
+		# 敌方关卡加描边增强辨识度
+		if is_enemy and not level.is_defeated():
+			var border_color: Color = REPELLED_BORDER_COLOR if is_repelled else ENEMY_BORDER_COLOR
+			draw_rect(slot_rect, border_color, false, 1.0)
 
 ## 绘制正在移动的敌方关卡标记（基于 _enemy_visual_pos 的动画位置）
+## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
 func _draw_enemy_move_marker() -> void:
-	var slot_color: Color = SLOT_COLORS.get(2, Color.WHITE) as Color  # FUNCTION 类型颜色
+	# 外圈光晕（比标记更大，半透明）
+	var glow_margin: int = 2
+	var glow_rect: Rect2 = Rect2(
+		_enemy_visual_pos.x - TILE_SIZE / 2 + glow_margin,
+		_enemy_visual_pos.y - TILE_SIZE / 2 + glow_margin,
+		TILE_SIZE - glow_margin * 2 - 1,
+		TILE_SIZE - glow_margin * 2 - 1
+	)
+	draw_rect(glow_rect, ENEMY_GLOW_COLOR)
+	# 核心标记（标准大小，亮红橙色）
 	var rect: Rect2 = Rect2(
 		_enemy_visual_pos.x - TILE_SIZE / 2 + SLOT_MARGIN,
 		_enemy_visual_pos.y - TILE_SIZE / 2 + SLOT_MARGIN,
 		TILE_SIZE - SLOT_MARGIN * 2 - 1,
 		TILE_SIZE - SLOT_MARGIN * 2 - 1
 	)
-	draw_rect(rect, slot_color)
+	draw_rect(rect, ENEMY_MOVE_COLOR)
+	# 边框描边
+	draw_rect(rect, ENEMY_BORDER_COLOR, false, 1.0)
 
 ## 绘制单位标记（基于视觉位置，支持动画中的平滑移动）
 func _draw_unit_marker() -> void:
