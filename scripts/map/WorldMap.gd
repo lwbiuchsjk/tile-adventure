@@ -575,6 +575,10 @@ func _on_move_finished() -> void:
 	_unit_visual_pos = _grid_to_pixel_center(_unit.position)
 	_camera.position = _unit_visual_pos
 
+	# 全灭检查（战斗后部队全灭但玩家仍可移动的情况）
+	if _check_defeat():
+		return
+
 	# 检查当前位置是否有可交互的关卡 Slot
 	var level: LevelSlot = _get_level_at(_unit.position)
 	if level != null and level.is_interactable():
@@ -615,7 +619,7 @@ func _on_turn_ended(_turn_number: int) -> void:
 ## 回合结算流程（抽象为独立方法）
 ## 玩家按空格触发，执行回合奖励发放后结束回合
 func _on_turn_end_settlement() -> void:
-	if _game_finished:
+	if _game_finished or _check_defeat():
 		return
 	# 发放回合奖励
 	if _reward_generator != null and _round_manager != null:
@@ -1291,25 +1295,11 @@ func _post_battle_settlement() -> void:
 	_update_hud()
 	queue_redraw()
 
-	# 判定失败条件：所有角色均未装配 且 背包无部队道具
-	if not _has_any_troop():
-		if not _inventory.has_troop_items():
-			_game_finished = true
-			_reachable_tiles = {}
-			_show_defeat_text()
-			queue_redraw()
-			# 敌方移动阶段中全灭，终止移动
-			if was_forced:
-				_finish_enemy_move_phase()
-			return
-		else:
-			_show_notice("部队被击败，请打开管理面板 [M] 装配新部队")
-			# 敌方移动阶段中战败但有备用部队，继续移动队列
-			if was_forced:
-				_process_next_enemy_move()
-			else:
-				_refresh_reachable()
-			return
+	# 判定失败条件：所有部队被击败即为游戏结束
+	if _check_defeat():
+		if was_forced:
+			_finish_enemy_move_phase()
+		return
 
 	# 击败时才通知轮次管理器（击退不算通关进度）
 	if defeated_level and _round_manager != null:
@@ -1721,6 +1711,20 @@ func _has_any_troop() -> bool:
 	for ch in _characters:
 		if ch.has_troop():
 			return true
+	return false
+
+## 全灭检查：所有部队被击败时触发失败结算
+## MVP 阶段强制收束，后续可扩展支持中途装配恢复
+## 返回 true 表示已触发失败，调用方应中断后续流程
+func _check_defeat() -> bool:
+	if _game_finished:
+		return true
+	if not _has_any_troop():
+		_game_finished = true
+		_reachable_tiles = {}
+		_show_defeat_text()
+		queue_redraw()
+		return true
 	return false
 
 ## 获取所有已装配部队的部队列表（用于战斗结算）
