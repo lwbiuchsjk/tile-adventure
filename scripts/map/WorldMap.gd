@@ -11,6 +11,11 @@ extends Node2D
 ## 多轮次：每轮生成若干关卡，全部挑战后推进下一轮，末轮通关则流程胜利。
 ## 多角色：多个角色各持一支部队，全部参与战斗，独立计算伤害。
 ## 道具与背包：关卡/轮次/回合奖励发放，装配管理 UI。
+##
+## 子系统拆分：
+##   EnemyMovement — 敌方关卡移动（队列/寻路/动画/强制战斗触发）
+##   BattleUI — 战斗确认面板（预览/按钮/信号）
+##   ManageUI — 装配管理面板（角色状态/背包/操作卡片）
 
 # ─────────────────────────────────────────
 # 配置文件路径
@@ -117,6 +122,19 @@ const NOTICE_DURATION: float = 2.5
 @onready var _finish_label: Label = $UILayer/NoticeBar/NoticeLabel
 
 # ─────────────────────────────────────────
+# 子系统
+# ─────────────────────────────────────────
+
+## 敌方移动子系统
+var _enemy_movement: EnemyMovement = null
+
+## 战斗确认面板子系统
+var _battle_ui: BattleUI = null
+
+## 装配管理面板子系统
+var _manage_ui: ManageUI = null
+
+# ─────────────────────────────────────────
 # 私有状态
 # ─────────────────────────────────────────
 
@@ -160,15 +178,6 @@ var _level_slots: Dictionary = {}
 ## 战斗配置（从 battle_config.csv 加载）
 var _battle_config: Dictionary = {}
 
-## 战斗确认面板引用
-var _battle_panel: PanelContainer = null
-
-## 是否正在等待战斗确认（期间锁定输入）
-var _is_battle_pending: bool = false
-
-## 当前待确认的关卡（战斗确认弹板触发时记录）
-var _pending_level: LevelSlot = null
-
 ## 轮次管理器
 var _round_manager: RoundManager = null
 
@@ -200,26 +209,8 @@ var _enemy_movement_points: int = 6
 ## 敌方是否已激活移动能力（首次战斗后全局激活）
 var _enemy_can_move: bool = false
 
-## 是否正在执行敌方移动阶段
-var _is_enemy_moving: bool = false
-
-## 敌方移动队列（按距离排序的待移动关卡列表）
-var _enemy_move_queue: Array[LevelSlot] = []
-
-## 当前正在移动的敌方关卡的视觉位置（像素坐标）
-var _enemy_visual_pos: Vector2 = Vector2.ZERO
-
-## 当前正在移动的敌方关卡引用
-var _moving_enemy_level: LevelSlot = null
-
-## 是否为敌方主动触发的强制战斗（禁止取消）
-var _is_forced_battle: bool = false
-
 ## 敌方关卡占据位置的原始 SlotType（用于移动后恢复）
 var _original_slot_types: Dictionary = {}
-
-## 预计算的完整战斗结果（100% 伤害，供预览和结算使用）
-var _pending_full_result: BattleResolver.BattleResult = null
 
 ## 关卡奖励池原始行数据（缓存，按 round_id 过滤用）
 var _level_reward_pool_rows: Array = []
@@ -239,12 +230,6 @@ var _turn_reward_pool_rows: Array = []
 
 ## 回合奖励数量
 var _turn_reward_count: int = 1
-
-## 装配管理面板引用
-var _manage_panel: PanelContainer = null
-
-## 是否正在显示装配管理面板
-var _is_manage_open: bool = false
 
 # ─────────────────────────────────────────
 # 生命周期
@@ -370,11 +355,8 @@ func _ready() -> void:
 	# Camera 初始位置直接设到单位位置（首帧不需要平滑）
 	_camera.position = _unit_visual_pos
 
-	# 创建战斗确认弹板（隐藏状态）
-	_create_battle_confirm_ui()
-
-	# 创建装配管理面板（隐藏状态）
-	_create_manage_ui()
+	# 初始化子系统
+	_init_subsystems()
 
 	# 启动第一轮（触发 _on_round_started → 生成关卡）
 	_round_manager.start_current_round()
@@ -385,13 +367,45 @@ func _ready() -> void:
 	# 计算初始可达范围
 	_refresh_reachable()
 
+
+## 初始化子系统（敌方移动、战斗 UI、管理 UI）
+func _init_subsystems() -> void:
+	var ui_layer: CanvasLayer = $UILayer
+
+	# 敌方移动子系统
+	_enemy_movement = EnemyMovement.new()
+	_enemy_movement.name = "EnemyMovement"
+	add_child(_enemy_movement)
+	_enemy_movement.phase_finished.connect(_on_enemy_phase_finished)
+	_enemy_movement.forced_battle_triggered.connect(_on_forced_battle_triggered)
+	_enemy_movement.redraw_requested.connect(queue_redraw)
+
+	# 战斗确认面板子系统
+	_battle_ui = BattleUI.new()
+	_battle_ui.name = "BattleUI"
+	add_child(_battle_ui)
+	_battle_ui.init_config(_repel_player_damage_rate, _repel_enemy_damage_rate)
+	_battle_ui.create_ui(ui_layer)
+	_battle_ui.repel_chosen.connect(_on_battle_repel_chosen)
+	_battle_ui.defeat_chosen.connect(_on_battle_defeat_chosen)
+	_battle_ui.cancelled.connect(_on_battle_cancelled)
+
+	# 装配管理面板子系统
+	_manage_ui = ManageUI.new()
+	_manage_ui.name = "ManageUI"
+	add_child(_manage_ui)
+	_manage_ui.create_ui(ui_layer)
+	_manage_ui.closed.connect(_on_manage_closed)
+	_manage_ui.equip_requested.connect(_on_equip_troop)
+	_manage_ui.use_item_requested.connect(_on_use_item)
+
 # ─────────────────────────────────────────
 # 输入处理
 # ─────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
 	# 动画播放中、战斗确认中、敌方移动中、管理面板打开中或流程结束时锁定所有输入
-	if _game_finished or _is_moving or _is_battle_pending or _is_manage_open or _is_enemy_moving:
+	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving():
 		return
 
 	# 鼠标左键点击：移动单位
@@ -596,7 +610,8 @@ func _on_move_finished() -> void:
 	if level != null and level.is_interactable():
 		# 有任意角色装配了部队时弹出战斗预览
 		if _has_any_troop():
-			_show_battle_confirm(level)
+			_battle_ui.show_confirm(level, _get_active_troops(),
+				_battle_config, _damage_increment, false)
 			return
 
 	# 刷新可达范围
@@ -640,7 +655,7 @@ func _on_turn_end_settlement() -> void:
 			_turn_reward_pool_rows, round_id, _turn_reward_count
 		)
 		if not rewards.is_empty():
-			var added: int = _inventory.add_items(rewards)
+			_inventory.add_items(rewards)
 			var reward_text: String = _format_rewards_text(rewards)
 			_show_notice("回合奖励：%s" % reward_text)
 
@@ -649,191 +664,30 @@ func _on_turn_end_settlement() -> void:
 
 	# 敌方移动阶段（异步，完成后再 end_turn）
 	if _enemy_can_move and _enemy_movement_enabled:
-		_start_enemy_move_phase()
+		_enemy_movement.start_phase(
+			_schema, _level_slots, _unit.position,
+			_enemy_movement_points, _original_slot_types, _game_finished
+		)
 	else:
 		_turn_manager.end_turn()
 
 # ─────────────────────────────────────────
-# 敌方移动
+# 敌方移动信号处理
 # ─────────────────────────────────────────
 
-## 启动敌方移动阶段
-## 收集所有可移动关卡，按距离排序后逐个执行移动
-func _start_enemy_move_phase() -> void:
-	_is_enemy_moving = true
-	_enemy_move_queue = _get_sorted_movable_levels()
-	# 开始处理移动队列
-	_process_next_enemy_move()
-
-## 获取可移动关卡列表，按距离玩家从近到远排序
-## 距离相同时按格坐标 y→x 排序
-func _get_sorted_movable_levels() -> Array[LevelSlot]:
-	var movable: Array[LevelSlot] = []
-	for pos in _level_slots:
-		var lv: LevelSlot = _level_slots[pos] as LevelSlot
-		# 仅 UNCHALLENGED 状态的关卡参与移动
-		if lv.state == LevelSlot.State.UNCHALLENGED:
-			movable.append(lv)
-
-	if _unit == null:
-		return movable
-
-	var player_pos: Vector2i = _unit.position
-	# 按曼哈顿距离升序排序，距离相同按 y→x 排序
-	movable.sort_custom(func(a: LevelSlot, b: LevelSlot) -> bool:
-		var dist_a: int = absi(a.position.x - player_pos.x) + absi(a.position.y - player_pos.y)
-		var dist_b: int = absi(b.position.x - player_pos.x) + absi(b.position.y - player_pos.y)
-		if dist_a != dist_b:
-			return dist_a < dist_b
-		if a.position.y != b.position.y:
-			return a.position.y < b.position.y
-		return a.position.x < b.position.x
-	)
-	return movable
-
-## 处理移动队列中的下一个敌方关卡
-## 队列为空时结束敌方移动阶段
-func _process_next_enemy_move() -> void:
-	# 游戏结束则终止后续移动
-	if _game_finished:
-		_finish_enemy_move_phase()
-		return
-
-	# 队列为空，敌方移动阶段结束
-	if _enemy_move_queue.is_empty():
-		_finish_enemy_move_phase()
-		return
-
-	var level: LevelSlot = _enemy_move_queue.pop_front()
-
-	# 关卡状态可能在前序战斗中被改变（如被击败），跳过无效关卡
-	if level.state != LevelSlot.State.UNCHALLENGED:
-		_process_next_enemy_move()
-		return
-
-	# 寻路：目标为玩家位置，阻挡位置包含其他所有关卡
-	var blocked: Dictionary = _get_enemy_blocked_positions(level)
-	var path_result: Pathfinder.PathResult = Pathfinder.find_path(
-		_schema, level.position, _unit.position, {}, blocked
-	)
-
-	# 无通路或已在玩家位置，跳过
-	if path_result.path.size() < 2:
-		_process_next_enemy_move()
-		return
-
-	# 按移动力截断路径
-	var move_path: Array[Vector2i] = _truncate_path_by_movement(
-		path_result.path, _enemy_movement_points
-	)
-
-	# 敌方不进入玩家所在格，停在相邻格触发战斗
-	# 避免击退后 REPELLED 关卡堵在玩家位置上
-	if move_path.size() >= 2 and move_path[move_path.size() - 1] == _unit.position:
-		move_path.resize(move_path.size() - 1)
-
-	# 截断后无法移动，跳过
-	if move_path.size() < 2:
-		_process_next_enemy_move()
-		return
-
-	# 记录当前移动的关卡，更新逻辑位置
-	_moving_enemy_level = level
-	var old_pos: Vector2i = level.position
-	var new_pos: Vector2i = move_path[move_path.size() - 1]
-
-	# 更新 _level_slots 字典键和关卡位置
-	_level_slots.erase(old_pos)
-	level.position = new_pos
-	_level_slots[new_pos] = level
-
-	# 更新地图 Slot 标记（保留原始类型以便恢复）
-	# 恢复旧位置的原始 Slot 类型，若无记录则置为 NONE
-	var restored_type: int = _original_slot_types.get(old_pos, MapSchema.SlotType.NONE) as int
-	_schema.set_slot(old_pos.x, old_pos.y, restored_type as MapSchema.SlotType)
-	_original_slot_types.erase(old_pos)
-	# 保存新位置的原始 Slot 类型（仅首次覆盖时记录）
-	if not _original_slot_types.has(new_pos):
-		_original_slot_types[new_pos] = _schema.get_slot(new_pos.x, new_pos.y)
-	_schema.set_slot(new_pos.x, new_pos.y, MapSchema.SlotType.FUNCTION)
-
-	# 播放移动动画
-	_start_enemy_move_animation(move_path)
-
-## 获取敌方关卡移动时的阻挡位置
-## 排除自身，包含所有其他关卡（UNCHALLENGED + REPELLED）
-func _get_enemy_blocked_positions(exclude_level: LevelSlot) -> Dictionary:
-	var blocked: Dictionary = {}
-	for pos in _level_slots:
-		var p: Vector2i = pos as Vector2i
-		var lv: LevelSlot = _level_slots[p] as LevelSlot
-		if lv == exclude_level:
-			continue
-		# 所有其他关卡均阻挡（未挑战和击退状态）
-		if lv.state == LevelSlot.State.UNCHALLENGED or lv.is_repelled():
-			blocked[p] = true
-	return blocked
-
-## 按移动力和地形消耗截断路径
-## 返回截断后的路径（含起点），至少包含起点
-func _truncate_path_by_movement(full_path: Array[Vector2i], movement: int) -> Array[Vector2i]:
-	var truncated: Array[Vector2i] = [full_path[0]]
-	var remaining: float = float(movement)
-	for i in range(1, full_path.size()):
-		var cost: float = _schema.get_terrain_cost(full_path[i].x, full_path[i].y)
-		if cost >= INF or cost > remaining:
-			break
-		remaining -= cost
-		truncated.append(full_path[i])
-	return truncated
-
-## 播放敌方关卡移动动画
-func _start_enemy_move_animation(path: Array[Vector2i]) -> void:
-	_enemy_visual_pos = _grid_to_pixel_center(path[0])
-
-	if _move_tween != null and _move_tween.is_valid():
-		_move_tween.kill()
-
-	_move_tween = create_tween()
-	for i in range(1, path.size()):
-		var target_pixel: Vector2 = _grid_to_pixel_center(path[i])
-		_move_tween.tween_property(self, "_enemy_visual_pos", target_pixel, MOVE_STEP_DURATION)
-		_move_tween.tween_callback(queue_redraw)
-
-	_move_tween.tween_callback(_on_enemy_move_finished)
-
-## 敌方关卡移动动画完成回调
-func _on_enemy_move_finished() -> void:
-	if _moving_enemy_level == null:
-		_process_next_enemy_move()
-		return
-
-	var level_pos: Vector2i = _moving_enemy_level.position
-	var player_pos: Vector2i = _unit.position
-	# 判断是否与玩家相邻（曼哈顿距离 = 1）
-	var dist: int = absi(level_pos.x - player_pos.x) + absi(level_pos.y - player_pos.y)
-	var adjacent_to_player: bool = dist == 1
-
-	_moving_enemy_level = null
-	queue_redraw()
-
-	if adjacent_to_player:
-		# 敌方到达玩家相邻格，触发强制战斗
-		var level: LevelSlot = _get_level_at(level_pos)
-		if level != null and level.is_interactable() and _has_any_troop():
-			_is_forced_battle = true
-			_show_battle_confirm(level)
-			return
-	# 继续处理下一个关卡
-	_process_next_enemy_move()
-
-## 结束敌方移动阶段，执行回合结束
-func _finish_enemy_move_phase() -> void:
-	_is_enemy_moving = false
-	_moving_enemy_level = null
-	_enemy_move_queue = []
+## 敌方移动阶段完成回调
+func _on_enemy_phase_finished() -> void:
 	if not _game_finished:
 		_turn_manager.end_turn()
+
+## 强制战斗触发回调（敌方到达玩家相邻格）
+func _on_forced_battle_triggered(level: LevelSlot) -> void:
+	if level != null and level.is_interactable() and _has_any_troop():
+		_battle_ui.show_confirm(level, _get_active_troops(),
+			_battle_config, _damage_increment, true)
+	else:
+		# 无法战斗，继续处理移动队列
+		_enemy_movement.resume_after_battle()
 
 # ─────────────────────────────────────────
 # 关卡 Slot 管理
@@ -966,291 +820,86 @@ func _on_round_hint_timeout() -> void:
 	_refresh_reachable()
 
 # ─────────────────────────────────────────
-# 战斗确认 UI
+# 战斗结算（BattleUI 信号处理）
 # ─────────────────────────────────────────
 
-## 程序化创建战斗确认弹板（PanelContainer），挂载到 UILayer 下
-## 弹板展示击退/击败两种结果的双方伤害预览
-func _create_battle_confirm_ui() -> void:
-	var ui_layer: CanvasLayer = $UILayer
-
-	_battle_panel = PanelContainer.new()
-	_battle_panel.visible = false
-	_battle_panel.set_anchors_and_offsets_preset(
-		Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE
-	)
-	_battle_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_battle_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_battle_panel.custom_minimum_size = Vector2(360, 0)
-
-	var vbox: VBoxContainer = VBoxContainer.new()
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 6)
-
-	# 标题
-	var title: Label = Label.new()
-	title.name = "BattleTitleLabel"
-	title.text = "遭遇战斗"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 18)
-	title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.30))
-	vbox.add_child(title)
-
-	# 分隔线
-	var sep1: HSeparator = HSeparator.new()
-	sep1.add_theme_constant_override("separation", 8)
-	vbox.add_child(sep1)
-
-	# 战斗信息标签（敌方部队 + 奖励）
-	var battle_label: Label = Label.new()
-	battle_label.name = "BattleInfoLabel"
-	battle_label.text = ""
-	battle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(battle_label)
-
-	# 分隔线
-	var sep2: HSeparator = HSeparator.new()
-	sep2.add_theme_constant_override("separation", 6)
-	vbox.add_child(sep2)
-
-	# 击退预览标签（蓝色调表示保守选项）
-	var repel_label: Label = Label.new()
-	repel_label.name = "RepelPreviewLabel"
-	repel_label.text = ""
-	repel_label.add_theme_color_override("font_color", Color(0.65, 0.80, 0.95))
-	vbox.add_child(repel_label)
-
-	# 击败预览标签（橙色调表示激进选项）
-	var defeat_label: Label = Label.new()
-	defeat_label.name = "DefeatPreviewLabel"
-	defeat_label.text = ""
-	defeat_label.add_theme_color_override("font_color", Color(0.95, 0.75, 0.45))
-	vbox.add_child(defeat_label)
-
-	# 分隔线
-	var sep3: HSeparator = HSeparator.new()
-	sep3.add_theme_constant_override("separation", 6)
-	vbox.add_child(sep3)
-
-	# 按钮区域
-	var hbox: HBoxContainer = HBoxContainer.new()
-	hbox.name = "BattleButtonArea"
-	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.add_theme_constant_override("separation", 12)
-
-	# 击退按钮（蓝色调）
-	var btn_repel: Button = Button.new()
-	btn_repel.name = "BtnRepel"
-	btn_repel.text = "击退"
-	btn_repel.custom_minimum_size = Vector2(80, 32)
-	btn_repel.add_theme_color_override("font_color", Color(0.65, 0.80, 0.95))
-	btn_repel.add_theme_color_override("font_hover_color", Color(0.80, 0.92, 1.0))
-	btn_repel.pressed.connect(_on_battle_repel)
-	hbox.add_child(btn_repel)
-
-	# 击败按钮（橙色调）
-	var btn_defeat: Button = Button.new()
-	btn_defeat.name = "BtnDefeat"
-	btn_defeat.text = "击败"
-	btn_defeat.custom_minimum_size = Vector2(80, 32)
-	btn_defeat.add_theme_color_override("font_color", Color(0.95, 0.75, 0.45))
-	btn_defeat.add_theme_color_override("font_hover_color", Color(1.0, 0.85, 0.55))
-	btn_defeat.pressed.connect(_on_battle_defeat)
-	hbox.add_child(btn_defeat)
-
-	# 取消按钮（灰色调）
-	var btn_cancel: Button = Button.new()
-	btn_cancel.name = "BtnCancel"
-	btn_cancel.text = "取消"
-	btn_cancel.custom_minimum_size = Vector2(80, 32)
-	btn_cancel.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-	btn_cancel.add_theme_color_override("font_hover_color", Color(0.75, 0.75, 0.75))
-	btn_cancel.pressed.connect(_on_battle_cancelled)
-	hbox.add_child(btn_cancel)
-
-	vbox.add_child(hbox)
-	_battle_panel.add_child(vbox)
-	ui_layer.add_child(_battle_panel)
-
-## 显示战斗预览弹板（展示击退和击败两种结果的双方伤害预览）
-func _show_battle_confirm(level: LevelSlot) -> void:
-	_is_battle_pending = true
-	_pending_level = level
-	if _battle_panel == null:
-		return
-
-	# 预计算完整战斗结果（100% 伤害）
-	var player_troops: Array[TroopData] = _get_active_troops()
-	_pending_full_result = BattleResolver.resolve(
-		player_troops, level.troops, _battle_config,
-		level.difficulty, _damage_increment
-	)
-
-	# 计算击退和击败两套结果
-	var repel_result: BattleResolver.BattleResult = _pending_full_result.apply_damage_rate(
-		_repel_player_damage_rate, _repel_enemy_damage_rate
-	)
-	var defeat_result: BattleResolver.BattleResult = _pending_full_result
-
-	# 判断击退倍率下是否已能全灭敌方
-	var repel_wipes: bool = BattleResolver.would_wipe_enemies(level.troops, repel_result.enemy_damages)
-	# 判断击败（100%伤害）是否能全灭敌方
-	var defeat_wipes: bool = BattleResolver.would_wipe_enemies(level.troops, defeat_result.enemy_damages)
-
-	# 更新标题（区分主动/被动战斗）
-	var title_label: Label = _battle_panel.find_child("BattleTitleLabel", true, false) as Label
-	if title_label != null:
-		title_label.text = "敌方来袭！" if _is_forced_battle else "遭遇战斗"
-
-	# 更新战斗信息标签
-	var info_label: Label = _battle_panel.find_child("BattleInfoLabel", true, false) as Label
-	if info_label != null:
-		var text: String = "敌方：%s" % level.get_troops_detail_display()
-		if not level.rewards.is_empty():
-			text += "\n击败奖励：%s" % level.get_rewards_display()
-		info_label.text = text
-
-	# 更新击退预览（击退全灭时不显示单独的击退栏）
-	var repel_label: Label = _battle_panel.find_child("RepelPreviewLabel", true, false) as Label
-	if repel_label != null:
-		if repel_wipes:
-			repel_label.text = ""
-			repel_label.visible = false
-		else:
-			repel_label.text = "── 击退（不获得奖励）──\n%s" % _format_battle_preview(
-				player_troops, repel_result, level.troops
-			)
-			repel_label.visible = true
-
-	# 更新击败预览
-	var defeat_label: Label = _battle_panel.find_child("DefeatPreviewLabel", true, false) as Label
-	if defeat_label != null:
-		if repel_wipes:
-			# 击退即可全灭：按击退倍率结算，显示击退倍率的伤害预览
-			defeat_label.text = "── 击败（低损耗全灭）──\n%s" % _format_battle_preview(
-				player_troops, repel_result, level.troops
-			)
-			defeat_label.visible = true
-		elif defeat_wipes:
-			# 需要全力才能击败
-			defeat_label.text = "── 击败 ──\n%s" % _format_battle_preview(
-				player_troops, defeat_result, level.troops
-			)
-			defeat_label.visible = true
-		else:
-			# 100% 伤害也无法全灭
-			defeat_label.text = ""
-			defeat_label.visible = false
-
-	# 控制按钮显示
-	var btn_repel: Button = _battle_panel.find_child("BtnRepel", true, false) as Button
-	if btn_repel != null:
-		btn_repel.visible = not repel_wipes
-	var btn_defeat: Button = _battle_panel.find_child("BtnDefeat", true, false) as Button
-	if btn_defeat != null:
-		# 击退全灭或击败全灭时都显示击败按钮
-		btn_defeat.visible = repel_wipes or defeat_wipes
-
-	# 强制战斗时隐藏取消按钮（敌方主动触发，玩家必须完成选择）
-	var btn_cancel: Button = _battle_panel.find_child("BtnCancel", true, false) as Button
-	if btn_cancel != null:
-		btn_cancel.visible = not _is_forced_battle
-
-	_battle_panel.visible = true
-
-## 格式化战斗预览文本（展示双方各部队的预计伤害）
-func _format_battle_preview(player_troops: Array[TroopData], result: BattleResolver.BattleResult, enemy_troops: Array[TroopData]) -> String:
-	var lines: Array[String] = []
-	# 我方伤害预览
-	lines.append("  我方损耗：")
-	for i in range(player_troops.size()):
-		var t: TroopData = player_troops[i]
-		var dmg: int = result.damages[i] if i < result.damages.size() else 0
-		var remaining: int = maxi(0, t.current_hp - dmg)
-		lines.append("    %s: -%d (%d→%d)" % [t.get_display_text(), dmg, t.current_hp, remaining])
-	# 敌方伤害预览
-	lines.append("  敌方损耗：")
-	for i in range(enemy_troops.size()):
-		var e: TroopData = enemy_troops[i]
-		var dmg: int = result.enemy_damages[i] if i < result.enemy_damages.size() else 0
-		var remaining: int = maxi(0, e.current_hp - dmg)
-		lines.append("    %s: -%d (%d→%d)" % [e.get_display_text(), dmg, e.current_hp, remaining])
-	return "\n".join(lines)
-
-## 击退按钮回调
-func _on_battle_repel() -> void:
-	if _pending_level == null or _pending_full_result == null:
-		return
-	_battle_panel.visible = false
-	_is_battle_pending = false
+## 击退选择回调
+func _on_battle_repel_chosen() -> void:
+	var level: LevelSlot = _battle_ui.pending_level
+	var full_result: BattleResolver.BattleResult = _battle_ui.pending_full_result
+	var was_forced: bool = _battle_ui.is_forced
+	_battle_ui.hide()
 
 	# 按击退倍率缩放伤害
-	var result: BattleResolver.BattleResult = _pending_full_result.apply_damage_rate(
+	var result: BattleResolver.BattleResult = full_result.apply_damage_rate(
 		_repel_player_damage_rate, _repel_enemy_damage_rate
 	)
 
 	# 保存敌方部队快照（扣血前），用于抽取部队奖励
-	var troop_snapshot: Array[TroopData] = _pending_level.troops.duplicate()
+	var troop_snapshot: Array[TroopData] = level.troops.duplicate()
 
 	# 我方扣血
 	_apply_player_damages(result)
 
 	# 敌方扣血
-	_pending_level.apply_enemy_damages(result.enemy_damages)
-	# 移除被消灭的敌方部队
-	var all_wiped: bool = _pending_level.remove_defeated_troops()
+	level.apply_enemy_damages(result.enemy_damages)
+	var all_wiped: bool = level.remove_defeated_troops()
 
 	if all_wiped:
 		# 击退但全灭 → 转为击败，发放奖励
-		_pending_level.mark_defeated()
-		_grant_level_rewards()
-		# 从敌方部队中随机抽取 1 支作为部队道具奖励
+		level.mark_defeated()
+		_grant_level_rewards_for(level)
 		_grant_troop_reward(troop_snapshot)
 	else:
 		# 标记为击退，设置冷却
-		_pending_level.mark_repelled(_repel_cooldown_turns)
+		level.mark_repelled(_repel_cooldown_turns)
 
-	# 后处理（共用逻辑）
-	_post_battle_settlement()
+	# 后处理
+	_post_battle_settlement(level, was_forced)
 
-## 击败按钮回调
+## 击败选择回调
 ## 击退即可全灭时按击退倍率结算（低损耗全灭），否则按 100% 结算
-func _on_battle_defeat() -> void:
-	if _pending_level == null or _pending_full_result == null:
-		return
-	_battle_panel.visible = false
-	_is_battle_pending = false
+func _on_battle_defeat_chosen() -> void:
+	var level: LevelSlot = _battle_ui.pending_level
+	var full_result: BattleResolver.BattleResult = _battle_ui.pending_full_result
+	var was_forced: bool = _battle_ui.is_forced
+	_battle_ui.hide()
 
 	# 判断是否击退即可全灭，决定使用哪套倍率
-	var repel_result: BattleResolver.BattleResult = _pending_full_result.apply_damage_rate(
+	var repel_result: BattleResolver.BattleResult = full_result.apply_damage_rate(
 		_repel_player_damage_rate, _repel_enemy_damage_rate
 	)
 	var repel_wipes: bool = BattleResolver.would_wipe_enemies(
-		_pending_level.troops, repel_result.enemy_damages
+		level.troops, repel_result.enemy_damages
 	)
-	var result: BattleResolver.BattleResult = repel_result if repel_wipes else _pending_full_result
+	var result: BattleResolver.BattleResult = repel_result if repel_wipes else full_result
 
 	# 保存敌方部队快照（扣血前），用于抽取部队奖励
-	var troop_snapshot: Array[TroopData] = _pending_level.troops.duplicate()
+	var troop_snapshot: Array[TroopData] = level.troops.duplicate()
 
 	# 我方扣血
 	_apply_player_damages(result)
 
 	# 敌方扣血
-	_pending_level.apply_enemy_damages(result.enemy_damages)
-	_pending_level.remove_defeated_troops()
+	level.apply_enemy_damages(result.enemy_damages)
+	level.remove_defeated_troops()
 
 	# 标记为击败
-	_pending_level.mark_defeated()
+	level.mark_defeated()
 
 	# 发放关卡胜利奖励
-	_grant_level_rewards()
+	_grant_level_rewards_for(level)
 
 	# 从敌方部队中随机抽取 1 支作为部队道具奖励
 	_grant_troop_reward(troop_snapshot)
 
 	# 后处理
-	_post_battle_settlement()
+	_post_battle_settlement(level, was_forced)
+
+## 战斗取消回调：关闭弹板，恢复输入
+func _on_battle_cancelled() -> void:
+	_battle_ui.hide()
+	_refresh_reachable()
 
 ## 为我方部队应用伤害（从 BattleResult 中提取 damages）
 func _apply_player_damages(result: BattleResolver.BattleResult) -> void:
@@ -1282,24 +931,18 @@ func _grant_troop_reward(troop_snapshot: Array[TroopData]) -> void:
 	if added > 0:
 		_show_notice("获得部队奖励：%s" % item.get_display_text())
 
-## 发放当前待确认关卡的胜利奖励
-func _grant_level_rewards() -> void:
-	if _pending_level == null:
+## 发放指定关卡的胜利奖励
+func _grant_level_rewards_for(level: LevelSlot) -> void:
+	if level == null:
 		return
-	if not _pending_level.rewards.is_empty():
-		var added: int = _inventory.add_items(_pending_level.rewards)
-		var reward_text: String = _format_rewards_text(_pending_level.rewards)
+	if not level.rewards.is_empty():
+		_inventory.add_items(level.rewards)
+		var reward_text: String = _format_rewards_text(level.rewards)
 		_show_notice("战斗胜利！获得奖励：%s" % reward_text)
 
 ## 战斗后共用处理：更新 HUD、失败判定、轮次推进
 ## 若处于敌方移动阶段的强制战斗，结算后继续处理移动队列
-func _post_battle_settlement() -> void:
-	_pending_full_result = null
-	var defeated_level: bool = _pending_level != null and _pending_level.is_defeated()
-	var was_forced: bool = _is_forced_battle
-	_pending_level = null
-	_is_forced_battle = false
-
+func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 	# 首次战斗完成后激活敌方移动能力
 	if not _enemy_can_move and _enemy_movement_enabled:
 		_enemy_can_move = true
@@ -1310,11 +953,12 @@ func _post_battle_settlement() -> void:
 	# 判定失败条件：所有部队被击败即为游戏结束
 	if _check_defeat():
 		if was_forced:
-			_finish_enemy_move_phase()
+			_enemy_movement.finish_phase()
 		return
 
 	# 击败时才通知轮次管理器（击退不算通关进度）
-	if defeated_level and _round_manager != null:
+	var defeated: bool = level != null and level.is_defeated()
+	if defeated and _round_manager != null:
 		var round_cleared: bool = _round_manager.on_level_cleared()
 		_update_hud()
 		if round_cleared:
@@ -1322,331 +966,33 @@ func _post_battle_settlement() -> void:
 			if not _round_manager.advance_round():
 				# 全部轮次通关，即使在敌方移动阶段也直接结束
 				if was_forced:
-					_finish_enemy_move_phase()
+					_enemy_movement.finish_phase()
 				return
 			_show_round_hint()
 			if was_forced:
-				_process_next_enemy_move()
+				_enemy_movement.resume_after_battle()
 			return
 
 	# 敌方移动阶段中，继续处理下一个关卡
 	if was_forced:
-		_process_next_enemy_move()
+		_enemy_movement.resume_after_battle()
 	else:
 		_refresh_reachable()
 
-## 战斗取消按钮回调：关闭弹板，恢复输入
-func _on_battle_cancelled() -> void:
-	_battle_panel.visible = false
-	_is_battle_pending = false
-	_pending_level = null
-	_pending_full_result = null
-	_refresh_reachable()
-
 # ─────────────────────────────────────────
-# 装配管理 UI
+# 装配管理信号处理
 # ─────────────────────────────────────────
-
-## 程序化创建装配管理面板
-func _create_manage_ui() -> void:
-	var ui_layer: CanvasLayer = $UILayer
-
-	_manage_panel = PanelContainer.new()
-	_manage_panel.name = "ManagePanel"
-	_manage_panel.visible = false
-	# 固定尺寸居中显示
-	_manage_panel.set_anchors_and_offsets_preset(
-		Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE
-	)
-	_manage_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_manage_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_manage_panel.custom_minimum_size = Vector2(420, 480)
-
-	# 外层 VBox：标题 + 滚动区域 + 关闭按钮
-	var outer_vbox: VBoxContainer = VBoxContainer.new()
-	outer_vbox.add_theme_constant_override("separation", 8)
-
-	# 标题
-	var title: Label = Label.new()
-	title.text = "装配管理"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 18)
-	title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.30))
-	outer_vbox.add_child(title)
-
-	var sep_top: HSeparator = HSeparator.new()
-	sep_top.add_theme_constant_override("separation", 4)
-	outer_vbox.add_child(sep_top)
-
-	# 滚动容器（包裹所有内容，确保长列表可滚动）
-	var scroll: ScrollContainer = ScrollContainer.new()
-	scroll.name = "ManageScroll"
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size = Vector2(0, 360)
-
-	var vbox: VBoxContainer = VBoxContainer.new()
-	vbox.name = "ManageVBox"
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.add_theme_constant_override("separation", 6)
-
-	# 角色状态区域
-	var char_title: Label = Label.new()
-	char_title.name = "CharTitleLabel"
-	char_title.text = "部队状态"
-	char_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	char_title.add_theme_color_override("font_color", Color(0.75, 0.85, 0.95))
-	vbox.add_child(char_title)
-
-	var char_label: Label = Label.new()
-	char_label.name = "CharStatusLabel"
-	char_label.text = ""
-	vbox.add_child(char_label)
-
-	var sep_char: HSeparator = HSeparator.new()
-	sep_char.add_theme_constant_override("separation", 6)
-	vbox.add_child(sep_char)
-
-	# 背包区域
-	var inv_title: Label = Label.new()
-	inv_title.name = "InvTitleLabel"
-	inv_title.text = "背包"
-	inv_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	inv_title.add_theme_color_override("font_color", Color(0.75, 0.85, 0.95))
-	vbox.add_child(inv_title)
-
-	var inv_label: Label = Label.new()
-	inv_label.name = "InventoryLabel"
-	inv_label.text = ""
-	vbox.add_child(inv_label)
-
-	var sep_inv: HSeparator = HSeparator.new()
-	sep_inv.add_theme_constant_override("separation", 6)
-	vbox.add_child(sep_inv)
-
-	# 操作区域标题
-	var op_title: Label = Label.new()
-	op_title.name = "OpTitleLabel"
-	op_title.text = "可用操作"
-	op_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	op_title.add_theme_color_override("font_color", Color(0.75, 0.85, 0.95))
-	vbox.add_child(op_title)
-
-	# 操作按钮区域
-	var op_vbox: VBoxContainer = VBoxContainer.new()
-	op_vbox.name = "OperationArea"
-	op_vbox.add_theme_constant_override("separation", 4)
-	vbox.add_child(op_vbox)
-
-	scroll.add_child(vbox)
-	outer_vbox.add_child(scroll)
-
-	# 底部分隔线 + 关闭按钮
-	var sep_bottom: HSeparator = HSeparator.new()
-	sep_bottom.add_theme_constant_override("separation", 4)
-	outer_vbox.add_child(sep_bottom)
-
-	var btn_close: Button = Button.new()
-	btn_close.text = "关闭 [M]"
-	btn_close.custom_minimum_size = Vector2(0, 32)
-	btn_close.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-	btn_close.add_theme_color_override("font_hover_color", Color(0.75, 0.75, 0.75))
-	btn_close.pressed.connect(_on_manage_closed)
-	outer_vbox.add_child(btn_close)
-
-	_manage_panel.add_child(outer_vbox)
-	ui_layer.add_child(_manage_panel)
 
 ## 打开装配管理面板
 func _open_manage_panel() -> void:
-	if _game_finished or _is_battle_pending or _is_moving:
+	if _game_finished or _battle_ui.is_pending or _is_moving:
 		return
-	_is_manage_open = true
-	_refresh_manage_ui()
-	_manage_panel.visible = true
+	_manage_ui.open(_characters, _inventory)
 
-## 关闭装配管理面板
+## 管理面板关闭回调
 func _on_manage_closed() -> void:
-	_manage_panel.visible = false
-	_is_manage_open = false
 	_update_hud()
 	_refresh_reachable()
-
-## 刷新装配管理面板内容
-func _refresh_manage_ui() -> void:
-	if _manage_panel == null:
-		return
-
-	# 更新角色状态
-	var char_label: Label = _manage_panel.find_child("CharStatusLabel", true, false) as Label
-	if char_label != null:
-		var lines: Array[String] = []
-		for i in range(_characters.size()):
-			var ch: CharacterData = _characters[i]
-			if ch.has_troop():
-				var t: TroopData = ch.troop
-				var exp_info: String = ""
-				var threshold: int = t.get_upgrade_threshold()
-				if threshold > 0:
-					exp_info = "  经验 %d/%d" % [t.exp, threshold]
-				lines.append("  角色%d: %s  兵力 %d/%d%s" % [
-					i + 1, t.get_display_text(), t.current_hp, t.max_hp, exp_info
-				])
-			else:
-				lines.append("  角色%d: 空" % (i + 1))
-		char_label.text = "\n".join(lines)
-
-	# 更新背包标题（含容量）
-	var inv_title: Label = _manage_panel.find_child("InvTitleLabel", true, false) as Label
-	if inv_title != null:
-		inv_title.text = "背包 (%d/%d)" % [_inventory.get_used_slots(), _inventory.max_capacity]
-
-	# 更新背包内容
-	var inv_label: Label = _manage_panel.find_child("InventoryLabel", true, false) as Label
-	if inv_label != null:
-		if _inventory.get_used_slots() == 0:
-			inv_label.text = "  背包为空"
-		else:
-			var item_lines: Array[String] = []
-			for item in _inventory.get_items():
-				if item.stack_count > 1:
-					item_lines.append("  · %s ×%d" % [item.get_display_text(), item.stack_count])
-				else:
-					item_lines.append("  · %s" % item.get_display_text())
-			inv_label.text = "\n".join(item_lines)
-
-	# 重建操作按钮区域（移除旧容器，创建新容器，避免 queue_free 延迟问题）
-	var old_op_area: VBoxContainer = _manage_panel.find_child("OperationArea", true, false) as VBoxContainer
-	if old_op_area != null:
-		var parent_vbox: VBoxContainer = old_op_area.get_parent() as VBoxContainer
-		var op_index: int = old_op_area.get_index()
-		parent_vbox.remove_child(old_op_area)
-		old_op_area.queue_free()
-
-		var op_area: VBoxContainer = VBoxContainer.new()
-		op_area.name = "OperationArea"
-		parent_vbox.add_child(op_area)
-		# 将操作区域移到原来的位置
-		parent_vbox.move_child(op_area, op_index)
-
-		var button_count: int = 0
-
-		# 为每个角色生成可用操作
-		for i in range(_characters.size()):
-			var ch: CharacterData = _characters[i]
-
-			# 角色标识
-			var ch_name: String = "角色%d" % (i + 1)
-			var ch_troop_text: String = ch.troop.get_display_text() if ch.has_troop() else "空"
-
-			# 空槽位 + 背包有部队道具 → 显示装配按钮
-			if not ch.has_troop():
-				var troop_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.TROOP)
-				for item in troop_items:
-					var card: VBoxContainer = _create_op_card(
-						ch_name, "", "空槽位",
-						"装配 %s" % item.get_display_text(),
-						Color(0.45, 0.80, 0.50)
-					)
-					var btn: Button = card.get_child(1) as Button
-					btn.pressed.connect(_on_equip_troop.bind(ch, item))
-					op_area.add_child(card)
-					button_count += 1
-			else:
-				var t: TroopData = ch.troop
-				# 已装配 → 显示替换按钮
-				var troop_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.TROOP)
-				for item in troop_items:
-					var card: VBoxContainer = _create_op_card(
-						ch_name, ch_troop_text, "兵力 %d/%d" % [t.current_hp, t.max_hp],
-						"替换为 %s（丢弃当前）" % item.get_display_text(),
-						Color(0.95, 0.75, 0.45)
-					)
-					var btn: Button = card.get_child(1) as Button
-					btn.pressed.connect(_on_equip_troop.bind(ch, item))
-					op_area.add_child(card)
-					button_count += 1
-
-				# 经验道具
-				var exp_threshold: int = t.get_upgrade_threshold()
-				var exp_status: String = "经验 %d/%d" % [t.exp, exp_threshold] if exp_threshold > 0 else "已满级"
-				var exp_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.EXP)
-				for item in exp_items:
-					if item.can_use_on(t):
-						var card: VBoxContainer = _create_op_card(
-							ch_name, ch_troop_text, exp_status,
-							"使用 %s" % item.get_display_text(),
-							Color(0.65, 0.80, 0.95)
-						)
-						var btn: Button = card.get_child(1) as Button
-						btn.pressed.connect(_on_use_item.bind(ch, item))
-						op_area.add_child(card)
-						button_count += 1
-
-				# 兵力恢复道具
-				var hp_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.HP_RESTORE)
-				for item in hp_items:
-					if item.can_use_on(t):
-						var card: VBoxContainer = _create_op_card(
-							ch_name, ch_troop_text, "兵力 %d/%d" % [t.current_hp, t.max_hp],
-							"使用 %s" % item.get_display_text(),
-							Color(0.50, 0.85, 0.50)
-						)
-						var btn: Button = card.get_child(1) as Button
-						btn.pressed.connect(_on_use_item.bind(ch, item))
-						op_area.add_child(card)
-						button_count += 1
-
-		# 无可用操作时显示提示
-		if button_count == 0:
-			var hint: Label = Label.new()
-			hint.text = "（当前无可用操作）"
-			hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			hint.add_theme_color_override("font_color", Color(0.50, 0.50, 0.50))
-			op_area.add_child(hint)
-
-
-## 创建操作卡片（上方角色/兵种/状态信息 + 下方操作按钮）
-## char_name: 角色名称（如 "角色1"）
-## troop_name: 兵种显示名（如 "剑兵(R)"），空槽位传空字符串
-## status: 数值状态（如 "兵力 15/20"）
-## action: 操作描述文字
-## color: 按钮颜色
-func _create_op_card(char_name: String, troop_name: String, status: String, action: String, color: Color) -> VBoxContainer:
-	var card: VBoxContainer = VBoxContainer.new()
-	card.add_theme_constant_override("separation", 1)
-	# 角色 + 兵种 + 状态信息行
-	var info_hbox: HBoxContainer = HBoxContainer.new()
-	info_hbox.add_theme_constant_override("separation", 4)
-	# 角色名称（暖白醒目）
-	var name_label: Label = Label.new()
-	name_label.text = char_name
-	name_label.add_theme_font_size_override("font_size", 13)
-	name_label.add_theme_color_override("font_color", Color(0.85, 0.82, 0.75))
-	info_hbox.add_child(name_label)
-	# 兵种名（金色凸显）
-	if troop_name != "":
-		var troop_label: Label = Label.new()
-		troop_label.text = troop_name
-		troop_label.add_theme_font_size_override("font_size", 13)
-		troop_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.45))
-		info_hbox.add_child(troop_label)
-	# 数值状态（灰色辅助）
-	if status != "":
-		var status_label: Label = Label.new()
-		status_label.text = status
-		status_label.add_theme_font_size_override("font_size", 13)
-		status_label.add_theme_color_override("font_color", Color(0.55, 0.58, 0.55))
-		info_hbox.add_child(status_label)
-	card.add_child(info_hbox)
-	# 操作按钮
-	var btn: Button = Button.new()
-	btn.text = "  %s" % action
-	btn.custom_minimum_size = Vector2(0, 28)
-	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn.add_theme_color_override("font_color", color)
-	btn.add_theme_color_override("font_hover_color", color.lightened(0.3))
-	card.add_child(btn)
-	return card
 
 ## 装配部队操作回调
 func _on_equip_troop(character: CharacterData, item: ItemData) -> void:
@@ -1660,16 +1006,15 @@ func _on_equip_troop(character: CharacterData, item: ItemData) -> void:
 	# 从背包移除道具
 	_inventory.remove_item(item)
 	# 刷新面板
-	_refresh_manage_ui()
+	_manage_ui.refresh()
 
 ## 使用道具操作回调（经验道具、兵力恢复道具）
 func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	if not character.has_troop():
 		return
 	if item.type == ItemData.ItemType.EXP:
-		var upgraded: bool = character.troop.add_exp(item.value)
+		character.troop.add_exp(item.value)
 	elif item.type == ItemData.ItemType.HP_RESTORE:
-		var old_hp: int = character.troop.current_hp
 		character.troop.current_hp = mini(
 			character.troop.current_hp + item.value,
 			character.troop.max_hp
@@ -1677,7 +1022,7 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	# 从背包移除（可堆叠道具减少 1 个）
 	_inventory.remove_item(item, 1)
 	# 刷新面板
-	_refresh_manage_ui()
+	_manage_ui.refresh()
 
 # ─────────────────────────────────────────
 # 击退冷却管理
@@ -1758,7 +1103,7 @@ func _grant_round_rewards() -> void:
 	var rewards: Array[ItemData] = _round_manager.get_round_rewards()
 	if rewards.is_empty():
 		return
-	var added: int = _inventory.add_items(rewards)
+	_inventory.add_items(rewards)
 	var reward_text: String = _format_rewards_text(rewards)
 	_show_notice("轮次通关奖励：%s" % reward_text)
 
@@ -1779,7 +1124,7 @@ func _format_rewards_text(rewards: Array[ItemData]) -> String:
 
 ## 放弃流程：直接结束，记为失败（无二次确认）
 func _on_abandon() -> void:
-	if _game_finished or _is_battle_pending or _is_moving or _is_manage_open:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open:
 		return
 	_game_finished = true
 	_reachable_tiles = {}
@@ -1793,15 +1138,15 @@ func _on_abandon() -> void:
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	# 敌方移动阶段锁定所有快捷键输入
-	if _is_enemy_moving:
+	if _enemy_movement.is_moving():
 		return
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
 		if key.pressed and not key.echo:
 			# M 键：打开/关闭装配管理面板
 			if key.keycode == KEY_M:
-				if _is_manage_open:
-					_on_manage_closed()
+				if _manage_ui.is_open:
+					_manage_ui.close()
 				else:
 					_open_manage_panel()
 			# Q 键：放弃流程
@@ -1920,7 +1265,7 @@ func _draw() -> void:
 		draw_rect(rect, REACHABLE_COLOR)
 
 	# 第三层：敌方关卡移动动画标记
-	if _moving_enemy_level != null:
+	if _enemy_movement.get_moving_level() != null:
 		_draw_enemy_move_marker()
 
 	# 第四层：单位标记（基于视觉位置）
@@ -1951,7 +1296,7 @@ func _draw_tile(x: int, y: int) -> void:
 		var is_repelled: bool = false
 		if level != null:
 			# 正在移动的关卡跳过静态渲染（由 _draw_enemy_move_marker 负责）
-			if level == _moving_enemy_level:
+			if level == _enemy_movement.get_moving_level():
 				return
 			is_enemy = true
 			if level.is_defeated():
@@ -1973,22 +1318,23 @@ func _draw_tile(x: int, y: int) -> void:
 			var border_color: Color = REPELLED_BORDER_COLOR if is_repelled else ENEMY_BORDER_COLOR
 			draw_rect(slot_rect, border_color, false, 1.0)
 
-## 绘制正在移动的敌方关卡标记（基于 _enemy_visual_pos 的动画位置）
+## 绘制正在移动的敌方关卡标记（基于动画位置）
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
 func _draw_enemy_move_marker() -> void:
+	var enemy_vis_pos: Vector2 = _enemy_movement.get_visual_pos()
 	# 外圈光晕（比标记更大，半透明）
 	var glow_margin: int = 2
 	var glow_rect: Rect2 = Rect2(
-		_enemy_visual_pos.x - TILE_SIZE / 2 + glow_margin,
-		_enemy_visual_pos.y - TILE_SIZE / 2 + glow_margin,
+		enemy_vis_pos.x - TILE_SIZE / 2 + glow_margin,
+		enemy_vis_pos.y - TILE_SIZE / 2 + glow_margin,
 		TILE_SIZE - glow_margin * 2 - 1,
 		TILE_SIZE - glow_margin * 2 - 1
 	)
 	draw_rect(glow_rect, ENEMY_GLOW_COLOR)
 	# 核心标记（标准大小，亮红橙色）
 	var rect: Rect2 = Rect2(
-		_enemy_visual_pos.x - TILE_SIZE / 2 + SLOT_MARGIN,
-		_enemy_visual_pos.y - TILE_SIZE / 2 + SLOT_MARGIN,
+		enemy_vis_pos.x - TILE_SIZE / 2 + SLOT_MARGIN,
+		enemy_vis_pos.y - TILE_SIZE / 2 + SLOT_MARGIN,
 		TILE_SIZE - SLOT_MARGIN * 2 - 1,
 		TILE_SIZE - SLOT_MARGIN * 2 - 1
 	)
