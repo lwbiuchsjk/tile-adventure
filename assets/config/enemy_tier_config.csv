@@ -1,0 +1,5 @@
+tier,troop_count_min,troop_count_max,quality_min,quality_max
+0,1,1,0,0
+1,1,2,0,1
+2,2,3,1,1
+3,2,3,1,2

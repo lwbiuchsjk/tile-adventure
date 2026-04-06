@@ -38,6 +38,10 @@ class BattleResult extends RefCounted:
 ## 格式：{ 攻击方兵种ID : { 防御方兵种ID : float } }
 static var _counter_matrix: Dictionary = {}
 
+## 兵力系数分段配置（从 hp_ratio_config.csv 加载）
+## 每条：{hp_ratio_min: float, hp_ratio_max: float, exponent: float}
+static var _hp_ratio_segments: Array[Dictionary] = []
+
 ## 兵种名称到 ID 的映射（用于解析 CSV 列名）
 const TROOP_NAME_TO_ID: Dictionary = {
 	"SWORD": 0,
@@ -73,6 +77,38 @@ static func get_counter_factor(attacker_type: int, defender_type: int) -> float:
 		if def_map.has(defender_type):
 			return float(def_map[defender_type])
 	return 1.0
+
+## 从 hp_ratio_config.csv 行数据加载兵力系数分段表
+## rows: ConfigLoader.load_csv() 返回的 Array[Dictionary]
+static func load_hp_ratio_config(rows: Array) -> void:
+	_hp_ratio_segments = []
+	for entry in rows:
+		var row: Dictionary = entry as Dictionary
+		var seg: Dictionary = {
+			"min": float(row.get("hp_ratio_min", "0.0")),
+			"max": float(row.get("hp_ratio_max", "1.0")),
+			"exponent": float(row.get("exponent", "1.0")),
+		}
+		_hp_ratio_segments.append(seg)
+
+## 根据兵力百分比查表计算兵力系数
+## hp_ratio: 当前兵力 / 最大兵力（0.0~1.0）
+## 返回兵力系数（0.0~1.0），满血时返回 1.0
+static func get_hp_ratio_factor(hp_ratio: float) -> float:
+	# 满血直接返回 1.0，避免浮点精度问题
+	if hp_ratio >= 1.0:
+		return 1.0
+	if hp_ratio <= 0.0:
+		return 0.0
+	# 遍历分段配置，找到 hp_ratio 所在区间
+	for seg in _hp_ratio_segments:
+		var seg_min: float = float(seg["min"])
+		var seg_max: float = float(seg["max"])
+		var exponent: float = float(seg["exponent"])
+		if hp_ratio >= seg_min and hp_ratio < seg_max:
+			return pow(hp_ratio, exponent)
+	# 未命中任何区间，使用线性衰减作为兜底
+	return hp_ratio
 
 ## 获取难度修正后的有效基础伤害
 ## 抽象为独立方法，方便后续扩展难度影响更多维度
@@ -142,7 +178,7 @@ static func resolve(player_troops: Array[TroopData], enemy_troops: Array[TroopDa
 		for i in range(enemy_count):
 			round_enemy_dmg.append(0.0)
 
-		# 敌方 → 我方伤害（仅存活部队参与）
+		# 敌方 → 我方伤害（仅存活部队参与，含兵力系数）
 		for pi in range(player_count):
 			if player_hp[pi] <= 0:
 				continue
@@ -154,9 +190,12 @@ static func resolve(player_troops: Array[TroopData], enemy_troops: Array[TroopDa
 				)
 				var quality_diff: float = float(enemy_troops[ei].quality as int - player_troops[pi].quality as int)
 				var quality_factor: float = maxf(quality_min, 1.0 + quality_k * quality_diff)
-				round_player_dmg[pi] += effective_base * counter * quality_factor
+				# 兵力系数：攻击方（敌方）当前兵力比例影响输出
+				var enemy_hp_ratio: float = float(enemy_hp[ei]) / maxf(float(enemy_troops[ei].max_hp), 1.0)
+				var enemy_str_factor: float = get_hp_ratio_factor(enemy_hp_ratio)
+				round_player_dmg[pi] += effective_base * counter * quality_factor * enemy_str_factor
 
-		# 我方 → 敌方伤害（仅存活部队参与）
+		# 我方 → 敌方伤害（仅存活部队参与，含兵力系数）
 		for ei in range(enemy_count):
 			if enemy_hp[ei] <= 0:
 				continue
@@ -168,7 +207,10 @@ static func resolve(player_troops: Array[TroopData], enemy_troops: Array[TroopDa
 				)
 				var quality_diff: float = float(player_troops[pi].quality as int - enemy_troops[ei].quality as int)
 				var quality_factor: float = maxf(quality_min, 1.0 + quality_k * quality_diff)
-				round_enemy_dmg[ei] += effective_base * counter * quality_factor
+				# 兵力系数：攻击方（我方）当前兵力比例影响输出
+				var player_hp_ratio: float = float(player_hp[pi]) / maxf(float(player_troops[pi].max_hp), 1.0)
+				var player_str_factor: float = get_hp_ratio_factor(player_hp_ratio)
+				round_enemy_dmg[ei] += effective_base * counter * quality_factor * player_str_factor
 
 		# 同时扣血并累计伤害
 		for pi in range(player_count):

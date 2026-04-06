@@ -42,6 +42,12 @@ const CONFIG_ROUND_REWARD_POOL: String = "res://assets/config/round_reward_pool.
 const CONFIG_ROUND_REWARD: String = "res://assets/config/round_reward_config.csv"
 const CONFIG_TURN_REWARD_POOL: String = "res://assets/config/turn_reward_pool.csv"
 const CONFIG_TURN_REWARD: String = "res://assets/config/turn_reward_config.csv"
+const CONFIG_HP_RATIO: String = "res://assets/config/hp_ratio_config.csv"
+const CONFIG_SUPPLY: String = "res://assets/config/supply_config.csv"
+const CONFIG_ENEMY_TIER: String = "res://assets/config/enemy_tier_config.csv"
+const CONFIG_ENEMY_TIER_RATIO: String = "res://assets/config/enemy_tier_ratio_config.csv"
+const CONFIG_SCORE: String = "res://assets/config/score_config.csv"
+const CONFIG_RESOURCE_SLOT: String = "res://assets/config/resource_slot_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -82,8 +88,21 @@ const UNIT_MARGIN: int = 4
 ## 已挑战关卡变暗系数（同一轮内已挑战但尚未切换的关卡）
 const CHALLENGED_DIM: float = 0.4
 
-## 敌方关卡边框颜色（亮红，增强辨识度）
+## 敌方关卡边框颜色（亮红，增强辨识度，兜底色）
 const ENEMY_BORDER_COLOR: Color = Color(1.0, 0.25, 0.20, 0.8)
+
+## 敌方关卡强度档位边框颜色（弱=绿, 中=黄, 强=红, 超=紫）
+const TIER_BORDER_COLORS: Dictionary = {
+	0: Color(0.35, 0.80, 0.35, 0.8),  ## 弱：绿色
+	1: Color(0.90, 0.80, 0.20, 0.8),  ## 中：黄色
+	2: Color(1.00, 0.30, 0.25, 0.8),  ## 强：红色
+	3: Color(0.75, 0.35, 0.90, 0.8),  ## 超：紫色
+}
+
+## 资源点颜色（一次性：青色，持久：金色）
+const RESOURCE_ONE_TIME_COLOR: Color = Color(0.30, 0.80, 0.80)
+const RESOURCE_PERSISTENT_COLOR: Color = Color(1.0, 0.85, 0.0)
+const RESOURCE_RANGE_COLOR: Color = Color(1.0, 0.85, 0.0, 0.10)
 
 ## 敌方关卡移动时的高亮颜色（亮红橙）
 const ENEMY_MOVE_COLOR: Color = Color(1.0, 0.35, 0.20)
@@ -197,6 +216,28 @@ var _damage_increment: float = 0.0
 var _repel_player_damage_rate: float = 0.6
 var _repel_enemy_damage_rate: float = 0.6
 
+## 补给系统
+var _supply: int = 3
+var _camp_restore: int = 1
+
+## 扎营状态标记
+var _is_camping: bool = false
+
+## 单局评分追踪
+var _camp_count: int = 0
+var _total_hp_lost: int = 0
+var _total_max_hp: int = 0
+var _score_config: Dictionary = {}
+
+## 敌人强度轮次比例配置（缓存）
+var _enemy_tier_ratio_rows: Array = []
+
+## 资源点字典 {Vector2i: ResourceSlot}
+var _resource_slots: Dictionary = {}
+
+## 资源点配置行数据（缓存）
+var _resource_slot_config_rows: Array = []
+
 ## 击退冷却回合数配置
 var _repel_cooldown_turns: int = 3
 
@@ -273,6 +314,25 @@ func _ready() -> void:
 	# 加载克制矩阵
 	BattleResolver.load_counter_matrix(counter_rows)
 
+	# 加载兵力系数分段配置
+	var hp_ratio_rows: Array = ConfigLoader.load_csv(CONFIG_HP_RATIO)
+	BattleResolver.load_hp_ratio_config(hp_ratio_rows)
+
+	# 加载补给配置
+	var supply_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_SUPPLY)
+	_supply = int(supply_cfg.get("initial_supply", "3"))
+	_camp_restore = int(supply_cfg.get("camp_restore", "1"))
+
+	# 加载敌人强度配置（generator 初始化后再注入，见下方）
+	var enemy_tier_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_TIER)
+	_enemy_tier_ratio_rows = ConfigLoader.load_csv(CONFIG_ENEMY_TIER_RATIO)
+
+	# 加载评分配置
+	_score_config = ConfigLoader.load_csv_kv(CONFIG_SCORE)
+
+	# 加载资源点配置
+	_resource_slot_config_rows = ConfigLoader.load_csv(CONFIG_RESOURCE_SLOT)
+
 	# 加载品质升级配置
 	TroopData.load_upgrade_config(quality_cfg)
 
@@ -299,6 +359,7 @@ func _ready() -> void:
 	# 初始化敌方部队生成器
 	_enemy_generator = EnemyTroopGenerator.new()
 	_enemy_generator.init_from_config(enemy_pool_rows, enemy_spawn_cfg)
+	_enemy_generator.load_tier_config(enemy_tier_rows)
 
 	# 读取起终点坐标
 	_start_pos = Vector2i(
@@ -404,21 +465,21 @@ func _init_subsystems() -> void:
 # ─────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	# 动画播放中、战斗确认中、敌方移动中、管理面板打开中或流程结束时锁定所有输入
-	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving():
+	# 动画播放中、战斗确认中、敌方移动中、管理面板打开中、扎营中或流程结束时锁定所有输入
+	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping:
 		return
 
-	# 鼠标左键点击：移动单位
+	# 鼠标左键点击：移动单位（需要补给 > 0）
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event as InputEventMouseButton
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 			_handle_click(mb.position)
 
-	# 空格键：结束回合（触发回合结算流程）
+	# 空格键：扎营（触发扎营流程）
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
 		if key.pressed and not key.echo and key.keycode == KEY_SPACE:
-			_on_turn_end_settlement()
+			_start_camp()
 
 # ─────────────────────────────────────────
 # 坐标工具
@@ -453,7 +514,7 @@ func _update_hud() -> void:
 	if _unit == null or _turn_manager == null:
 		return
 
-	# 左区：轮次 / 关卡 / 回合 / 移动力
+	# 左区：轮次 / 关卡 / 回合 / 补给
 	var round_parts: Array[String] = []
 	if _round_manager != null:
 		round_parts.append("轮次 %d/%d" % [
@@ -465,7 +526,7 @@ func _update_hud() -> void:
 			_round_manager.get_current_level_count()
 		])
 	round_parts.append("回合 %d" % _turn_manager.current_turn)
-	round_parts.append("移动力 %d/%d" % [_unit.current_movement, _unit.max_movement])
+	round_parts.append("补给 %d" % _supply)
 	if _hud_round != null:
 		_hud_round.text = "  ".join(round_parts)
 
@@ -475,7 +536,7 @@ func _update_hud() -> void:
 
 	# 右区：快捷键提示
 	if _hud_keys != null:
-		_hud_keys.text = "[空格]结束回合  [M]管理  [Q]放弃"
+		_hud_keys.text = "[空格]扎营  [M]管理  [Q]放弃"
 
 ## 获取所有角色部队的显示文本
 func _get_all_troops_display() -> String:
@@ -492,20 +553,37 @@ func _get_all_troops_display() -> String:
 			parts.append("角色%d:空" % (i + 1))
 	return " | ".join(parts)
 
-## 显示流程胜利提示
+## 获取评分摘要文本
+func _get_score_text() -> String:
+	var result: Dictionary = ScoreCalculator.calculate(
+		_camp_count, _total_hp_lost, _total_max_hp, _score_config
+	)
+	return "评分 %d（扎营%d次 效率%.0f%% | 损兵%d 存活%.0f%%）" % [
+		int(result["score"]),
+		_camp_count,
+		float(result["efficiency"]) * 100.0,
+		_total_hp_lost,
+		float(result["survival"]) * 100.0,
+	]
+
+## 显示流程胜利提示（含评分）
 func _show_victory_text() -> void:
 	if _finish_label == null or _turn_manager == null:
 		return
 	var total_rounds: int = _round_manager.get_total_rounds() if _round_manager != null else 1
-	_finish_label.text = "全部 %d 轮通关！流程胜利（回合 %d）" % [total_rounds, _turn_manager.current_turn]
+	_finish_label.text = "全部 %d 轮通关！流程胜利（回合 %d）\n%s" % [
+		total_rounds, _turn_manager.current_turn, _get_score_text()
+	]
 	if _notice_bar != null:
 		_notice_bar.visible = true
 
-## 显示流程失败提示
+## 显示流程失败提示（含评分）
 func _show_defeat_text() -> void:
 	if _finish_label == null or _turn_manager == null:
 		return
-	_finish_label.text = "流程失败（回合 %d）" % _turn_manager.current_turn
+	_finish_label.text = "流程失败（回合 %d）\n%s" % [
+		_turn_manager.current_turn, _get_score_text()
+	]
 	if _notice_bar != null:
 		_notice_bar.visible = true
 
@@ -601,6 +679,12 @@ func _on_move_finished() -> void:
 	_unit_visual_pos = _grid_to_pixel_center(_unit.position)
 	_camera.position = _unit_visual_pos
 
+	# 消耗 1 补给
+	_supply = maxi(0, _supply - 1)
+
+	# 检查当前位置是否有一次性资源点并采集
+	_try_collect_resource_at(_unit.position)
+
 	# 全灭检查（战斗后部队全灭但玩家仍可移动的情况）
 	if _check_defeat():
 		return
@@ -614,13 +698,17 @@ func _on_move_finished() -> void:
 				_battle_config, _damage_increment, false)
 			return
 
-	# 刷新可达范围
+	# 每次移动后重置移动力，为下一次移动做准备
+	_unit.current_movement = _unit.max_movement
+
+	_update_hud()
+	# 刷新可达范围（补给为 0 时会显示空集）
 	_refresh_reachable()
 
 ## 刷新可达范围并触发重绘
-## 击退状态的关卡格视为不可通行
+## 补给为 0 时不显示可达格；击退状态的关卡格视为不可通行
 func _refresh_reachable() -> void:
-	if _unit != null and _schema != null and not _game_finished:
+	if _unit != null and _schema != null and not _game_finished and _supply > 0:
 		var blocked: Dictionary = _get_blocked_positions()
 		_reachable_tiles = MovementSystem.get_reachable_tiles(
 			_schema, _unit.position, float(_unit.current_movement), {}, blocked
@@ -640,11 +728,82 @@ func _get_blocked_positions() -> Dictionary:
 
 ## 回合结束回调：刷新可达范围，更新 HUD
 func _on_turn_ended(_turn_number: int) -> void:
+	# 每回合开始重置移动力
+	_unit.current_movement = _unit.max_movement
 	_update_hud()
 	_refresh_reachable()
 
+## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
+func _start_camp() -> void:
+	if _game_finished or _is_moving or _battle_ui.is_pending or _is_camping or _manage_ui.is_open:
+		return
+	_is_camping = true
+	_camp_count += 1
+
+	# 扎营恢复补给
+	_supply += _camp_restore
+
+	# 持久资源点扎营结算
+	_settle_persistent_resources()
+
+	_update_hud()
+
+	# 打开养成面板（camp_mode = true，显示全部操作）
+	_manage_ui.open(_characters, _inventory, true)
+
+## 持久资源点扎营结算：检查玩家是否在有效范围内，自动产出资源
+func _settle_persistent_resources() -> void:
+	var collected_names: Array[String] = []
+	for pos in _resource_slots:
+		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
+		if not rs.is_persistent or rs.is_collected:
+			continue
+		# 计算曼哈顿距离
+		var dist: int = absi(rs.position.x - _unit.position.x) + absi(rs.position.y - _unit.position.y)
+		if dist <= rs.effective_range:
+			_collect_resource(rs)
+			collected_names.append(rs.get_display_name())
+	if not collected_names.is_empty():
+		_show_notice("资源点产出：%s" % ", ".join(collected_names))
+
+## 采集资源点：根据类型增加补给或生成道具
+func _collect_resource(rs: ResourceSlot) -> void:
+	if rs.resource_type == ResourceSlot.ResourceType.SUPPLY:
+		_supply += rs.output_amount
+	else:
+		# 生成对应道具并加入背包
+		var item: ItemData = ItemData.new()
+		if rs.resource_type == ResourceSlot.ResourceType.HP_RESTORE:
+			item.type = ItemData.ItemType.HP_RESTORE
+			item.display_name = "兵力恢复药"
+			item.value = rs.output_amount * 100
+			item.item_id = 9001
+		elif rs.resource_type == ResourceSlot.ResourceType.EXP:
+			item.type = ItemData.ItemType.EXP
+			item.display_name = "经验书"
+			item.value = rs.output_amount * 50
+			item.item_id = 9002
+		item.stack_count = 1
+		_inventory.add_items([item])
+
+## 尝试采集当前位置的一次性资源点
+func _try_collect_resource_at(pos: Vector2i) -> void:
+	if not _resource_slots.has(pos):
+		return
+	var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
+	if rs.is_persistent or rs.is_collected:
+		return
+	# 一次性资源点：采集并标记，同时恢复地图 slot 状态
+	_collect_resource(rs)
+	rs.is_collected = true
+	# 将 MapSchema 中的 FUNCTION slot 恢复为 NONE，释放格子
+	if _schema != null:
+		_schema.set_slot(pos.x, pos.y, MapSchema.SlotType.NONE)
+	_show_notice("采集资源：%s" % rs.get_display_name())
+	queue_redraw()
+
 ## 回合结算流程（抽象为独立方法）
-## 玩家按空格触发，执行回合奖励发放后结束回合
+## 扎营养成确认后调用，执行回合奖励发放后结束回合
 func _on_turn_end_settlement() -> void:
 	if _game_finished or _check_defeat():
 		return
@@ -711,8 +870,24 @@ func _clear_level_slots() -> void:
 			_original_slot_types.erase(p)
 	_level_slots = keep
 
+## 从轮次比例配置中获取本轮各档位的生成计划
+## round_id: 轮次 ID（从 1 开始）
+## 返回 [{tier: int, count: int}, ...] 展开后的档位列表
+func _get_tier_plan_for_round(round_id: int) -> Array[Dictionary]:
+	var plan: Array[Dictionary] = []
+	for entry in _enemy_tier_ratio_rows:
+		var row: Dictionary = entry as Dictionary
+		var rid: int = int(row.get("round_id", "0"))
+		if rid != round_id:
+			continue
+		var tier: int = int(row.get("tier", "0"))
+		var count: int = int(row.get("count", "0"))
+		for i in range(count):
+			plan.append({"tier": tier})
+	return plan
+
 ## 生成关卡并初始化 LevelSlot 数据
-## count: 本轮关卡数量
+## count: 本轮关卡数量（作为兜底，优先使用档位比例配置决定数量）
 ## 保留击退状态的旧关卡，新关卡避开已占格子
 func _generate_level_slots(count: int) -> void:
 	if _schema == null:
@@ -729,12 +904,23 @@ func _generate_level_slots(count: int) -> void:
 			if not exclude.has(p):
 				exclude.append(p)
 
-	# 在地图上随机放置关卡 Slot
-	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, count, exclude)
-
 	# 当前轮次索引（用于难度和奖励）
 	var round_index: int = _round_manager.get_current_round() if _round_manager != null else 0
 	var round_id: int = round_index + 1
+
+	# 从档位比例配置获取本轮生成计划
+	var tier_plan: Array[Dictionary] = _get_tier_plan_for_round(round_id)
+	# 如果有档位配置，使用配置中的总数；否则使用传入的 count
+	var actual_count: int = tier_plan.size() if not tier_plan.is_empty() else count
+
+	# 排除资源点占据的格子
+	for pos in _resource_slots:
+		var p: Vector2i = pos as Vector2i
+		if not exclude.has(p):
+			exclude.append(p)
+
+	# 在地图上随机放置关卡 Slot
+	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, actual_count, exclude)
 
 	# 构建新关卡字典（保留击退关卡 + 新增本轮关卡）
 	var new_slots: Dictionary = {}
@@ -744,15 +930,23 @@ func _generate_level_slots(count: int) -> void:
 		var lv: LevelSlot = _level_slots[p] as LevelSlot
 		if lv.is_repelled():
 			new_slots[p] = lv
-	# 新增本轮关卡
-	for pos in placed:
+	# 新增本轮关卡（按档位生成部队）
+	for i in range(placed.size()):
+		var pos: Vector2i = placed[i]
 		var level: LevelSlot = LevelSlot.new()
 		level.position = pos
-		# 设置关卡难度（等于轮次索引）
 		level.difficulty = round_index
-		# 为关卡生成敌方部队
+		# 确定档位：有档位计划则按计划分配，否则默认弱
+		var tier: int = 0
+		if i < tier_plan.size():
+			tier = int(tier_plan[i]["tier"])
+		level.tier = tier
+		# 按档位生成敌方部队
 		if _enemy_generator != null:
-			level.troops = _enemy_generator.generate_troops()
+			if not _enemy_generator._tier_configs.is_empty():
+				level.troops = _enemy_generator.generate_troops_for_tier(tier)
+			else:
+				level.troops = _enemy_generator.generate_troops()
 		# 为关卡预生成胜利奖励
 		if _reward_generator != null:
 			level.rewards = _reward_generator.generate_rewards_range(
@@ -762,6 +956,67 @@ func _generate_level_slots(count: int) -> void:
 		new_slots[pos] = level
 	_level_slots = new_slots
 
+
+## 清除一次性资源点（已采集的和新轮次刷新的），保留持久资源点
+## 同时恢复被占用的 MapSchema slot 为 NONE
+func _clear_onetime_resource_slots() -> void:
+	var keep: Dictionary = {}
+	for pos in _resource_slots:
+		var p: Vector2i = pos as Vector2i
+		var rs: ResourceSlot = _resource_slots[p] as ResourceSlot
+		if rs.is_persistent:
+			keep[p] = rs
+		else:
+			# 恢复 schema slot 状态
+			if _schema != null:
+				_schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
+	_resource_slots = keep
+
+## 从配置生成本轮资源点
+func _generate_resource_slots() -> void:
+	if _schema == null or _resource_slot_config_rows.is_empty():
+		return
+	# 构建排除列表
+	var exclude: Array[Vector2i] = [_start_pos, _end_pos]
+	if _unit != null and not exclude.has(_unit.position):
+		exclude.append(_unit.position)
+	# 排除已有持久资源点
+	for pos in _resource_slots:
+		var p: Vector2i = pos as Vector2i
+		if not exclude.has(p):
+			exclude.append(p)
+	# 排除已有关卡位置
+	for pos in _level_slots:
+		var p: Vector2i = pos as Vector2i
+		if not exclude.has(p):
+			exclude.append(p)
+
+	# 按权重从配置中抽取资源点并放置
+	# 先计算总数量
+	var total_count: int = 0
+	for entry in _resource_slot_config_rows:
+		var row: Dictionary = entry as Dictionary
+		total_count += int(row.get("count_per_round", "1"))
+
+	# 放置位置
+	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, total_count, exclude)
+
+	# 按配置行顺序分配位置
+	var place_idx: int = 0
+	for entry in _resource_slot_config_rows:
+		var row: Dictionary = entry as Dictionary
+		var count: int = int(row.get("count_per_round", "1"))
+		for i in range(count):
+			if place_idx >= placed.size():
+				break
+			var rs: ResourceSlot = ResourceSlot.new()
+			rs.position = placed[place_idx]
+			rs.resource_type = int(row.get("resource_type", "0")) as ResourceSlot.ResourceType
+			rs.is_persistent = row.get("is_persistent", "0") == "1"
+			rs.output_amount = int(row.get("output_amount", "1"))
+			rs.effective_range = int(row.get("effective_range", "2"))
+			_resource_slots[placed[place_idx]] = rs
+			place_idx += 1
 
 ## 获取指定坐标的关卡 Slot，不存在时返回 null
 func _get_level_at(pos: Vector2i) -> LevelSlot:
@@ -773,14 +1028,29 @@ func _get_level_at(pos: Vector2i) -> LevelSlot:
 # 轮次管理
 # ─────────────────────────────────────────
 
-## 轮次开始回调：清除旧关卡，生成本轮新关卡，预生成轮次奖励
+## 轮次开始回调：清除旧关卡，生成本轮新关卡和资源点，预生成轮次奖励
 func _on_round_started(round_index: int) -> void:
 	# 清除上一轮的关卡 Slot
 	_clear_level_slots()
 
+	# 清除上一轮的一次性资源点（保留持久资源点）
+	_clear_onetime_resource_slots()
+
+	# 生成本轮资源点（在关卡之前，让关卡排除资源点位置）
+	_generate_resource_slots()
+
 	# 生成本轮关卡
 	var level_count: int = _round_manager.get_current_level_count()
 	_generate_level_slots(level_count)
+
+	# 将实际生成的关卡数量同步回 RoundManager（档位配置可能改变数量）
+	# 统计新增的未击败关卡数（排除击退状态的旧关卡）
+	var new_level_count: int = 0
+	for pos in _level_slots:
+		var lv: LevelSlot = _level_slots[pos] as LevelSlot
+		if not lv.is_defeated() and not lv.is_repelled():
+			new_level_count += 1
+	_round_manager.override_current_level_count(new_level_count)
 
 	# 预生成轮次胜利奖励
 	var round_id: int = round_index + 1
@@ -901,12 +1171,15 @@ func _on_battle_cancelled() -> void:
 	_battle_ui.hide()
 	_refresh_reachable()
 
-## 为我方部队应用伤害（从 BattleResult 中提取 damages）
+## 为我方部队应用伤害（从 BattleResult 中提取 damages），同时追踪累计损兵
 func _apply_player_damages(result: BattleResolver.BattleResult) -> void:
 	var troop_index: int = 0
 	for ch in _characters:
 		if ch.has_troop():
 			if troop_index < result.damages.size():
+				# 追踪实际损失（不超过剩余兵力）
+				var actual_dmg: int = mini(result.damages[troop_index], ch.troop.current_hp)
+				_total_hp_lost += actual_dmg
 				ch.troop.take_damage(result.damages[troop_index])
 				if ch.troop.is_defeated():
 					ch.clear_troop()
@@ -977,31 +1250,55 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 	if was_forced:
 		_enemy_movement.resume_after_battle()
 	else:
+		# 战斗结束后重置移动力，允许继续移动（消耗补给）
+		_unit.current_movement = _unit.max_movement
 		_refresh_reachable()
 
 # ─────────────────────────────────────────
 # 装配管理信号处理
 # ─────────────────────────────────────────
 
-## 打开装配管理面板
+## 打开装配管理面板（非扎营模式，仅允许替换）
 func _open_manage_panel() -> void:
-	if _game_finished or _battle_ui.is_pending or _is_moving:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _is_camping:
 		return
-	_manage_ui.open(_characters, _inventory)
+	_manage_ui.open(_characters, _inventory, false)
 
 ## 管理面板关闭回调
+## 扎营模式下关闭面板 → 触发完整回合结算流程
 func _on_manage_closed() -> void:
 	_update_hud()
-	_refresh_reachable()
+	if _is_camping:
+		_is_camping = false
+		_on_turn_end_settlement()
+	else:
+		_refresh_reachable()
 
 ## 装配部队操作回调
+## 旧部队转为 TROOP 道具放回背包（保留兵力和经验状态）
 func _on_equip_troop(character: CharacterData, item: ItemData) -> void:
-	# 旧部队消失（不回收）
-	# 创建新部队
+	# 旧部队回收到背包（保留完整状态）
+	if character.has_troop():
+		var old_troop: TroopData = character.troop
+		var old_item: ItemData = ItemData.new()
+		old_item.type = ItemData.ItemType.TROOP
+		old_item.troop_type = int(old_troop.troop_type)
+		old_item.quality = int(old_troop.quality)
+		old_item.troop_current_hp = old_troop.current_hp
+		old_item.troop_max_hp = old_troop.max_hp
+		old_item.troop_exp = old_troop.exp
+		old_item.display_name = old_troop.get_display_text()
+		old_item.stack_count = 1
+		_inventory.add_items([old_item])
+	# 创建新部队（从道具中恢复状态）
 	var troop: TroopData = TroopData.new()
 	troop.troop_type = item.troop_type as TroopData.TroopType
 	troop.quality = item.quality as TroopData.Quality
-	# 兵力重置为最大值
+	# 如果道具保存了兵力状态，恢复；否则满血
+	if item.troop_current_hp >= 0:
+		troop.current_hp = item.troop_current_hp
+		troop.max_hp = item.troop_max_hp
+		troop.exp = item.troop_exp
 	character.troop = troop
 	# 从背包移除道具
 	_inventory.remove_item(item)
@@ -1048,6 +1345,7 @@ func _init_player(player_cfg: Dictionary) -> void:
 	var init_quality: int = int(player_cfg.get("initial_troop_quality", "0"))
 
 	_characters = []
+	_total_max_hp = 0
 	for i in range(char_count):
 		var ch: CharacterData = CharacterData.new()
 		ch.id = i + 1
@@ -1057,6 +1355,7 @@ func _init_player(player_cfg: Dictionary) -> void:
 		troop.quality = init_quality as TroopData.Quality
 		ch.troop = troop
 		_characters.append(ch)
+		_total_max_hp += troop.max_hp
 
 
 # ─────────────────────────────────────────
@@ -1124,7 +1423,7 @@ func _format_rewards_text(rewards: Array[ItemData]) -> String:
 
 ## 放弃流程：直接结束，记为失败（无二次确认）
 func _on_abandon() -> void:
-	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping:
 		return
 	_game_finished = true
 	_reachable_tiles = {}
@@ -1251,6 +1550,9 @@ func _draw() -> void:
 		for x in range(_schema.width):
 			_draw_tile(x, y)
 
+	# 第 1.5 层：资源点渲染
+	_draw_resource_slots()
+
 	# 第二层：可达范围高亮
 	for tile_pos in _reachable_tiles:
 		var pos: Vector2i = tile_pos as Vector2i
@@ -1313,10 +1615,43 @@ func _draw_tile(x: int, y: int) -> void:
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
 		draw_rect(slot_rect, slot_color)
-		# 敌方关卡加描边增强辨识度
+		# 敌方关卡加描边增强辨识度（按强度档位区分颜色）
 		if is_enemy and not level.is_defeated():
-			var border_color: Color = REPELLED_BORDER_COLOR if is_repelled else ENEMY_BORDER_COLOR
+			var border_color: Color = REPELLED_BORDER_COLOR
+			if not is_repelled:
+				border_color = TIER_BORDER_COLORS.get(level.tier, ENEMY_BORDER_COLOR) as Color
 			draw_rect(slot_rect, border_color, false, 1.0)
+
+## 绘制资源点（一次性：青色方块，持久：金色方块+范围圈）
+func _draw_resource_slots() -> void:
+	for pos in _resource_slots:
+		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
+		# 已采集的一次性资源点不渲染
+		if not rs.is_persistent and rs.is_collected:
+			continue
+		var p: Vector2i = pos as Vector2i
+		# 持久资源点先绘制有效范围
+		if rs.is_persistent:
+			for dx in range(-rs.effective_range, rs.effective_range + 1):
+				for dy in range(-rs.effective_range, rs.effective_range + 1):
+					if absi(dx) + absi(dy) <= rs.effective_range:
+						var rx: int = p.x + dx
+						var ry: int = p.y + dy
+						if _schema != null and rx >= 0 and rx < _schema.width and ry >= 0 and ry < _schema.height:
+							var range_rect: Rect2 = Rect2(
+								rx * TILE_SIZE, ry * TILE_SIZE,
+								TILE_SIZE - 1, TILE_SIZE - 1
+							)
+							draw_rect(range_rect, RESOURCE_RANGE_COLOR)
+		# 绘制资源点标记
+		var color: Color = RESOURCE_PERSISTENT_COLOR if rs.is_persistent else RESOURCE_ONE_TIME_COLOR
+		var rs_rect: Rect2 = Rect2(
+			p.x * TILE_SIZE + SLOT_MARGIN,
+			p.y * TILE_SIZE + SLOT_MARGIN,
+			TILE_SIZE - SLOT_MARGIN * 2 - 1,
+			TILE_SIZE - SLOT_MARGIN * 2 - 1
+		)
+		draw_rect(rs_rect, color)
 
 ## 绘制正在移动的敌方关卡标记（基于动画位置）
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
