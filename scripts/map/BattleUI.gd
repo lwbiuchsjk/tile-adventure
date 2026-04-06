@@ -182,10 +182,18 @@ func show_confirm(level: LevelSlot, player_troops: Array[TroopData],
 	if title_label != null:
 		title_label.text = "敌方来袭！" if forced else "遭遇战斗"
 
-	# 更新战斗信息
+	# 更新战斗信息（含兵力系数提示）
 	var info_label: Label = _panel.find_child("BattleInfoLabel", true, false) as Label
 	if info_label != null:
-		var text: String = "敌方：%s" % level.get_troops_detail_display()
+		# 我方兵力系数摘要
+		var player_str_parts: Array[String] = []
+		for t in player_troops:
+			var ratio: float = float(t.current_hp) / maxf(float(t.max_hp), 1.0)
+			var factor: float = BattleResolver.get_hp_ratio_factor(ratio)
+			var pct: int = int(factor * 100.0)
+			player_str_parts.append("%s 战力%d%%" % [t.get_display_text(), pct])
+		var text: String = "我方：%s" % ", ".join(player_str_parts)
+		text += "\n敌方：%s" % level.get_troops_detail_display()
 		if not level.rewards.is_empty():
 			text += "\n击败奖励：%s" % level.get_rewards_display()
 		info_label.text = text

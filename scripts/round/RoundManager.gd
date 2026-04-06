@@ -60,6 +60,11 @@ func get_current_level_count() -> int:
 		return _round_level_counts[_current_round]
 	return 0
 
+## 覆写当前轮的关卡总数（当实际生成数量与配置不同时调用）
+func override_current_level_count(count: int) -> void:
+	if _current_round < _round_level_counts.size():
+		_round_level_counts[_current_round] = count
+
 ## 获取当前轮已挑战的关卡数
 func get_cleared_count() -> int:
 	return _cleared_count

@@ -25,6 +25,9 @@ var is_open: bool = false
 var _characters: Array[CharacterData] = []
 var _inventory: Inventory = null
 
+## 是否为扎营养成模式（true=显示全部操作，false=仅显示部队替换）
+var _camp_mode: bool = false
+
 # ─────────────────────────────────────
 # 初始化
 # ─────────────────────────────────────
@@ -140,10 +143,34 @@ func create_ui(ui_layer: CanvasLayer) -> void:
 # ─────────────────────────────────────
 
 ## 打开管理面板
-func open(characters: Array[CharacterData], inventory: Inventory) -> void:
+## camp_mode: true=扎营养成模式（全部操作），false=非扎营（仅替换）
+func open(characters: Array[CharacterData], inventory: Inventory, camp_mode: bool = false) -> void:
 	_characters = characters
 	_inventory = inventory
+	_camp_mode = camp_mode
 	is_open = true
+	# 更新面板标题
+	var title_label: Label = _panel.find_child("ManageTitleLabel", true, false) as Label
+	if title_label == null:
+		# 兼容：查找第一个标题
+		for child in _panel.get_children():
+			if child is VBoxContainer:
+				for sub in child.get_children():
+					if sub is Label and sub.text.begins_with("装配") or sub.text.begins_with("扎营"):
+						title_label = sub as Label
+						break
+	if title_label != null:
+		title_label.text = "扎营 - 养成" if camp_mode else "装配管理"
+	# 更新关闭按钮文字
+	var btn_close: Button = null
+	for child in _panel.get_children():
+		if child is VBoxContainer:
+			for sub in child.get_children():
+				if sub is Button and (sub.text.contains("关闭") or sub.text.contains("确认")):
+					btn_close = sub as Button
+					break
+	if btn_close != null:
+		btn_close.text = "确认结束" if camp_mode else "关闭 [M]"
 	refresh()
 	_panel.visible = true
 
@@ -245,12 +272,12 @@ func _rebuild_operations() -> void:
 		else:
 			var t: TroopData = ch.troop
 
-			# 替换部队
+			# 替换部队（任何模式下都可用）
 			var troop_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.TROOP)
 			for item in troop_items:
 				var card: VBoxContainer = _create_op_card(
 					ch_name, ch_troop_text, "兵力 %d/%d" % [t.current_hp, t.max_hp],
-					"替换为 %s（丢弃当前）" % item.get_display_text(),
+					"替换为 %s（当前回收）" % item.get_display_text(),
 					Color(0.95, 0.75, 0.45)
 				)
 				var btn: Button = card.get_child(1) as Button
@@ -260,39 +287,41 @@ func _rebuild_operations() -> void:
 				op_area.add_child(card)
 				button_count += 1
 
-			# 经验道具
-			var exp_threshold: int = t.get_upgrade_threshold()
-			var exp_status: String = "经验 %d/%d" % [t.exp, exp_threshold] if exp_threshold > 0 else "已满级"
-			var exp_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.EXP)
-			for item in exp_items:
-				if item.can_use_on(t):
-					var card: VBoxContainer = _create_op_card(
-						ch_name, ch_troop_text, exp_status,
-						"使用 %s" % item.get_display_text(),
-						Color(0.65, 0.80, 0.95)
-					)
-					var btn: Button = card.get_child(1) as Button
-					var bound_ch: CharacterData = ch
-					var bound_item: ItemData = item
-					btn.pressed.connect(func() -> void: use_item_requested.emit(bound_ch, bound_item))
-					op_area.add_child(card)
-					button_count += 1
+			# 经验道具（仅扎营养成模式）
+			if _camp_mode:
+				var exp_threshold: int = t.get_upgrade_threshold()
+				var exp_status: String = "经验 %d/%d" % [t.exp, exp_threshold] if exp_threshold > 0 else "已满级"
+				var exp_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.EXP)
+				for item in exp_items:
+					if item.can_use_on(t):
+						var card: VBoxContainer = _create_op_card(
+							ch_name, ch_troop_text, exp_status,
+							"使用 %s" % item.get_display_text(),
+							Color(0.65, 0.80, 0.95)
+						)
+						var btn: Button = card.get_child(1) as Button
+						var bound_ch: CharacterData = ch
+						var bound_item: ItemData = item
+						btn.pressed.connect(func() -> void: use_item_requested.emit(bound_ch, bound_item))
+						op_area.add_child(card)
+						button_count += 1
 
-			# 兵力恢复道具
-			var hp_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.HP_RESTORE)
-			for item in hp_items:
-				if item.can_use_on(t):
-					var card: VBoxContainer = _create_op_card(
-						ch_name, ch_troop_text, "兵力 %d/%d" % [t.current_hp, t.max_hp],
-						"使用 %s" % item.get_display_text(),
-						Color(0.50, 0.85, 0.50)
-					)
-					var btn: Button = card.get_child(1) as Button
-					var bound_ch: CharacterData = ch
-					var bound_item: ItemData = item
-					btn.pressed.connect(func() -> void: use_item_requested.emit(bound_ch, bound_item))
-					op_area.add_child(card)
-					button_count += 1
+			# 兵力恢复道具（仅扎营养成模式）
+			if _camp_mode:
+				var hp_items: Array[ItemData] = _inventory.get_items_by_type(ItemData.ItemType.HP_RESTORE)
+				for item in hp_items:
+					if item.can_use_on(t):
+						var card: VBoxContainer = _create_op_card(
+							ch_name, ch_troop_text, "兵力 %d/%d" % [t.current_hp, t.max_hp],
+							"使用 %s" % item.get_display_text(),
+							Color(0.50, 0.85, 0.50)
+						)
+						var btn: Button = card.get_child(1) as Button
+						var bound_ch: CharacterData = ch
+						var bound_item: ItemData = item
+						btn.pressed.connect(func() -> void: use_item_requested.emit(bound_ch, bound_item))
+						op_area.add_child(card)
+						button_count += 1
 
 	# 无可用操作时显示提示
 	if button_count == 0:

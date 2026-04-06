@@ -27,6 +27,9 @@ var troops: Array[TroopData] = []
 ## 关卡难度（由轮次索引决定，影响 base_damage）
 var difficulty: int = 0
 
+## 强度档位（0=弱, 1=中, 2=强, 3=超）
+var tier: int = 0
+
 ## 关卡胜利奖励列表（初始化时预生成）
 var rewards: Array[ItemData] = []
 

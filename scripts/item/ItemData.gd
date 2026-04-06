@@ -33,6 +33,15 @@ var troop_type: int = -1
 ## 部队道具专用：品质 ID（-1 表示非部队道具）
 var quality: int = -1
 
+## 部队道具专用：保存的当前兵力（-1 表示未保存，装备时使用满血）
+var troop_current_hp: int = -1
+
+## 部队道具专用：保存的最大兵力
+var troop_max_hp: int = 1000
+
+## 部队道具专用：保存的经验值
+var troop_exp: int = 0
+
 ## 显示名称
 var display_name: String = ""
 
@@ -79,6 +88,9 @@ func get_display_text() -> String:
 	if type == ItemType.TROOP:
 		var type_name: String = TroopData.TROOP_TYPE_NAMES.get(troop_type, "未知") as String
 		var quality_name: String = TroopData.QUALITY_NAMES.get(quality, "?") as String
+		# 有保存的兵力状态时显示
+		if troop_current_hp >= 0 and troop_current_hp < troop_max_hp:
+			return "%s(%s) %d/%d" % [type_name, quality_name, troop_current_hp, troop_max_hp]
 		return "%s(%s)" % [type_name, quality_name]
 	elif type == ItemType.EXP:
 		return "%s(经验+%d)" % [display_name, value]
@@ -112,4 +124,7 @@ func duplicate_item() -> ItemData:
 	copy.restrict_troop = restrict_troop
 	copy.restrict_quality = restrict_quality
 	copy.stack_count = stack_count
+	copy.troop_current_hp = troop_current_hp
+	copy.troop_max_hp = troop_max_hp
+	copy.troop_exp = troop_exp
 	return copy
