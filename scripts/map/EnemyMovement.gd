@@ -13,8 +13,8 @@ signal redraw_requested
 
 ## 逐格动画速度（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
-## 格像素尺寸（与 WorldMap.TILE_SIZE 保持一致）
-const TILE_SIZE: int = 24
+## 格像素尺寸（由 WorldMap 在初始化时注入，须与 WorldMap.TILE_SIZE 保持一致）
+var tile_size: int = 24
 
 # ─────────────────────────────────────
 # 内部状态
@@ -109,8 +109,8 @@ func notify_game_over() -> void:
 ## 将格坐标转为像素中心
 func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 	return Vector2(
-		grid_pos.x * TILE_SIZE + TILE_SIZE / 2,
-		grid_pos.y * TILE_SIZE + TILE_SIZE / 2
+		grid_pos.x * tile_size + tile_size / 2,
+		grid_pos.y * tile_size + tile_size / 2
 	)
 
 
