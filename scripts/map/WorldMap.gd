@@ -103,9 +103,9 @@ const TIER_BORDER_COLORS: Dictionary = {
 }
 
 ## 一次性资源点底色（按类型区分）
-const RESOURCE_SUPPLY_COLOR: Color = Color(0.30, 0.80, 0.80)   ## 补给：青色  #4DCCCC
-const RESOURCE_HP_COLOR: Color = Color(0.40, 0.80, 0.50)       ## 兵力：浅绿  #66CC80
-const RESOURCE_EXP_COLOR: Color = Color(0.40, 0.60, 0.80)      ## 经验：浅蓝  #6699CC
+const RESOURCE_SUPPLY_COLOR: Color = Color(0.80, 0.27, 0.53)   ## 补给：品红  #CC4488（规避蓝绿色地形）
+const RESOURCE_HP_COLOR: Color = Color(0.88, 0.47, 0.19)       ## 兵力：橙色  #E07830（规避绿色地形）
+const RESOURCE_EXP_COLOR: Color = Color(0.60, 0.40, 0.80)      ## 经验：紫色  #9966CC（规避蓝色地形）
 
 ## 持久资源点底色（统一金色，文字附★后缀）
 const RESOURCE_PERSISTENT_COLOR: Color = Color(1.0, 0.85, 0.0) ## 金色  #FFD900
@@ -1655,13 +1655,9 @@ func _draw_tile(x: int, y: int) -> void:
 			if _label_font != null and not level.is_defeated() and not is_repelled:
 				var tier_labels: Array[String] = ["敌·弱", "敌·中", "敌·强", "敌·超"]
 				var tier_text: String = tier_labels[level.tier] if level.tier < tier_labels.size() else "敌?"
-				draw_string(
-					_label_font,
-					Vector2(x * TILE_SIZE + TILE_SIZE / 2, y * TILE_SIZE + TILE_SIZE / 2 + 5),
+				_draw_slot_label(
+					Vector2(x * TILE_SIZE + TILE_SIZE / 2.0, y * TILE_SIZE + TILE_SIZE / 2.0),
 					tier_text,
-					HORIZONTAL_ALIGNMENT_CENTER,
-					TILE_SIZE,
-					LABEL_FONT_SIZE,
 					Color.WHITE
 				)
 
@@ -1754,13 +1750,9 @@ func _draw_resource_slots() -> void:
 		# 叠加资源类型文字标注（短标签来自 ResourceSlot.get_map_label()；持久资源加★后缀）
 		if _label_font != null:
 			var label_text: String = rs.get_map_label() + ("★" if rs.is_persistent else "")
-			draw_string(
-				_label_font,
-				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2, p.y * TILE_SIZE + TILE_SIZE / 2 + 5),
+			_draw_slot_label(
+				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2.0, p.y * TILE_SIZE + TILE_SIZE / 2.0),
 				label_text,
-				HORIZONTAL_ALIGNMENT_CENTER,
-				TILE_SIZE,
-				LABEL_FONT_SIZE,
 				Color(0.05, 0.05, 0.05)
 			)
 
@@ -1788,6 +1780,28 @@ func _draw_enemy_move_marker() -> void:
 	# 边框描边
 	draw_rect(rect, ENEMY_BORDER_COLOR, false, 1.0)
 
+## 在指定像素中心绘制居中文字标签
+## center_px: 格的像素中心坐标；使用字体 ascent/descent 精确计算垂直基线位置
+func _draw_slot_label(center_px: Vector2, text: String, color: Color) -> void:
+	if _label_font == null:
+		return
+	var ascent: float = _label_font.get_ascent(LABEL_FONT_SIZE)
+	var descent: float = _label_font.get_descent(LABEL_FONT_SIZE)
+	# 基线 = 中心点 + (ascent - descent) / 2，使文字视觉上精确居中
+	var baseline_y: float = center_px.y + (ascent - descent) / 2.0
+	# 文字区域从中心点左侧半格开始，宽度一格，CENTER 对齐实现水平居中
+	var left_x: float = center_px.x - TILE_SIZE / 2.0
+	draw_string(
+		_label_font,
+		Vector2(left_x, baseline_y),
+		text,
+		HORIZONTAL_ALIGNMENT_CENTER,
+		TILE_SIZE,
+		LABEL_FONT_SIZE,
+		color
+	)
+
+
 ## 绘制单位标记（基于视觉位置，支持动画中的平滑移动）
 func _draw_unit_marker() -> void:
 	var rect: Rect2 = Rect2(
@@ -1799,12 +1813,4 @@ func _draw_unit_marker() -> void:
 	draw_rect(rect, UNIT_COLOR)
 	# 叠加「我」字标注，深色文字与亮白色背景形成对比
 	if _label_font != null:
-		draw_string(
-			_label_font,
-			Vector2(_unit_visual_pos.x, _unit_visual_pos.y + 5),
-			"我",
-			HORIZONTAL_ALIGNMENT_CENTER,
-			TILE_SIZE,
-			LABEL_FONT_SIZE,
-			Color(0.15, 0.15, 0.15)
-		)
+		_draw_slot_label(_unit_visual_pos, "我", Color(0.15, 0.15, 0.15))
