@@ -1751,15 +1751,9 @@ func _draw_resource_slots() -> void:
 		)
 		draw_rect(rs_rect, color)
 
-		# 叠加资源类型文字标注（补给/兵力/经验；持久资源加★后缀）
+		# 叠加资源类型文字标注（短标签来自 ResourceSlot.get_map_label()；持久资源加★后缀）
 		if _label_font != null:
-			var type_labels: Dictionary = {
-				ResourceSlot.ResourceType.SUPPLY: "补给",
-				ResourceSlot.ResourceType.HP_RESTORE: "兵力",
-				ResourceSlot.ResourceType.EXP: "经验",
-			}
-			var base_text: String = type_labels.get(rs.resource_type, "?") as String
-			var label_text: String = base_text + ("★" if rs.is_persistent else "")
+			var label_text: String = rs.get_map_label() + ("★" if rs.is_persistent else "")
 			draw_string(
 				_label_font,
 				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2, p.y * TILE_SIZE + TILE_SIZE / 2 + 5),
