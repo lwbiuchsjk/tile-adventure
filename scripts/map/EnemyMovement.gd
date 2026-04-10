@@ -14,7 +14,8 @@ signal redraw_requested
 ## 逐格动画速度（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
 ## 格像素尺寸（由 WorldMap 在初始化时注入，须与 WorldMap.TILE_SIZE 保持一致）
-var tile_size: int = 24
+## 默认值 0 为非法值，未注入时会在 _grid_to_pixel_center 中触发断言
+var tile_size: int = 0
 
 # ─────────────────────────────────────
 # 内部状态
@@ -108,6 +109,7 @@ func notify_game_over() -> void:
 
 ## 将格坐标转为像素中心
 func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
+	assert(tile_size > 0, "EnemyMovement.tile_size 未注入，请在 add_child 后调用前赋值")
 	return Vector2(
 		grid_pos.x * tile_size + tile_size / 2,
 		grid_pos.y * tile_size + tile_size / 2
