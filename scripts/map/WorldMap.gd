@@ -53,28 +53,28 @@ const CONFIG_RESOURCE_SLOT: String = "res://assets/config/resource_slot_config.c
 # 渲染常量
 # ─────────────────────────────────────────
 
-## 每格像素尺寸
-const TILE_SIZE: int = 24
+## 每格像素尺寸（参见 Design/地图格子视觉规范.md）
+const TILE_SIZE: int = 48
 
 ## 各地形渲染颜色（纯色块占位）
 ## key 使用整数字面量对应 MapSchema.TerrainType 枚举值
 const TERRAIN_COLORS: Dictionary = {
-	0: Color(0.40, 0.35, 0.30),  ## MOUNTAIN：灰褐：高山
-	1: Color(0.50, 0.65, 0.30),  ## HIGHLAND：黄绿：高地
-	2: Color(0.35, 0.72, 0.40),  ## FLATLAND：绿色：平地
-	3: Color(0.30, 0.55, 0.75),  ## LOWLAND：蓝色：洼地
+	0: Color(0.40, 0.35, 0.30),  ## MOUNTAIN：灰褐：高山  #665949
+	1: Color(0.50, 0.65, 0.30),  ## HIGHLAND：黄绿：高地  #80A64D
+	2: Color(0.35, 0.72, 0.40),  ## FLATLAND：绿色：平地  #59B866
+	3: Color(0.30, 0.55, 0.75),  ## LOWLAND：蓝色：洼地  #4D8CBF
 }
 
 ## Slot 标记颜色（小方块叠加在地形色上）
-## key 使用整数字面量对应 MapSchema.SlotType 枚举值
+## key 使用整数字面量对应 MapSchema.SlotType 枚举值（非敌方/资源用途的兜底色）
 const SLOT_COLORS: Dictionary = {
-	1: Color(1.00, 0.85, 0.00),  ## RESOURCE：金色：资源点
-	2: Color(0.80, 0.40, 1.00),  ## FUNCTION：紫色：功能点
-	3: Color(1.00, 0.30, 0.30),  ## SPAWN：红色：出生点
+	1: Color(1.00, 0.85, 0.00),  ## RESOURCE：金色  #FFD900
+	2: Color(0.80, 0.40, 1.00),  ## FUNCTION：紫色（兜底，敌方格已覆盖为 ENEMY_SLOT_COLOR）
+	3: Color(1.00, 0.30, 0.30),  ## SPAWN：红色  #FF4D4D
 }
 
 ## Slot 标记在格内的边距（像素）
-const SLOT_MARGIN: int = 6
+const SLOT_MARGIN: int = 10
 
 ## 可达范围高亮色（半透明白色叠加）
 const REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.25)
@@ -83,26 +83,36 @@ const REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.25)
 const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
 
 ## 单位标记边距（像素）
-const UNIT_MARGIN: int = 4
+const UNIT_MARGIN: int = 8
 
 ## 已挑战关卡变暗系数（同一轮内已挑战但尚未切换的关卡）
 const CHALLENGED_DIM: float = 0.4
+
+## 敌方关卡底色（暗红，文字为主要信息载体）#CC4040
+const ENEMY_SLOT_COLOR: Color = Color(0.80, 0.25, 0.25)
 
 ## 敌方关卡边框颜色（亮红，增强辨识度，兜底色）
 const ENEMY_BORDER_COLOR: Color = Color(1.0, 0.25, 0.20, 0.8)
 
 ## 敌方关卡强度档位边框颜色（弱=绿, 中=黄, 强=红, 超=紫）
 const TIER_BORDER_COLORS: Dictionary = {
-	0: Color(0.35, 0.80, 0.35, 0.8),  ## 弱：绿色
-	1: Color(0.90, 0.80, 0.20, 0.8),  ## 中：黄色
-	2: Color(1.00, 0.30, 0.25, 0.8),  ## 强：红色
-	3: Color(0.75, 0.35, 0.90, 0.8),  ## 超：紫色
+	0: Color(0.35, 0.80, 0.35, 0.8),  ## 弱：绿色  #59CC59
+	1: Color(0.90, 0.80, 0.20, 0.8),  ## 中：黄色  #E6CC33
+	2: Color(1.00, 0.30, 0.25, 0.8),  ## 强：红色  #FF4D40
+	3: Color(0.75, 0.35, 0.90, 0.8),  ## 超：紫色  #BF59E6
 }
 
-## 资源点颜色（一次性：青色，持久：金色）
-const RESOURCE_ONE_TIME_COLOR: Color = Color(0.30, 0.80, 0.80)
-const RESOURCE_PERSISTENT_COLOR: Color = Color(1.0, 0.85, 0.0)
-const RESOURCE_RANGE_COLOR: Color = Color(1.0, 0.85, 0.0, 0.10)
+## 一次性资源点底色（按类型区分）
+const RESOURCE_SUPPLY_COLOR: Color = Color(0.30, 0.80, 0.80)   ## 补给：青色  #4DCCCC
+const RESOURCE_HP_COLOR: Color = Color(0.40, 0.80, 0.50)       ## 兵力：浅绿  #66CC80
+const RESOURCE_EXP_COLOR: Color = Color(0.40, 0.60, 0.80)      ## 经验：浅蓝  #6699CC
+
+## 持久资源点底色（统一金色，文字附★后缀）
+const RESOURCE_PERSISTENT_COLOR: Color = Color(1.0, 0.85, 0.0) ## 金色  #FFD900
+
+## 持久资源有效范围叠加色（10% 透明金色）
+const RESOURCE_RANGE_COLOR: Color = Color(1.0, 0.85, 0.0, 0.15)       ## 范围填充：金色 15% alpha
+const RESOURCE_RANGE_BORDER_COLOR: Color = Color(1.0, 0.85, 0.0, 0.80) ## 范围边界轮廓：金色 80% alpha
 
 ## 敌方关卡移动时的高亮颜色（亮红橙）
 const ENEMY_MOVE_COLOR: Color = Color(1.0, 0.35, 0.20)
@@ -112,6 +122,9 @@ const ENEMY_GLOW_COLOR: Color = Color(1.0, 0.30, 0.15, 0.35)
 
 ## 击退冷却关卡边框颜色（暗淡）
 const REPELLED_BORDER_COLOR: Color = Color(0.6, 0.3, 0.3, 0.5)
+
+## 地图标签字号（格子放大后使用 12px）
+const LABEL_FONT_SIZE: int = 12
 
 ## 单位逐格移动动画耗时（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
@@ -272,6 +285,9 @@ var _turn_reward_pool_rows: Array = []
 ## 回合奖励数量
 var _turn_reward_count: int = 1
 
+## 地图标签绘制用字体（_draw 时使用，_ready 中初始化）
+var _label_font: Font = null
+
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -422,6 +438,9 @@ func _ready() -> void:
 	# 启动第一轮（触发 _on_round_started → 生成关卡）
 	_round_manager.start_current_round()
 
+	# 初始化地图标签字体（使用主题默认字体，供 _draw 中绘制文字标注）
+	_label_font = ThemeDB.fallback_font
+
 	# 更新 HUD
 	_update_hud()
 
@@ -433,9 +452,10 @@ func _ready() -> void:
 func _init_subsystems() -> void:
 	var ui_layer: CanvasLayer = $UILayer
 
-	# 敌方移动子系统
+	# 敌方移动子系统（注入格子尺寸，保证视觉位置计算与 WorldMap 一致）
 	_enemy_movement = EnemyMovement.new()
 	_enemy_movement.name = "EnemyMovement"
+	_enemy_movement.tile_size = TILE_SIZE
 	add_child(_enemy_movement)
 	_enemy_movement.phase_finished.connect(_on_enemy_phase_finished)
 	_enemy_movement.forced_battle_triggered.connect(_on_forced_battle_triggered)
@@ -1550,7 +1570,10 @@ func _draw() -> void:
 		for x in range(_schema.width):
 			_draw_tile(x, y)
 
-	# 第 1.5 层：资源点渲染
+	# 第 1.5 层：持久资源有效范围叠加（须在 Slot 标记之后、资源格方块之前，避免遮挡文字）
+	_draw_persistent_resource_ranges()
+
+	# 第 1.6 层：资源点标记 + 文字
 	_draw_resource_slots()
 
 	# 第二层：可达范围高亮
@@ -1588,26 +1611,32 @@ func _draw_tile(x: int, y: int) -> void:
 	)
 	draw_rect(tile_rect, base_color)
 
-	# 若有 Slot，在格中央叠加小色块标记
+	# 若有 Slot，在格中央叠加色块标记 + 文字
 	var slot: MapSchema.SlotType = _schema.get_slot(x, y)
 	if slot != MapSchema.SlotType.NONE:
-		var slot_color: Color = SLOT_COLORS.get(slot, Color.WHITE) as Color
 		var pos: Vector2i = Vector2i(x, y)
 		var level: LevelSlot = _get_level_at(pos)
 		var is_enemy: bool = false
 		var is_repelled: bool = false
+
+		# 敌方格使用专用暗红底色；其他 slot 使用 SLOT_COLORS 兜底色
+		var slot_color: Color
 		if level != null:
 			# 正在移动的关卡跳过静态渲染（由 _draw_enemy_move_marker 负责）
 			if level == _enemy_movement.get_moving_level():
 				return
 			is_enemy = true
+			slot_color = ENEMY_SLOT_COLOR
 			if level.is_defeated():
-				# 已击败：变暗显示
+				# 已击败：变暗显示，不再叠加文字
 				slot_color = slot_color.darkened(CHALLENGED_DIM)
 			elif level.is_repelled():
-				# 已击退冷却中：半透明显示
+				# 已击退冷却中：半透明显示，不再叠加文字
 				is_repelled = true
 				slot_color = Color(slot_color.r, slot_color.g, slot_color.b, 0.4)
+		else:
+			slot_color = SLOT_COLORS.get(slot, Color.WHITE) as Color
+
 		var slot_rect: Rect2 = Rect2(
 			x * TILE_SIZE + SLOT_MARGIN,
 			y * TILE_SIZE + SLOT_MARGIN,
@@ -1615,14 +1644,81 @@ func _draw_tile(x: int, y: int) -> void:
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
 		draw_rect(slot_rect, slot_color)
-		# 敌方关卡加描边增强辨识度（按强度档位区分颜色）
-		if is_enemy and not level.is_defeated():
-			var border_color: Color = REPELLED_BORDER_COLOR
-			if not is_repelled:
-				border_color = TIER_BORDER_COLORS.get(level.tier, ENEMY_BORDER_COLOR) as Color
-			draw_rect(slot_rect, border_color, false, 1.0)
 
-## 绘制资源点（一次性：青色方块，持久：金色方块+范围圈）
+		# 敌方关卡：加描边 + 文字（仅活跃状态显示文字）
+		if is_enemy:
+			var border_color: Color = REPELLED_BORDER_COLOR
+			if not is_repelled and not level.is_defeated():
+				border_color = TIER_BORDER_COLORS.get(level.tier, ENEMY_BORDER_COLOR) as Color
+			draw_rect(slot_rect, border_color, false, 1.5)
+			# 活跃状态叠加强度文字标注（敌·弱 / 敌·中 / 敌·强 / 敌·超）
+			if _label_font != null and not level.is_defeated() and not is_repelled:
+				var tier_labels: Array[String] = ["敌·弱", "敌·中", "敌·强", "敌·超"]
+				var tier_text: String = tier_labels[level.tier] if level.tier < tier_labels.size() else "敌?"
+				draw_string(
+					_label_font,
+					Vector2(x * TILE_SIZE + TILE_SIZE / 2, y * TILE_SIZE + TILE_SIZE / 2 + 5),
+					tier_text,
+					HORIZONTAL_ALIGNMENT_CENTER,
+					TILE_SIZE,
+					LABEL_FONT_SIZE,
+					Color.WHITE
+				)
+
+## 判断格坐标 (x, y) 是否在以 center 为中心、半径为 r 的曼哈顿范围内
+## 超出地图边界视为范围外
+func _pos_in_range(x: int, y: int, center: Vector2i, r: int) -> bool:
+	if _schema == null or x < 0 or x >= _schema.width or y < 0 or y >= _schema.height:
+		return false
+	return absi(x - center.x) + absi(y - center.y) <= r
+
+
+## 绘制持久资源点有效范围叠加：浅金填充 + 边界轮廓线
+## 先于标记方块渲染，避免遮挡文字
+func _draw_persistent_resource_ranges() -> void:
+	for pos in _resource_slots:
+		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
+		if not rs.is_persistent:
+			continue
+		var p: Vector2i = pos as Vector2i
+
+		# 第一遍：填充范围内所有格（浅金色 15% alpha）
+		for dx in range(-rs.effective_range, rs.effective_range + 1):
+			for dy in range(-rs.effective_range, rs.effective_range + 1):
+				if absi(dx) + absi(dy) <= rs.effective_range:
+					var rx: int = p.x + dx
+					var ry: int = p.y + dy
+					if _schema != null and rx >= 0 and rx < _schema.width and ry >= 0 and ry < _schema.height:
+						draw_rect(
+							Rect2(rx * TILE_SIZE, ry * TILE_SIZE, TILE_SIZE - 1, TILE_SIZE - 1),
+							RESOURCE_RANGE_COLOR
+						)
+
+		# 第二遍：绘制边界轮廓线（仅对外侧边绘制，内部相邻格不重复描边）
+		for dx in range(-rs.effective_range, rs.effective_range + 1):
+			for dy in range(-rs.effective_range, rs.effective_range + 1):
+				if absi(dx) + absi(dy) > rs.effective_range:
+					continue
+				var rx: int = p.x + dx
+				var ry: int = p.y + dy
+				if _schema == null or rx < 0 or rx >= _schema.width or ry < 0 or ry >= _schema.height:
+					continue
+				var tx: float = rx * TILE_SIZE
+				var ty: float = ry * TILE_SIZE
+				# 上边：相邻格不在范围内则绘制
+				if not _pos_in_range(rx, ry - 1, p, rs.effective_range):
+					draw_line(Vector2(tx, ty), Vector2(tx + TILE_SIZE - 1, ty), RESOURCE_RANGE_BORDER_COLOR, 1.5)
+				# 下边
+				if not _pos_in_range(rx, ry + 1, p, rs.effective_range):
+					draw_line(Vector2(tx, ty + TILE_SIZE - 1), Vector2(tx + TILE_SIZE - 1, ty + TILE_SIZE - 1), RESOURCE_RANGE_BORDER_COLOR, 1.5)
+				# 左边
+				if not _pos_in_range(rx - 1, ry, p, rs.effective_range):
+					draw_line(Vector2(tx, ty), Vector2(tx, ty + TILE_SIZE - 1), RESOURCE_RANGE_BORDER_COLOR, 1.5)
+				# 右边
+				if not _pos_in_range(rx + 1, ry, p, rs.effective_range):
+					draw_line(Vector2(tx + TILE_SIZE - 1, ty), Vector2(tx + TILE_SIZE - 1, ty + TILE_SIZE - 1), RESOURCE_RANGE_BORDER_COLOR, 1.5)
+
+## 绘制资源点标记方块 + 文字（一次性按类型着色，持久统一金色 + ★后缀）
 func _draw_resource_slots() -> void:
 	for pos in _resource_slots:
 		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
@@ -1630,21 +1726,23 @@ func _draw_resource_slots() -> void:
 		if not rs.is_persistent and rs.is_collected:
 			continue
 		var p: Vector2i = pos as Vector2i
-		# 持久资源点先绘制有效范围
+
+		# 按资源类型和是否持久选取底色
+		var color: Color
 		if rs.is_persistent:
-			for dx in range(-rs.effective_range, rs.effective_range + 1):
-				for dy in range(-rs.effective_range, rs.effective_range + 1):
-					if absi(dx) + absi(dy) <= rs.effective_range:
-						var rx: int = p.x + dx
-						var ry: int = p.y + dy
-						if _schema != null and rx >= 0 and rx < _schema.width and ry >= 0 and ry < _schema.height:
-							var range_rect: Rect2 = Rect2(
-								rx * TILE_SIZE, ry * TILE_SIZE,
-								TILE_SIZE - 1, TILE_SIZE - 1
-							)
-							draw_rect(range_rect, RESOURCE_RANGE_COLOR)
-		# 绘制资源点标记
-		var color: Color = RESOURCE_PERSISTENT_COLOR if rs.is_persistent else RESOURCE_ONE_TIME_COLOR
+			color = RESOURCE_PERSISTENT_COLOR
+		else:
+			match rs.resource_type:
+				ResourceSlot.ResourceType.SUPPLY:
+					color = RESOURCE_SUPPLY_COLOR
+				ResourceSlot.ResourceType.HP_RESTORE:
+					color = RESOURCE_HP_COLOR
+				ResourceSlot.ResourceType.EXP:
+					color = RESOURCE_EXP_COLOR
+				_:
+					color = RESOURCE_SUPPLY_COLOR
+
+		# 绘制资源点标记方块
 		var rs_rect: Rect2 = Rect2(
 			p.x * TILE_SIZE + SLOT_MARGIN,
 			p.y * TILE_SIZE + SLOT_MARGIN,
@@ -1652,6 +1750,25 @@ func _draw_resource_slots() -> void:
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
 		draw_rect(rs_rect, color)
+
+		# 叠加资源类型文字标注（补给/兵力/经验；持久资源加★后缀）
+		if _label_font != null:
+			var type_labels: Dictionary = {
+				ResourceSlot.ResourceType.SUPPLY: "补给",
+				ResourceSlot.ResourceType.HP_RESTORE: "兵力",
+				ResourceSlot.ResourceType.EXP: "经验",
+			}
+			var base_text: String = type_labels.get(rs.resource_type, "?") as String
+			var label_text: String = base_text + ("★" if rs.is_persistent else "")
+			draw_string(
+				_label_font,
+				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2, p.y * TILE_SIZE + TILE_SIZE / 2 + 5),
+				label_text,
+				HORIZONTAL_ALIGNMENT_CENTER,
+				TILE_SIZE,
+				LABEL_FONT_SIZE,
+				Color(0.05, 0.05, 0.05)
+			)
 
 ## 绘制正在移动的敌方关卡标记（基于动画位置）
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
@@ -1686,3 +1803,14 @@ func _draw_unit_marker() -> void:
 		TILE_SIZE - UNIT_MARGIN * 2 - 1
 	)
 	draw_rect(rect, UNIT_COLOR)
+	# 叠加「我」字标注，深色文字与亮白色背景形成对比
+	if _label_font != null:
+		draw_string(
+			_label_font,
+			Vector2(_unit_visual_pos.x, _unit_visual_pos.y + 5),
+			"我",
+			HORIZONTAL_ALIGNMENT_CENTER,
+			TILE_SIZE,
+			LABEL_FONT_SIZE,
+			Color(0.15, 0.15, 0.15)
+		)
