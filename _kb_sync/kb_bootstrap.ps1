@@ -249,13 +249,222 @@ function Convert-DocxElementsToMarkdown([object[]]$elements) {
   return ($parts.ToArray() -join '')
 }
 
+function Escape-MarkdownTableCell([string]$text) {
+  # 中文说明：表格单元格需要转义竖线并折叠换行，否则会破坏 Markdown 表格结构。
+  if ($null -eq $text) { return '' }
+
+  $escaped = [string]$text
+  $escaped = $escaped -replace '\r?\n', '<br>'
+  $escaped = $escaped.Replace('|', '\|')
+  return $escaped.Trim()
+}
+
+function Get-DocxChildBlocksMarkdown(
+  [object]$block,
+  [hashtable]$blockById,
+  [System.Collections.Generic.HashSet[string]]$consumedIds
+) {
+  # 中文说明：飞书表格单元格通常以"cell -> paragraph/text"子树承载正文，这里递归拼接子块内容。
+  if (-not $block -or -not $block.children) { return '' }
+
+  $parts = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($childId in @($block.children)) {
+    $childText = Convert-DocxBlockSubtreeToMarkdown ([string]$childId) $blockById $consumedIds
+    if ($childText) {
+      $parts.Add($childText)
+    }
+  }
+
+  return ($parts.ToArray() -join '<br>')
+}
+
+function Convert-TextToMarkdownQuote([string]$text) {
+  # 中文说明：quote_container 本质是引用容器，这里统一转成标准 Markdown 引用块。
+  if (-not $text) { return '' }
+
+  $normalized = ([string]$text) -replace '<br>', "`r`n"
+  $lines = $normalized -split '\r?\n'
+  $quotedLines = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($line in $lines) {
+    if ($line) {
+      $quotedLines.Add("> $line")
+    } else {
+      $quotedLines.Add('>')
+    }
+  }
+
+  return ($quotedLines.ToArray() -join "`r`n").Trim()
+}
+
+function Convert-DocxQuoteContainerToMarkdown(
+  [object]$quoteBlock,
+  [hashtable]$blockById,
+  [System.Collections.Generic.HashSet[string]]$consumedIds
+) {
+  # 中文说明：飞书引用容器的正文在 children 中，递归取出后整体包成引用块。
+  if (-not $quoteBlock) { return '' }
+
+  $quoteId = [string]$quoteBlock.block_id
+  if ($quoteId -and $consumedIds) {
+    [void]$consumedIds.Add($quoteId)
+  }
+
+  $quoteText = Get-DocxChildBlocksMarkdown $quoteBlock $blockById $consumedIds
+  return Convert-TextToMarkdownQuote $quoteText
+}
+
+function Convert-DocxBlockSubtreeToMarkdown(
+  [string]$blockId,
+  [hashtable]$blockById,
+  [System.Collections.Generic.HashSet[string]]$consumedIds
+) {
+  # 中文说明：在表格等容器块内部递归提取可读文本，并顺手标记已消费的子块，避免主流程重复输出。
+  if (-not $blockId) { return '' }
+  if ($consumedIds -and $consumedIds.Contains($blockId)) { return '' }
+  if (-not $blockById.ContainsKey($blockId)) { return '' }
+
+  $block = $blockById[$blockId]
+  if (-not $block) { return '' }
+
+  if ($consumedIds) {
+    [void]$consumedIds.Add($blockId)
+  }
+
+  $blockType = [int]$block.block_type
+  switch ($blockType) {
+    1 { return Convert-DocxElementsToMarkdown @($block.page.elements) }
+    2 { return Convert-DocxElementsToMarkdown @($block.text.elements) }
+    3 { return Convert-DocxElementsToMarkdown @($block.heading1.elements) }
+    4 { return Convert-DocxElementsToMarkdown @($block.heading2.elements) }
+    5 { return Convert-DocxElementsToMarkdown @($block.heading3.elements) }
+    6 { return Convert-DocxElementsToMarkdown @($block.heading4.elements) }
+    7 { return Convert-DocxElementsToMarkdown @($block.heading5.elements) }
+    8 { return Convert-DocxElementsToMarkdown @($block.heading6.elements) }
+    9 { return Convert-DocxElementsToMarkdown @($block.heading7.elements) }
+    10 { return Convert-DocxElementsToMarkdown @($block.heading8.elements) }
+    11 { return Convert-DocxElementsToMarkdown @($block.heading9.elements) }
+    12 { return '- ' + (Convert-DocxElementsToMarkdown @($block.bullet.elements)) }
+    13 { return '1. ' + (Convert-DocxElementsToMarkdown @($block.ordered.elements)) }
+    14 { return Convert-DocxElementsToMarkdown @($block.code.elements) }
+    15 { return '> ' + (Convert-DocxElementsToMarkdown @($block.quote.elements)) }
+    17 {
+      $todoText = Convert-DocxElementsToMarkdown @($block.todo.elements)
+      $isDone = $false
+      if ($block.todo -and $block.todo.style -and ($block.todo.style.PSObject.Properties.Name -contains 'done')) {
+        $isDone = [bool]$block.todo.style.done
+      }
+      $mark = if ($isDone) { 'x' } else { ' ' }
+      return "- [$mark] $todoText"
+    }
+    19 { return Convert-DocxElementsToMarkdown @($block.callout.elements) }
+    22 { return '---' }
+    23 { return "[附件块: $blockId]" }
+    27 { return "[图片块: $blockId]" }
+    30 { return "电子表格引用：$([string]$block.sheet.token)" }
+    31 { return Convert-DocxTableBlockToMarkdown $block $blockById $consumedIds }
+    32 { return Get-DocxChildBlocksMarkdown $block $blockById $consumedIds }
+    34 { return Convert-DocxQuoteContainerToMarkdown $block $blockById $consumedIds }
+    43 { return "白板引用：$([string]$block.board.token)" }
+    default {
+      $nestedText = Get-DocxChildBlocksMarkdown $block $blockById $consumedIds
+      if ($nestedText) { return $nestedText }
+      return "[未转换块 type=$blockType id=$blockId]"
+    }
+  }
+}
+
+function Convert-DocxTableBlockToMarkdown(
+  [object]$tableBlock,
+  [hashtable]$blockById,
+  [System.Collections.Generic.HashSet[string]]$consumedIds
+) {
+  # 中文说明：飞书表格由 table + table_cell 子树组成，这里按行列重建为 Markdown 表格。
+  if (-not $tableBlock) { return '' }
+
+  $tableId = [string]$tableBlock.block_id
+  if ($tableId -and $consumedIds) {
+    [void]$consumedIds.Add($tableId)
+  }
+
+  if (-not $tableBlock.table) {
+    return "[表格块: $tableId]"
+  }
+
+  $cells = @($tableBlock.table.cells)
+  $columnSize = 0
+  if ($tableBlock.table.property -and ($tableBlock.table.property.PSObject.Properties.Name -contains 'column_size')) {
+    $columnSize = [int]$tableBlock.table.property.column_size
+  }
+
+  if ($columnSize -le 0) {
+    if ($cells.Count -gt 0) { $columnSize = $cells.Count } else { $columnSize = 1 }
+  }
+
+  $rows = New-Object 'System.Collections.Generic.List[object]'
+  $currentRow = @()
+  foreach ($cellIdObj in $cells) {
+    $cellId = [string]$cellIdObj
+    $cellText = Convert-DocxBlockSubtreeToMarkdown $cellId $blockById $consumedIds
+    $currentRow += ,(Escape-MarkdownTableCell $cellText)
+
+    if ($currentRow.Count -ge $columnSize) {
+      $rows.Add(@($currentRow))
+      $currentRow = @()
+    }
+  }
+
+  if ($currentRow.Count -gt 0) {
+    while ($currentRow.Count -lt $columnSize) {
+      $currentRow += ''
+    }
+    $rows.Add(@($currentRow))
+  }
+
+  if ($rows.Count -eq 0) {
+    return "[空表格: $tableId]"
+  }
+
+  $tableLines = New-Object 'System.Collections.Generic.List[string]'
+  $header = @($rows[0])
+  while ($header.Count -lt $columnSize) {
+    $header += ''
+  }
+  $tableLines.Add('| ' + ($header -join ' | ') + ' |')
+
+  $separator = @()
+  for ($i = 0; $i -lt $columnSize; $i++) {
+    $separator += '---'
+  }
+  $tableLines.Add('| ' + ($separator -join ' | ') + ' |')
+
+  for ($rowIndex = 1; $rowIndex -lt $rows.Count; $rowIndex++) {
+    $row = @($rows[$rowIndex])
+    while ($row.Count -lt $columnSize) {
+      $row += ''
+    }
+    $tableLines.Add('| ' + ($row -join ' | ') + ' |')
+  }
+
+  return ($tableLines.ToArray() -join "`r`n")
+}
+
 function Convert-DocxBlocksToMarkdown([object[]]$items, [string]$documentId) {
-  # 中文说明：Markdown 只负责“可读展示”，完整格式仍由 JSON 缓存承载。
+  # 中文说明：Markdown 只负责”可读展示”，完整格式仍由 JSON 缓存承载。
   $lines = New-Object 'System.Collections.Generic.List[string]'
   if (-not $items) { return '' }
 
+  $blockById = @{}
+  $consumedIds = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($block in $items) {
+    if ($block -and $block.block_id) {
+      $blockById[[string]$block.block_id] = $block
+    }
+  }
+
   foreach ($item in $items) {
     if (-not $item) { continue }
+    $blockId = [string]$item.block_id
+    if ($blockId -and $consumedIds.Contains($blockId)) { continue }
     $blockType = [int]$item.block_type
     $line = ''
 
@@ -263,7 +472,7 @@ function Convert-DocxBlocksToMarkdown([object[]]$items, [string]$documentId) {
       1 {
         $title = Convert-DocxElementsToMarkdown @($item.page.elements)
         if ($title) {
-          $lines.Add("# $title")
+          $lines.Add(“# $title”)
           $lines.Add('')
         }
         continue
@@ -296,14 +505,21 @@ function Convert-DocxBlocksToMarkdown([object[]]$items, [string]$documentId) {
           $isDone = [bool]$item.todo.style.done
         }
         $mark = if ($isDone) { 'x' } else { ' ' }
-        $line = "- [$mark] $todoText"
+        $line = “- [$mark] $todoText”
       }
       19 { $line = '> [!NOTE] ' + (Convert-DocxElementsToMarkdown @($item.callout.elements)) }
       22 { $line = '---' }
-      23 { $line = "[附件块: $([string]$item.block_id)]" }
-      27 { $line = "[图片块: $([string]$item.block_id)]" }
-      31 { $line = "[表格块: $([string]$item.block_id)]" }
-      default { $line = "[未转换块 type=$blockType id=$([string]$item.block_id)]" }
+      23 { $line = “[附件块: $([string]$item.block_id)]” }
+      27 { $line = “[图片块: $([string]$item.block_id)]” }
+      30 { $line = “电子表格引用：$([string]$item.sheet.token)” }
+      31 { $line = Convert-DocxTableBlockToMarkdown $item $blockById $consumedIds }
+      32 {
+        $null = Convert-DocxBlockSubtreeToMarkdown $blockId $blockById $consumedIds
+        continue
+      }
+      34 { $line = Convert-DocxQuoteContainerToMarkdown $item $blockById $consumedIds }
+      43 { $line = “白板引用：$([string]$item.board.token)” }
+      default { $line = “[未转换块 type=$blockType id=$([string]$item.block_id)]” }
     }
 
     if ($line -ne '') {
