@@ -1,4 +1,4 @@
-﻿{
+{
   "version": "2.0.0",
   "tasks": [
     {
@@ -14,7 +14,7 @@
         "-Quiet"
       ],
       "runOptions": {
-        "runOn": "folderOpen"
+        "runOn": "default"
       },
       "problemMatcher": []
     }
