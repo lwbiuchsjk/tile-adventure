@@ -13,6 +13,7 @@ This folder isolates all files for project-to-Feishu knowledge-base binding.
 - `cache/KB_CACHE.md`: generated cached knowledge bundle (docx blocks rendered to Markdown, with JSON structure sidecar).
 - `cache/`: JSON structure cache files, `KB_CONTEXT.*`, and `cache_index.json`.
 - `Design/`: readable Markdown docs for individual synced documents.
+- `images/`: downloaded images from Feishu docs (when `cache.downloadImages` is enabled).
 
 ## One-time prerequisite
 - You already logged in with `lark-mcp login` for the same appId in `../lark-mcp.config.json`.
@@ -40,3 +41,8 @@ If `_kb_sync/kb.local.json` is missing, the script falls back to `kb.binding.jso
 
 Note: caching is enabled by default (docx blocks). Each cached doc now generates a readable Markdown file and a JSON file that retains the full block structure. Content is refreshed on every run by default (`cache.forceRefresh=true`).
 You can disable caching via `cache.enabled=false`, or keep cache but reuse local files via `cache.forceRefresh=false`.
+
+### Image download
+Set `cache.downloadImages` to `true` to download images from Feishu docs to `_kb_sync/images/`.
+Downloaded images are referenced in the Markdown output as `![图片](../images/{token}.png)`.
+Images are downloaded incrementally — existing files are skipped. The feature uses the Feishu drive media download API (`/open-apis/drive/v1/medias/{file_token}/download`), so the user token must have `drive:drive:readonly` scope.

@@ -12,7 +12,8 @@
                   "indexPath":  "./cache/cache_index.json",
                   "lang":  0,
                   "ttlHours":  24,
-                  "designDir":  "./Design"
+                  "designDir":  "./Design",
+                  "downloadImages":  false
               }
 }
 

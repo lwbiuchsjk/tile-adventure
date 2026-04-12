@@ -167,6 +167,37 @@ function Invoke-FeishuGet([string]$url) {
   throw "Feishu GET retry exhausted: $url"
 }
 
+function Invoke-FeishuDownload([string]$url, [string]$outFile) {
+  # 中文说明：二进制文件下载专用，用于下载飞书图片等媒体资源。
+  # 与 Invoke-FeishuGet 共享 token 刷新逻辑，但使用 -OutFile 保存二进制流。
+  $maxRetry = 1
+  for ($attempt = 0; $attempt -le $maxRetry; $attempt++) {
+    try {
+      Invoke-WebRequest -Method Get -Uri $url -Headers $script:headers -OutFile $outFile -ErrorAction Stop
+      return
+    } catch {
+      $errMsg = [string]$_.Exception.Message
+      $detailMsg = ''
+      if ($_.ErrorDetails) { $detailMsg = [string]$_.ErrorDetails.Message }
+      $statusCode = 0
+      if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+      $isExpired = ($statusCode -eq 401) -or ($errMsg -like '*99991677*') -or ($detailMsg -like '*99991677*')
+      if ($isExpired -and ($attempt -lt $maxRetry)) {
+        LogInfo "Feishu token expired during download. Refreshing token and retrying..."
+        $script:tokenInfo = Ensure-UserToken $script:nodeExe $script:readTokenScript $script:larkRoot $script:appId $script:appSecret $script:domain -ForceRefresh
+        if (-not $script:tokenInfo.ok) {
+          throw "Failed to refresh user token: $($script:tokenInfo.error)"
+        }
+        $script:userToken = $script:tokenInfo.userAccessToken
+        $script:headers = @{ Authorization = "Bearer $($script:userToken)" }
+        continue
+      }
+      throw
+    }
+  }
+  throw "Feishu download retry exhausted: $url"
+}
+
 function Join-Lines([System.Collections.Generic.List[string]]$lines) {
   return (($lines.ToArray()) -join "`r`n")
 }
@@ -313,6 +344,15 @@ function Convert-DocxQuoteContainerToMarkdown(
   return Convert-TextToMarkdownQuote $quoteText
 }
 
+function Resolve-ImageMarkdown([string]$blockId, [object]$block) {
+  # 中文说明：根据 $script:imageMap 判断图片是否已下载到本地，生成对应的 Markdown 引用或占位符。
+  if ($script:imageMap -and $script:imageMap.ContainsKey($blockId)) {
+    $fileName = $script:imageMap[$blockId]
+    return "![图片](../images/$fileName)"
+  }
+  return "[图片块: $blockId]"
+}
+
 function Convert-DocxBlockSubtreeToMarkdown(
   [string]$blockId,
   [hashtable]$blockById,
@@ -359,7 +399,7 @@ function Convert-DocxBlockSubtreeToMarkdown(
     19 { return Convert-DocxElementsToMarkdown @($block.callout.elements) }
     22 { return '---' }
     23 { return "[附件块: $blockId]" }
-    27 { return "[图片块: $blockId]" }
+    27 { return (Resolve-ImageMarkdown $blockId $block) }
     30 { return "电子表格引用：$([string]$block.sheet.token)" }
     31 { return Convert-DocxTableBlockToMarkdown $block $blockById $consumedIds }
     32 { return Get-DocxChildBlocksMarkdown $block $blockById $consumedIds }
@@ -510,7 +550,7 @@ function Convert-DocxBlocksToMarkdown([object[]]$items, [string]$documentId) {
       19 { $line = '> [!NOTE] ' + (Convert-DocxElementsToMarkdown @($item.callout.elements)) }
       22 { $line = '---' }
       23 { $line = “[附件块: $([string]$item.block_id)]” }
-      27 { $line = “[图片块: $([string]$item.block_id)]” }
+      27 { $line = (Resolve-ImageMarkdown ([string]$item.block_id) $item) }
       30 { $line = “电子表格引用：$([string]$item.sheet.token)” }
       31 { $line = Convert-DocxTableBlockToMarkdown $item $blockById $consumedIds }
       32 {
@@ -555,6 +595,55 @@ function Fetch-DocxBlocks([string]$domain, [string]$documentId) {
   }
 
   return ,$items
+}
+
+function Download-DocxImages([object[]]$blocks, [string]$domain, [string]$imageDir) {
+  # 中文说明：从文档块列表中提取所有图片块（block_type=27），将图片下载到本地目录。
+  # 返回一个 hashtable，key 为 block_id，value 为本地相对路径（相对于 Design 目录）。
+  $imageMap = @{}
+  if (-not $blocks) { return $imageMap }
+
+  New-Item -ItemType Directory -Path $imageDir -Force | Out-Null
+
+  foreach ($block in $blocks) {
+    if (-not $block) { continue }
+    $blockType = [int]$block.block_type
+    if ($blockType -ne 27) { continue }
+
+    $blockId = [string]$block.block_id
+    $imageToken = ''
+    if ($block.image -and $block.image.token) {
+      $imageToken = [string]$block.image.token
+    }
+    if (-not $imageToken) {
+      LogInfo "  [warn] 图片块 $blockId 缺少 image.token，跳过"
+      continue
+    }
+
+    # 中文说明：文件名使用 image_token，保证唯一性；默认保存为 png（飞书图片通常为 png/jpg）。
+    $ext = '.png'
+    $fileName = "$imageToken$ext"
+    $localPath = Join-Path $imageDir $fileName
+
+    if (Test-Path $localPath) {
+      # 中文说明：图片已存在则跳过下载，实现增量同步。
+      $imageMap[$blockId] = $fileName
+      continue
+    }
+
+    try {
+      $downloadUrl = "$domain/open-apis/drive/v1/medias/$imageToken/download"
+      LogInfo "  下载图片: $imageToken -> $fileName"
+      Invoke-FeishuDownload $downloadUrl $localPath
+      $imageMap[$blockId] = $fileName
+    } catch {
+      LogInfo "  [warn] 图片下载失败 ($imageToken): $($_.Exception.Message)"
+      # 中文说明：下载失败时清理可能产生的空文件，Markdown 中仍保留占位符。
+      if (Test-Path $localPath) { Remove-Item $localPath -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  return $imageMap
 }
 
 function Normalize-DocLang([object]$v) {
@@ -762,6 +851,7 @@ $cacheTtlHours = 24
 $cacheForceRefresh = $true
 $includeNodeTokens = @()
 $cacheAllNodes = $true
+$downloadImages = $false
 
 $cacheEnabled = [bool](Get-CfgCache 'enabled' $cacheEnabled)
 $cacheDir = Resolve-RelPath $scriptDir ([string](Get-CfgCache 'dir' $cacheDir))
@@ -773,9 +863,11 @@ $cacheTtlHours = [int](Get-CfgCache 'ttlHours' $cacheTtlHours)
 $cacheForceRefresh = [bool](Get-CfgCache 'forceRefresh' $cacheForceRefresh)
 $includeNodeTokens = @(Get-CfgArr 'includeNodeTokens')
 $cacheAllNodes = [bool](Get-CfgCache 'allNodes' $cacheAllNodes)
+$downloadImages = [bool](Get-CfgCache 'downloadImages' $downloadImages)
 
 $cacheMdPath = Join-Path $cacheDir 'KB_CONTEXT.md'
 $cacheJsonPath = Join-Path $cacheDir 'KB_CONTEXT.json'
+$imageDir = Join-Path $scriptDir 'images'
 New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
 New-Item -ItemType Directory -Path $designDir -Force | Out-Null
 
@@ -877,11 +969,30 @@ if ($cacheEnabled) {
       }
       $jsonPayload | ConvertTo-Json -Depth 12 | Set-Content -Path $cacheFileJson -Encoding UTF8
 
+      # 中文说明：如果开启了图片下载，先下载图片再生成 Markdown，确保引用路径正确。
+      $script:imageMap = @{}
+      if ($downloadImages) {
+        $script:imageMap = Download-DocxImages @($docBlocks) $domain $imageDir
+      }
+
       # 中文说明：Markdown 只做阅读友好缓存，方便代理和人工快速查看。
       $markdown = Convert-DocxBlocksToMarkdown @($docBlocks) $docId
       Set-Content -Path $cacheFileMd -Value $markdown -Encoding UTF8
     } else {
       LogInfo "Cache hit: $($n.title) ($docId)"
+
+      # 中文说明：即使命中缓存，也检查是否需要补下载图片（首次开启 downloadImages 的场景）。
+      if ($downloadImages) {
+        $cachedJson = Get-Content -Raw $cacheFileJson | ConvertFrom-Json
+        $cachedBlocks = @()
+        if ($cachedJson -and $cachedJson.items) { $cachedBlocks = @($cachedJson.items) }
+        $script:imageMap = Download-DocxImages $cachedBlocks $domain $imageDir
+        # 中文说明：如果有新图片下载成功，需要重新生成 Markdown 以更新图片引用。
+        if ($script:imageMap.Count -gt 0) {
+          $markdown = Convert-DocxBlocksToMarkdown $cachedBlocks $docId
+          Set-Content -Path $cacheFileMd -Value $markdown -Encoding UTF8
+        }
+      }
     }
 
     $fiMd = Get-Item $cacheFileMd
