@@ -12,10 +12,9 @@ Godot 4.6，GDScript，Git 版本控制
 - scripts/      脚本文件
 - assets/       资源文件（图片、音效等）
 - test/         测试文件
-- Design/       本地设计文件。创建文档时优先放在这里。该目录被 .gitignore 忽略，不纳入 git 提交
-- _kb_sync/     本地在线知识库缓存功能。更新知识库中通常使用本路径下的方法
-- _kb_sync/cache/KB_CACHE.md   在线知识库缓存主入口。这里可以看到所有在线知识库的缓存。
-- _kb_sync/Design/              在线知识库缓存的单个md文件。查询文件指定文件时，可以优先在这里查找文件。
+- tile-advanture-design/        设计文档 Git submodule（远端私有仓库）。新增文档放在这里。其中 `attachments/` 存放图片等大文件，被 `.gitignore` 忽略不入 git，通过坚果云完整同步保证多端可用。
+- _kb_sync/     在线知识库同步工具目录（访问规则见"工作流程"）
+- _kb_sync/images/              飞书文档中下载的图片缓存（需在 kb.local.json 中设置 `cache.downloadImages: true`）
 
 # 开发规范
 
@@ -39,17 +38,46 @@ Godot 4.6，GDScript，Git 版本控制
 
 ## 工作流程
 
+- **`_kb_sync/` 访问规则**：设计文档只从 `tile-advanture-design/` 读取。`_kb_sync/` 整个目录（含 `cache/`、`Design/` 等子目录）默认不读取，仅当用户明确要求执行知识库同步或排查同步问题时才允许进入。
 - 更新知识库时，默认使用 `_kb_sync/kb_bootstrap.ps1`。
-- 如需查看单篇在线文档的独立内容与格式信息，优先读取 `_kb_sync/Design` 下对应的 `.md` 文件。
-- 如需查看知识库节点概览、索引和结构化缓存，使用 `_kb_sync/cache/KB_CONTEXT.md`、`_kb_sync/cache/KB_CONTEXT.json` 与 `_kb_sync/cache/cache_index.json`。
-- 新增文档应当放在 `Design` 目录下。
+- 新增文档应当放在 `tile-advanture-design/` 目录下。
 - 代码改动按规模分两类：**小改动**（单文件内的局部修正、参数调整、简单 bug fix）可直接执行；**大改动**（跨系统、涉及新功能、架构调整）须先向用户说明方案，等明确确认后再执行。
-- 大功能开发遵循"设计先行"流程：先在 Design/ 撰写 MVP 设计文档，讨论确认后再实现。落盘文档（创建或修改 .md 文件）必须等用户明确确认，不得在讨论未充分达成一致时自行写入。实现完成后，主动询问用户是否需要将新增的边界处理、优化点同步回文档。
+- 大功能开发遵循"设计先行"流程：先在 `tile-advanture-design/` 撰写 MVP 设计文档，讨论确认后再实现。落盘文档（创建或修改 .md 文件）必须等用户明确确认，不得在讨论未充分达成一致时自行写入。实现完成后，主动询问用户是否需要将新增的边界处理、优化点同步回文档。
 - 功能实现完成后，使用 Agent 工具（subagent_type=codex:codex-rescue）触发代码审查。Review 结果翻译为中文后呈现给用户，由用户判定哪些需修复、哪些属于设计意图可忽略，不自行决定忽略 P1/P2 级别问题。
+
+## 提交流程
+
+**未经用户明确要求，禁止执行 `git commit` 或 `git push`。** 只有当用户明确要求提交或推送时，才可以执行。
+
+当用户要求提交时，根据改动类型决定是否需要审查：
+
+- **需要审查**（feat/fix/refactor 等影响运行时行为的代码改动）：
+  1. 先执行代码审查，将审查结果翻译为中文展示。
+  2. 与用户讨论审查意见，必要时修复后再提交。
+  3. 总结改动要点，创建提交并推送。
+- **可跳过审查**（`.gitignore`、文档、纯配置文件等不影响运行时行为的改动）：直接总结改动要点，创建提交并推送。
+
+提交信息使用中文，格式参照 `feat:/fix:/chore:` 前缀。
+
+### 设计文档提交（两步提交）
+
+`tile-advanture-design/` 是独立的 Git submodule（私有仓库），提交时需要两步：
+
+1. **先提交 submodule 内部**：
+   ```bash
+   cd tile-advanture-design/
+   git add -A && git commit -m "docs: ..." && git push
+   ```
+2. **再更新主项目的 submodule 指针**：
+   ```bash
+   cd ..
+   git add tile-advanture-design && git commit -m "chore: 更新 design submodule 指针" && git push
+   ```
+
+当改动同时涉及代码和文档时，两步提交可合并在主项目提交流程中一起完成。
 
 ## 测试流程
 
 - 本项目 Godot 统一通过 `tools/run_godot.ps1` 调用，不要假设系统 PATH 中存在 `godot`。
 
 # 当前进度
-<!-- 例：已完成主菜单，正在开发玩家移动系统 -->
