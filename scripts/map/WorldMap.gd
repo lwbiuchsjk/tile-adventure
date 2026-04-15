@@ -1643,14 +1643,18 @@ func _draw_tile(x: int, y: int) -> void:
 			TILE_SIZE - SLOT_MARGIN * 2 - 1,
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
-		draw_rect(slot_rect, slot_color)
+		# 敌方关卡用菱形绘制，其他 Slot 保持矩形
+		if is_enemy:
+			_draw_diamond(slot_rect, slot_color)
+		else:
+			draw_rect(slot_rect, slot_color)
 
-		# 敌方关卡：加描边 + 文字（仅活跃状态显示文字）
+		# 敌方关卡：加菱形描边 + 文字（仅活跃状态显示文字）
 		if is_enemy:
 			var border_color: Color = REPELLED_BORDER_COLOR
 			if not is_repelled and not level.is_defeated():
 				border_color = TIER_BORDER_COLORS.get(level.tier, ENEMY_BORDER_COLOR) as Color
-			draw_rect(slot_rect, border_color, false, 1.5)
+			_draw_diamond(slot_rect, border_color, false, 1.5)
 			# 活跃状态叠加强度文字标注（敌·弱 / 敌·中 / 敌·强 / 敌·超）
 			if _label_font != null and not level.is_defeated() and not is_repelled:
 				var tier_labels: Array[String] = ["敌·弱", "敌·中", "敌·强", "敌·超"]
@@ -1760,7 +1764,7 @@ func _draw_resource_slots() -> void:
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
 func _draw_enemy_move_marker() -> void:
 	var enemy_vis_pos: Vector2 = _enemy_movement.get_visual_pos()
-	# 外圈光晕（比标记更大，半透明）
+	# 外圈光晕菱形（比标记更大，半透明）
 	var glow_margin: int = 2
 	var glow_rect: Rect2 = Rect2(
 		enemy_vis_pos.x - TILE_SIZE / 2 + glow_margin,
@@ -1768,17 +1772,42 @@ func _draw_enemy_move_marker() -> void:
 		TILE_SIZE - glow_margin * 2 - 1,
 		TILE_SIZE - glow_margin * 2 - 1
 	)
-	draw_rect(glow_rect, ENEMY_GLOW_COLOR)
-	# 核心标记（标准大小，亮红橙色）
+	_draw_diamond(glow_rect, ENEMY_GLOW_COLOR)
+	# 核心菱形标记（标准大小，亮红橙色）
 	var rect: Rect2 = Rect2(
 		enemy_vis_pos.x - TILE_SIZE / 2 + SLOT_MARGIN,
 		enemy_vis_pos.y - TILE_SIZE / 2 + SLOT_MARGIN,
 		TILE_SIZE - SLOT_MARGIN * 2 - 1,
 		TILE_SIZE - SLOT_MARGIN * 2 - 1
 	)
-	draw_rect(rect, ENEMY_MOVE_COLOR)
-	# 边框描边
-	draw_rect(rect, ENEMY_BORDER_COLOR, false, 1.0)
+	_draw_diamond(rect, ENEMY_MOVE_COLOR)
+	# 菱形边框描边
+	_draw_diamond(rect, ENEMY_BORDER_COLOR, false, 1.0)
+
+## 绘制菱形（以 Rect2 区域的中心为菱形中心，四个顶点取矩形边中点）
+## filled=true 时填充，filled=false 时仅描边
+func _draw_diamond(rect: Rect2, color: Color, filled: bool = true, width: float = 1.0) -> void:
+	# 防御退化矩形：尺寸为零时菱形顶点重合，跳过绘制
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return
+	var cx: float = rect.position.x + rect.size.x / 2.0
+	var cy: float = rect.position.y + rect.size.y / 2.0
+	var hw: float = rect.size.x / 2.0  # 水平半宽
+	var hh: float = rect.size.y / 2.0  # 垂直半高
+	# 四个顶点：上、右、下、左
+	var points: PackedVector2Array = PackedVector2Array([
+		Vector2(cx, cy - hh),       # 上
+		Vector2(cx + hw, cy),       # 右
+		Vector2(cx, cy + hh),       # 下
+		Vector2(cx - hw, cy),       # 左
+	])
+	if filled:
+		draw_colored_polygon(points, color)
+	else:
+		# 描边：绘制闭合折线
+		var outline: PackedVector2Array = points
+		outline.append(points[0])
+		draw_polyline(outline, color, width)
 
 ## 在指定像素中心绘制居中文字标签
 ## center_px: 格的像素中心坐标；使用字体 ascent/descent 精确计算垂直基线位置
