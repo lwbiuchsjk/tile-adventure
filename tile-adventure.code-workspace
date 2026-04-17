@@ -8,5 +8,7 @@
 			"path": "tile-advanture-design"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"godotTools.lsp.serverPort": 6200
+	}
 }
