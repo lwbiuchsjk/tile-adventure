@@ -17,3 +17,7 @@ Godot 4.6，GDScript，Git 版本控制
 - _kb_sync/images/              飞书文档中下载的图片缓存（需在 kb.local.json 中设置 `cache.downloadImages: true`）
 
 # 当前进度
+
+## 进行中
+
+- [单局养成框架设计讨论](tile-advanture-design/单局养成框架设计讨论.md) — 养成框架对齐，三主锚（城建/身份/地缘）已确立，地缘待展开
