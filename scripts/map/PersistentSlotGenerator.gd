@@ -62,6 +62,11 @@ class GenConfig:
 	## 八阶段流水线最大重试次数（连续失败时放宽参数）
 	var max_retries: int = 5
 
+	## 每方开局归属下限（设计 §3.2 三桶下限；双方共享同一套配置）
+	## 修改时注意保持总量平衡：双方 town_quota * 2 ≤ town_count，village 同理
+	var faction_town_quota: int = 2
+	var faction_village_quota: int = 6
+
 
 # ─────────────────────────────────────────
 # 公共入口
@@ -76,6 +81,15 @@ static func generate(schema: MapSchema, config: GenConfig) -> Array[PersistentSl
 		push_error("PersistentSlotGenerator: schema 为 null")
 		var empty_null: Array[PersistentSlot] = []
 		return empty_null
+
+	# 入口配置自检：在跑流水线之前提早暴露非法参数，避免静默重试至 max_retries 才报错
+	# 失败时返回空数组，调用方按"生成失败"处理（MapGenerator 会换 seed 重试整图，但
+	# 配置错误重试无意义；本函数只一次 push_error，重试日志由 MapGenerator 自身打印）
+	var config_error: String = _validate_config(config)
+	if not config_error.is_empty():
+		push_error("PersistentSlotGenerator: 配置非法 → " + config_error)
+		var empty_cfg: Array[PersistentSlot] = []
+		return empty_cfg
 
 	# 创建独立 RNG，注入 seed，保证同 seed 同地图
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -333,9 +347,9 @@ static func _paint_minimum(
 ) -> void:
 	# 势力轮询顺序（接口可改；MVP 玩家先手）
 	var faction_order: Array[int] = [Faction.PLAYER, Faction.ENEMY_1]
-	# 每势力每类型下限
-	var town_quota_per_faction: int = 2
-	var village_quota_per_faction: int = 6
+	# 每势力每类型下限（由 config 注入，双方共享同一套；设计 §3.2）
+	var town_quota_per_faction: int = config.faction_town_quota
+	var village_quota_per_faction: int = config.faction_village_quota
 	# 势力 → {TOWN: 已染数, VILLAGE: 已染数}
 	var painted: Dictionary = {}
 	for fid in faction_order:
@@ -519,7 +533,7 @@ static func _validate(
 	if enemy_core_pos.x < (config.width - 1 - quarter_w) or enemy_core_pos.y < (config.height - 1 - quarter_h):
 		return false
 
-	# 三桶下限
+	# 三桶下限（双方共享 config.faction_*_quota）
 	for fid in [Faction.PLAYER, Faction.ENEMY_1]:
 		var fid_int: int = fid as int
 		var town_owned: int = 0
@@ -530,8 +544,8 @@ static func _validate(
 			match s.type:
 				PersistentSlot.Type.TOWN:    town_owned += 1
 				PersistentSlot.Type.VILLAGE: village_owned += 1
-		if town_owned < 2: return false
-		if village_owned < 6: return false
+		if town_owned < config.faction_town_quota: return false
+		if village_owned < config.faction_village_quota: return false
 
 	# 间距校验
 	for i in range(slots.size()):
@@ -551,6 +565,89 @@ static func _validate(
 				return false
 
 	return true
+
+
+# ─────────────────────────────────────────
+# 配置自检（入口提早暴露非法参数）
+# ─────────────────────────────────────────
+
+## 入口配置自检：返回空字符串表示通过；返回非空字符串作为人类可读的错误描述
+##
+## 检查项分四类：
+##   1. 基础几何：地图尺寸 / 总数 / 类型计数为正
+##   2. 配比一致：core + town + village == total
+##   3. 容量约束：双方下限 ≤ 各类型总数（否则染色阶段必然耗尽候选）
+##   4. 算法参数：min_dist / field_radius / core_zone / emerge_steps 处于合法范围
+##
+## 错误信息格式：「字段名=当前值」+ 期望条件 + 修复建议（指出 map_config.csv 对应键）
+static func _validate_config(config: GenConfig) -> String:
+	# 1. 基础几何
+	if config.width <= 0 or config.height <= 0:
+		return "地图尺寸非法 width=%d / height=%d；期望 > 0（map_config: map_width / map_height）" % [
+			config.width, config.height
+		]
+	if config.total_count <= 0:
+		return "持久 slot 总数非法 total_count=%d；期望 > 0（map_config: persistent_total_count）" % config.total_count
+	if config.core_count < 0 or config.town_count < 0 or config.village_count < 0:
+		return "持久 slot 类型计数不能为负 core=%d town=%d village=%d（map_config: persistent_core_count / persistent_town_count / persistent_village_count）" % [
+			config.core_count, config.town_count, config.village_count
+		]
+
+	# 2. 配比一致性
+	var sum_by_type: int = config.core_count + config.town_count + config.village_count
+	if sum_by_type != config.total_count:
+		return "类型配比与总数不一致：core(%d)+town(%d)+village(%d)=%d ≠ total_count(%d)；请改 map_config.csv 让二者相等" % [
+			config.core_count, config.town_count, config.village_count,
+			sum_by_type, config.total_count
+		]
+
+	# 3. 容量约束（双方下限 * 2 ≤ 各类型总数）
+	# 核心：MVP 两方对峙写死要求 core_count == 2（每方 1 个）
+	if config.core_count != 2:
+		return "核心数 core_count=%d；MVP 两方对峙仅支持 core_count=2（map_config: persistent_core_count）；扩展 N 方需同步改 _place_core_towns" % config.core_count
+	# 城镇下限
+	var min_required_towns: int = config.faction_town_quota * 2
+	if min_required_towns > config.town_count:
+		return "城镇下限超出总量：双方各 %d = %d > town_count(%d)；改小 persistent_faction_town_quota 或加大 persistent_town_count" % [
+			config.faction_town_quota, min_required_towns, config.town_count
+		]
+	# 村庄下限
+	var min_required_villages: int = config.faction_village_quota * 2
+	if min_required_villages > config.village_count:
+		return "村庄下限超出总量：双方各 %d = %d > village_count(%d)；改小 persistent_faction_village_quota 或加大 persistent_village_count" % [
+			config.faction_village_quota, min_required_villages, config.village_count
+		]
+	# 下限不能为负（0 表示该类型不强制染色，合法）
+	if config.faction_town_quota < 0 or config.faction_village_quota < 0:
+		return "下限不能为负：persistent_faction_town_quota=%d / persistent_faction_village_quota=%d" % [
+			config.faction_town_quota, config.faction_village_quota
+		]
+
+	# 4. 算法参数
+	if config.min_dist_normal < 1:
+		return "普通 slot 最小间距 min_dist_normal=%d 非法；期望 ≥ 1（map_config: persistent_min_dist_normal）" % config.min_dist_normal
+	if config.min_dist_core < 1:
+		return "核心 slot 最小间距 min_dist_core=%d 非法；期望 ≥ 1（map_config: persistent_min_dist_core）" % config.min_dist_core
+	if config.field_radius <= 0:
+		return "势力场半径 field_radius=%d 非法；期望 > 0（map_config: persistent_field_radius）" % config.field_radius
+	if config.emerge_steps < 0:
+		return "涌现步数 emerge_steps=%d 非法；期望 ≥ 0（map_config: persistent_emerge_steps）" % config.emerge_steps
+	if config.core_zone_min < 0.0 or config.core_zone_max <= 0.0 or config.core_zone_min >= config.core_zone_max:
+		return "核心采样区间非法 core_zone_min=%.3f / core_zone_max=%.3f；期望 0 ≤ min < max ≤ 0.5（map_config: persistent_core_zone_min / persistent_core_zone_max）" % [
+			config.core_zone_min, config.core_zone_max
+		]
+	if config.max_retries < 1:
+		return "最大重试次数 max_retries=%d 非法；期望 ≥ 1（map_config: persistent_max_retries）" % config.max_retries
+
+	# 容量软警告：核心 + 双方下限合计接近 total_count → 中立桶被挤压，涌现染色无空间
+	# 不视为 fatal，仅 push_warning 提示
+	var total_locked: int = config.core_count + min_required_towns + min_required_villages
+	if total_locked > config.total_count:
+		return "下限与核心合计 %d > total_count(%d)；中立桶为负，染色无解" % [total_locked, config.total_count]
+	if total_locked == config.total_count:
+		push_warning("PersistentSlotGenerator: 下限与核心合计 %d == total_count；中立桶为 0，涌现染色无候选可用" % total_locked)
+
+	return ""
 
 
 # ─────────────────────────────────────────

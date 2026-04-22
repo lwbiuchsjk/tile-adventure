@@ -31,3 +31,5 @@ persistent_field_radius,20
 persistent_core_zone_min,0.125
 persistent_core_zone_max,0.25
 persistent_max_retries,5
+persistent_faction_town_quota,2
+persistent_faction_village_quota,6
