@@ -252,6 +252,11 @@ func _on_move_finished() -> void:
 	var dist: int = absi(level_pos.x - _player_pos.x) + absi(level_pos.y - _player_pos.y)
 	var adjacent: bool = dist == 1
 
+	# M4: 敌方单位停留后，若该格有持久 slot 则尝试占据（对称玩家逻辑）
+	# 顺序：先占据 → 再判断是否触发强制战斗；即便后续敌方在强制战斗中被击败，
+	# 占据已发生，slot 归属保持 ENEMY_1 直到玩家走过去翻转
+	_try_enemy_occupy_at(level_pos)
+
 	_moving_level = null
 	redraw_requested.emit()
 
@@ -273,3 +278,18 @@ func _finish_phase_internal() -> void:
 	_moving_level = null
 	_move_queue = []
 	phase_finished.emit()
+
+
+## M4: 敌方单位在 pos 尝试占据持久 slot
+## 成功翻转则触发重绘（影响范围覆盖即时刷新）
+## 注：_schema.persistent_slots 由 WorldMap 初始化时填充；_schema 在 start_phase 时注入
+func _try_enemy_occupy_at(pos: Vector2i) -> void:
+	if _schema == null:
+		return
+	for entry in _schema.persistent_slots:
+		var ps: PersistentSlot = entry as PersistentSlot
+		if ps.position != pos:
+			continue
+		if OccupationSystem.try_occupy(ps, Faction.ENEMY_1):
+			redraw_requested.emit()
+		return
