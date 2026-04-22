@@ -37,31 +37,96 @@ class GenerateConfig:
 	## 格式：{ TerrainType(int) : float }
 	var terrain_costs: Dictionary = {}
 
+	# —— M2 持久 slot 生成参数（从 map_config.csv 加载）——
+	## 是否启用持久 slot 生成；MVP 默认开
+	var generate_persistent_slots: bool = true
+	## 与 PersistentSlotGenerator.GenConfig 字段一一对应
+	var persistent_total_count: int = 26
+	var persistent_core_count: int = 2
+	var persistent_town_count: int = 6
+	var persistent_village_count: int = 18
+	var persistent_min_dist_normal: int = 3
+	var persistent_min_dist_core: int = 5
+	var persistent_emerge_steps: int = 3
+	var persistent_field_radius: int = 20
+	var persistent_core_zone_min: float = 0.125
+	var persistent_core_zone_max: float = 0.25
+	var persistent_max_retries: int = 5
+
 # ─────────────────────────────────────────
 # 公共接口
 # ─────────────────────────────────────────
 
-## 生成地图。返回通过通达性校验的 MapSchema；超出重试次数则返回 null。
+## 生成地图。返回通过通达性 + 持久 slot 校验的 MapSchema；超出重试次数返回 null。
+## M2：通达校验后追加持久 slot 八阶段流水线，失败时换 seed 重试整张地图
 static func generate(config: GenerateConfig) -> MapSchema:
 	var retry_seed: int = config.seed
 
 	for i in range(config.max_retries):
 		var schema: MapSchema = _generate_once(config, retry_seed)
-		if _validate_connectivity(schema, config.start, config.end):
-			return schema
-		# 通达性校验失败，递增种子后重试
-		retry_seed += 1
-		push_warning("MapGenerator: 通达性校验失败，第 %d 次重试（seed=%d）" % [i + 1, retry_seed])
+		if not _validate_connectivity(schema, config.start, config.end):
+			# 通达性校验失败，递增种子后重试
+			retry_seed += 1
+			push_warning("MapGenerator: 通达性校验失败，第 %d 次重试（seed=%d）" % [i + 1, retry_seed])
+			continue
 
-	push_error("MapGenerator: 超出最大重试次数（%d），无法生成通达地图" % config.max_retries)
+		# M2 接入：持久 slot 生成失败也应换 seed 重试整张地图，避免"无城建锚地图"静默通过
+		if config.generate_persistent_slots:
+			if not _attach_persistent_slots(schema, config, retry_seed):
+				retry_seed += 1
+				push_warning("MapGenerator: 持久 slot 生成失败，第 %d 次重试整图（seed=%d）" % [i + 1, retry_seed])
+				continue
+
+		return schema
+
+	push_error("MapGenerator: 超出最大重试次数（%d），无法生成合规地图" % config.max_retries)
 	return null
+
+
+## M2：把 GenerateConfig 中的持久 slot 参数转交给 PersistentSlotGenerator
+## 返回 true = 成功（schema.persistent_slots 已填充并通过校验）；false = 失败（调用方应换 seed 重试）
+## seed 与地形 seed 同源，保证同 seed 同地图（含 slot 分布）
+static func _attach_persistent_slots(
+	schema: MapSchema,
+	config: GenerateConfig,
+	use_seed: int
+) -> bool:
+	var pcfg: PersistentSlotGenerator.GenConfig = PersistentSlotGenerator.GenConfig.new()
+	pcfg.width = config.width
+	pcfg.height = config.height
+	pcfg.seed = use_seed
+	pcfg.total_count = config.persistent_total_count
+	pcfg.core_count = config.persistent_core_count
+	pcfg.town_count = config.persistent_town_count
+	pcfg.village_count = config.persistent_village_count
+	pcfg.min_dist_normal = config.persistent_min_dist_normal
+	pcfg.min_dist_core = config.persistent_min_dist_core
+	pcfg.emerge_steps = config.persistent_emerge_steps
+	pcfg.field_radius = config.persistent_field_radius
+	pcfg.core_zone_min = config.persistent_core_zone_min
+	pcfg.core_zone_max = config.persistent_core_zone_max
+	pcfg.max_retries = config.persistent_max_retries
+
+	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, pcfg)
+	# 失败语义：generate() 内部超过 max_retries 时返回空数组
+	if slots.is_empty():
+		schema.persistent_slots = []
+		return false
+	schema.persistent_slots = slots
+	return true
 
 ## 在已生成的地图上随机放置关卡 Slot（FUNCTION 类型）
 ## schema: 目标地图
 ## count: 最大放置数量
 ## exclude: 需要排除的坐标列表（如起点、终点）
+## rng:    可选的注入 RNG；传 null 时退化为全局 RNG（保留旧调用兼容，但破坏 seed 复现）
 ## 返回实际放置的坐标列表
-static func place_level_slots(schema: MapSchema, count: int, exclude: Array[Vector2i]) -> Array[Vector2i]:
+static func place_level_slots(
+	schema: MapSchema,
+	count: int,
+	exclude: Array[Vector2i],
+	rng: RandomNumberGenerator = null
+) -> Array[Vector2i]:
 	# 收集所有可通行且不在排除列表中的格子
 	var candidates: Array[Vector2i] = []
 	for y in range(schema.height):
@@ -78,7 +143,11 @@ static func place_level_slots(schema: MapSchema, count: int, exclude: Array[Vect
 			candidates.append(pos)
 
 	# 随机打乱候选列表
-	candidates.shuffle()
+	# 注入 RNG 走 Fisher-Yates 保证 seed 贯穿；未注入则退化全局 RNG（兼容旧调用方）
+	if rng != null:
+		_shuffle_with_rng(candidates, rng)
+	else:
+		candidates.shuffle()
 
 	# 取前 count 个，放置 FUNCTION 类型 Slot
 	var placed: Array[Vector2i] = []
@@ -165,3 +234,18 @@ static func _validate_connectivity(schema: MapSchema, start: Vector2i, end: Vect
 			queue.append(neighbor)
 
 	return false
+
+
+# ─────────────────────────────────────────
+# 内部工具：注入 RNG 的 Fisher-Yates 洗牌
+# ─────────────────────────────────────────
+
+## 与 PersistentSlotGenerator._shuffle_with_rng 等价；保留独立副本避免跨模块依赖
+## 用途：place_level_slots 等需要 seed 复现的随机洗牌点
+static func _shuffle_with_rng(arr: Array[Vector2i], rng: RandomNumberGenerator) -> void:
+	for i in range(arr.size() - 1, 0, -1):
+		var j: int = rng.randi_range(0, i)
+		if j != i:
+			var tmp: Vector2i = arr[i]
+			arr[i] = arr[j]
+			arr[j] = tmp

@@ -45,6 +45,12 @@ var terrain_costs: Dictionary = {}
 ## 格式：{ SlotType(int) : Array[TerrainType(int)] }
 var slot_allowed_terrains: Dictionary = {}
 
+## 持久 slot 列表（M2 新增）
+## 与 slot_grid 解耦：slot_grid 是格子层的占位标记（NONE/RESOURCE/...），
+## persistent_slots 是实体层（村庄/城镇/核心 + 归属 + 等级 + 影响范围）
+## 由 PersistentSlotGenerator 在地形生成完成后填充；MVP 一局一次性生成
+var persistent_slots: Array[PersistentSlot] = []
+
 # ─────────────────────────────────────────
 # 初始化
 # ─────────────────────────────────────────

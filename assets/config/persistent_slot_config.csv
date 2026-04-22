@@ -1,0 +1,10 @@
+type,level,initial_range,max_range,growth_rate,upgrade_stone_cost,upgrade_turns,output_table_key
+0,0,1,1,0,2,1,
+0,1,1,2,1,3,1,village_l1
+0,2,2,2,1,4,1,village_l2
+0,3,2,3,1,0,0,village_l3
+1,0,2,2,0,4,1,
+1,1,2,3,1,6,1,town_l1
+1,2,3,3,1,8,1,town_l2
+1,3,3,4,2,0,0,town_l3
+2,3,3,4,2,0,0,core_town_l3
