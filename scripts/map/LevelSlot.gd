@@ -8,9 +8,11 @@ extends RefCounted
 ## 每个关卡携带 1~N 支敌方部队，战斗结算时参与伤害计算。
 
 ## 关卡状态
+## ⚠ M1 重构（2026-04-22）：CHALLENGED 枚举值保留作向后兼容，
+## 新模式下不再写入（敌方 AI §4.3）。新代码统一使用 DEFEATED 表达"已击败"。
 enum State {
 	UNCHALLENGED = 0,  ## 未挑战
-	CHALLENGED   = 1,  ## 已挑战（兼容旧逻辑，等同 DEFEATED）
+	CHALLENGED   = 1,  ## 已挑战（旧值，新代码不再写入；is_defeated() 仍兼容判断）
 	REPELLED     = 2,  ## 已击退，冷却中
 	DEFEATED     = 3,  ## 已击败
 }
@@ -38,6 +40,24 @@ var cooldown_turns: int = 0
 
 ## 预留：敌方角色（当前为 null，后续支持敌方角色）
 var character = null
+
+# ─────────────────────────────────────────
+# M1 新增字段（敌方 AI §4.2 / 城建锚 §三）
+# ─────────────────────────────────────────
+
+## 归属势力 ID（Faction.NONE / PLAYER / ENEMY_1 ...）
+## 默认 NONE 中立；M2 地图生成 / M7 敌方 AI 创建敌方部队时写入
+var faction: int = Faction.NONE
+
+## 本回合剩余移动力（M3 回合开始时按部队最大移动力重置；M7 移动消耗）
+var remaining_movement: int = 0
+
+## 本回合是否已移动（M7 用于跳过已移动单位的决策）
+var has_moved_this_turn: bool = false
+
+## AI 决策缓存（M7 写入，键值由 M7 定义；MVP 先空字典占位）
+## 用途示例：缓存当前 A* 路径、当前目标 slot、上一回合行动类型等
+var ai_cache: Dictionary = {}
 
 ## 判断是否已挑战（兼容旧接口，CHALLENGED/DEFEATED/REPELLED 均视为已挑战）
 func is_challenged() -> bool:

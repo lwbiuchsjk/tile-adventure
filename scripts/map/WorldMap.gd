@@ -106,13 +106,10 @@ const TIER_BORDER_COLORS: Dictionary = {
 const RESOURCE_SUPPLY_COLOR: Color = Color(0.80, 0.27, 0.53)   ## 补给：品红  #CC4488（规避蓝绿色地形）
 const RESOURCE_HP_COLOR: Color = Color(0.88, 0.47, 0.19)       ## 兵力：橙色  #E07830（规避绿色地形）
 const RESOURCE_EXP_COLOR: Color = Color(0.60, 0.40, 0.80)      ## 经验：紫色  #9966CC（规避蓝色地形）
-
-## 持久资源点底色（统一金色，文字附★后缀）
-const RESOURCE_PERSISTENT_COLOR: Color = Color(1.0, 0.85, 0.0) ## 金色  #FFD900
-
-## 持久资源有效范围叠加色（10% 透明金色）
-const RESOURCE_RANGE_COLOR: Color = Color(1.0, 0.85, 0.0, 0.15)       ## 范围填充：金色 15% alpha
-const RESOURCE_RANGE_BORDER_COLOR: Color = Color(1.0, 0.85, 0.0, 0.80) ## 范围边界轮廓：金色 80% alpha
+const RESOURCE_STONE_COLOR: Color = Color(0.55, 0.55, 0.60)    ## 石料：灰岩  #8C8C99（规避资源色相冲突）
+# 注：M1 重构后 ResourceSlot 仅承载一次性产出，原"持久金色 + 范围金光叠加"
+# 颜色常量随 _draw_persistent_resource_ranges() 一并移除；
+# 持久 slot 视觉与影响范围渲染由 M2 地图生成 + M4 影响范围接入新 PersistentSlot 通道。
 
 ## 敌方关卡移动时的高亮颜色（亮红橙）
 const ENEMY_MOVE_COLOR: Color = Color(1.0, 0.35, 0.20)
@@ -172,6 +169,11 @@ var _manage_ui: ManageUI = null
 
 ## 当前加载的地图数据
 var _schema: MapSchema = null
+
+## 本局共享的随机数生成器（M2 P1#4 修复）
+## 由 _load_pcg 在确定 seed 后创建一次，所有运行时随机调用（关卡放置 / 资源点放置等）共享
+## 保证"同 seed 同地图"覆盖完整运行时
+var _world_rng: RandomNumberGenerator = null
 
 ## 单位实例
 var _unit: UnitData = null
@@ -763,28 +765,13 @@ func _start_camp() -> void:
 	# 扎营恢复补给
 	_supply += _camp_restore
 
-	# 持久资源点扎营结算
-	_settle_persistent_resources()
+	# M1 重构：持久 slot 扎营产出迁出 ResourceSlot 通道，
+	# 后续由 M6 产出结算基于 PersistentSlot.influence_range + 四项等权池接入
 
 	_update_hud()
 
 	# 打开养成面板（camp_mode = true，显示全部操作）
 	_manage_ui.open(_characters, _inventory, true)
-
-## 持久资源点扎营结算：检查玩家是否在有效范围内，自动产出资源
-func _settle_persistent_resources() -> void:
-	var collected_names: Array[String] = []
-	for pos in _resource_slots:
-		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
-		if not rs.is_persistent or rs.is_collected:
-			continue
-		# 计算曼哈顿距离
-		var dist: int = absi(rs.position.x - _unit.position.x) + absi(rs.position.y - _unit.position.y)
-		if dist <= rs.effective_range:
-			_collect_resource(rs)
-			collected_names.append(rs.get_display_name())
-	if not collected_names.is_empty():
-		_show_notice("资源点产出：%s" % ", ".join(collected_names))
 
 ## 采集资源点：根据类型增加补给或生成道具
 func _collect_resource(rs: ResourceSlot) -> void:
@@ -811,7 +798,8 @@ func _try_collect_resource_at(pos: Vector2i) -> void:
 	if not _resource_slots.has(pos):
 		return
 	var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
-	if rs.is_persistent or rs.is_collected:
+	# M1 重构：ResourceSlot 已回归一次性语义，仅判断是否已采集
+	if rs.is_collected:
 		return
 	# 一次性资源点：采集并标记，同时恢复地图 slot 状态
 	_collect_resource(rs)
@@ -916,6 +904,10 @@ func _generate_level_slots(count: int) -> void:
 	var exclude: Array[Vector2i] = [_start_pos, _end_pos]
 	if _unit != null and not exclude.has(_unit.position):
 		exclude.append(_unit.position)
+	# M2：排除持久 slot 占据的格子，避免关卡与城建锚 slot 重叠
+	for ps in _schema.persistent_slots:
+		if not exclude.has(ps.position):
+			exclude.append(ps.position)
 	# 保留击退关卡，排除其占据的格子
 	for pos in _level_slots:
 		var p: Vector2i = pos as Vector2i
@@ -939,8 +931,8 @@ func _generate_level_slots(count: int) -> void:
 		if not exclude.has(p):
 			exclude.append(p)
 
-	# 在地图上随机放置关卡 Slot
-	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, actual_count, exclude)
+	# 在地图上随机放置关卡 Slot（M2 P1#4：注入 _world_rng 保证 seed 复现）
+	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, actual_count, exclude, _world_rng)
 
 	# 构建新关卡字典（保留击退关卡 + 新增本轮关卡）
 	var new_slots: Dictionary = {}
@@ -977,20 +969,15 @@ func _generate_level_slots(count: int) -> void:
 	_level_slots = new_slots
 
 
-## 清除一次性资源点（已采集的和新轮次刷新的），保留持久资源点
-## 同时恢复被占用的 MapSchema slot 为 NONE
+## 清除所有资源点（每轮次刷新前调用）
+## M1 重构：ResourceSlot 已无持久分支，全部清空并恢复 MapSchema slot 为 NONE；
+## 持久 slot 由 PersistentSlot 独立通道维护，不在此处处理
 func _clear_onetime_resource_slots() -> void:
-	var keep: Dictionary = {}
 	for pos in _resource_slots:
 		var p: Vector2i = pos as Vector2i
-		var rs: ResourceSlot = _resource_slots[p] as ResourceSlot
-		if rs.is_persistent:
-			keep[p] = rs
-		else:
-			# 恢复 schema slot 状态
-			if _schema != null:
-				_schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
-	_resource_slots = keep
+		if _schema != null:
+			_schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
+	_resource_slots = {}
 
 ## 从配置生成本轮资源点
 func _generate_resource_slots() -> void:
@@ -1000,7 +987,11 @@ func _generate_resource_slots() -> void:
 	var exclude: Array[Vector2i] = [_start_pos, _end_pos]
 	if _unit != null and not exclude.has(_unit.position):
 		exclude.append(_unit.position)
-	# 排除已有持久资源点
+	# M2：排除持久 slot 占据的格子，避免一次性资源与城建锚 slot 重叠
+	for ps in _schema.persistent_slots:
+		if not exclude.has(ps.position):
+			exclude.append(ps.position)
+	# 排除本轮已存在的资源点（M1 重构后无持久分支，本循环仍保留以防多次调用复用）
 	for pos in _resource_slots:
 		var p: Vector2i = pos as Vector2i
 		if not exclude.has(p):
@@ -1018,8 +1009,8 @@ func _generate_resource_slots() -> void:
 		var row: Dictionary = entry as Dictionary
 		total_count += int(row.get("count_per_round", "1"))
 
-	# 放置位置
-	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, total_count, exclude)
+	# 放置位置（M2 P1#4：注入 _world_rng 保证 seed 复现）
+	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, total_count, exclude, _world_rng)
 
 	# 按配置行顺序分配位置
 	var place_idx: int = 0
@@ -1032,9 +1023,8 @@ func _generate_resource_slots() -> void:
 			var rs: ResourceSlot = ResourceSlot.new()
 			rs.position = placed[place_idx]
 			rs.resource_type = int(row.get("resource_type", "0")) as ResourceSlot.ResourceType
-			rs.is_persistent = row.get("is_persistent", "0") == "1"
 			rs.output_amount = int(row.get("output_amount", "1"))
-			rs.effective_range = int(row.get("effective_range", "2"))
+			# M1 重构：is_persistent / effective_range 移除，CSV 同步删列
 			_resource_slots[placed[place_idx]] = rs
 			place_idx += 1
 
@@ -1521,11 +1511,16 @@ func _load_pcg(map_cfg: Dictionary, terrain_costs: Dictionary) -> void:
 	config.height = int(map_cfg.get("map_height", "24"))
 
 	# 种子处理：-1 表示每次自动随机，其他值固定
+	# M2 P1#4：自动随机走 Time 派生而非全局 randi()，并显式打印实际 seed 便于复现
 	var seed_value: int = int(map_cfg.get("random_seed", "-1"))
 	if seed_value == -1:
-		config.seed = randi()
+		config.seed = int(Time.get_ticks_usec())
+		print("[WorldMap] 自动 seed = %d（如需复现把 map_config.csv random_seed 改为该值）" % config.seed)
 	else:
 		config.seed = seed_value
+	# 创建本局共享 RNG，注入 seed
+	_world_rng = RandomNumberGenerator.new()
+	_world_rng.seed = config.seed
 
 	# 通达性校验起终点
 	config.start = _start_pos
@@ -1540,6 +1535,19 @@ func _load_pcg(map_cfg: Dictionary, terrain_costs: Dictionary) -> void:
 
 	# 注入地形消耗配置（BFS 通达性校验需要）
 	config.terrain_costs = terrain_costs
+
+	# M2：从 map_config 加载持久 slot 八阶段参数
+	config.persistent_total_count = int(map_cfg.get("persistent_total_count", "26"))
+	config.persistent_core_count = int(map_cfg.get("persistent_core_count", "2"))
+	config.persistent_town_count = int(map_cfg.get("persistent_town_count", "6"))
+	config.persistent_village_count = int(map_cfg.get("persistent_village_count", "18"))
+	config.persistent_min_dist_normal = int(map_cfg.get("persistent_min_dist_normal", "3"))
+	config.persistent_min_dist_core = int(map_cfg.get("persistent_min_dist_core", "5"))
+	config.persistent_emerge_steps = int(map_cfg.get("persistent_emerge_steps", "3"))
+	config.persistent_field_radius = int(map_cfg.get("persistent_field_radius", "20"))
+	config.persistent_core_zone_min = float(map_cfg.get("persistent_core_zone_min", "0.125"))
+	config.persistent_core_zone_max = float(map_cfg.get("persistent_core_zone_max", "0.25"))
+	config.persistent_max_retries = int(map_cfg.get("persistent_max_retries", "5"))
 
 	_schema = MapGenerator.generate(config)
 	if _schema == null:
@@ -1570,11 +1578,17 @@ func _draw() -> void:
 		for x in range(_schema.width):
 			_draw_tile(x, y)
 
-	# 第 1.5 层：持久资源有效范围叠加（须在 Slot 标记之后、资源格方块之前，避免遮挡文字）
-	_draw_persistent_resource_ranges()
+	# 第 1.5 层 已废弃：原"持久资源有效范围叠加"随 ResourceSlot 拆分一同移除，
+	# 改由 M4 接入 PersistentSlot.influence_range 统一渲染
 
 	# 第 1.6 层：资源点标记 + 文字
 	_draw_resource_slots()
+
+	# ═══ M2 临时视觉（M4 替换后整段删除）═══
+	# 验收锚点：窗口 1 看到 26 个持久 slot 的对角分布与势力染色
+	# M4 接入影响范围渲染时，本调用 + _m2_temp_draw_persistent_slots() 一并删除
+	_m2_temp_draw_persistent_slots()
+	# ═══ M2 临时视觉 end ═══
 
 	# 第二层：可达范围高亮
 	for tile_pos in _reachable_tiles:
@@ -1665,82 +1679,30 @@ func _draw_tile(x: int, y: int) -> void:
 					Color.WHITE
 				)
 
-## 判断格坐标 (x, y) 是否在以 center 为中心、半径为 r 的曼哈顿范围内
-## 超出地图边界视为范围外
-func _pos_in_range(x: int, y: int, center: Vector2i, r: int) -> bool:
-	if _schema == null or x < 0 or x >= _schema.width or y < 0 or y >= _schema.height:
-		return false
-	return absi(x - center.x) + absi(y - center.y) <= r
-
-
-## 绘制持久资源点有效范围叠加：浅金填充 + 边界轮廓线
-## 先于标记方块渲染，避免遮挡文字
-func _draw_persistent_resource_ranges() -> void:
-	for pos in _resource_slots:
-		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
-		if not rs.is_persistent:
-			continue
-		var p: Vector2i = pos as Vector2i
-
-		# 第一遍：填充范围内所有格（浅金色 15% alpha）
-		for dx in range(-rs.effective_range, rs.effective_range + 1):
-			for dy in range(-rs.effective_range, rs.effective_range + 1):
-				if absi(dx) + absi(dy) <= rs.effective_range:
-					var rx: int = p.x + dx
-					var ry: int = p.y + dy
-					if _schema != null and rx >= 0 and rx < _schema.width and ry >= 0 and ry < _schema.height:
-						draw_rect(
-							Rect2(rx * TILE_SIZE, ry * TILE_SIZE, TILE_SIZE - 1, TILE_SIZE - 1),
-							RESOURCE_RANGE_COLOR
-						)
-
-		# 第二遍：绘制边界轮廓线（仅对外侧边绘制，内部相邻格不重复描边）
-		for dx in range(-rs.effective_range, rs.effective_range + 1):
-			for dy in range(-rs.effective_range, rs.effective_range + 1):
-				if absi(dx) + absi(dy) > rs.effective_range:
-					continue
-				var rx: int = p.x + dx
-				var ry: int = p.y + dy
-				if _schema == null or rx < 0 or rx >= _schema.width or ry < 0 or ry >= _schema.height:
-					continue
-				var tx: float = rx * TILE_SIZE
-				var ty: float = ry * TILE_SIZE
-				# 上边：相邻格不在范围内则绘制
-				if not _pos_in_range(rx, ry - 1, p, rs.effective_range):
-					draw_line(Vector2(tx, ty), Vector2(tx + TILE_SIZE - 1, ty), RESOURCE_RANGE_BORDER_COLOR, 1.5)
-				# 下边
-				if not _pos_in_range(rx, ry + 1, p, rs.effective_range):
-					draw_line(Vector2(tx, ty + TILE_SIZE - 1), Vector2(tx + TILE_SIZE - 1, ty + TILE_SIZE - 1), RESOURCE_RANGE_BORDER_COLOR, 1.5)
-				# 左边
-				if not _pos_in_range(rx - 1, ry, p, rs.effective_range):
-					draw_line(Vector2(tx, ty), Vector2(tx, ty + TILE_SIZE - 1), RESOURCE_RANGE_BORDER_COLOR, 1.5)
-				# 右边
-				if not _pos_in_range(rx + 1, ry, p, rs.effective_range):
-					draw_line(Vector2(tx + TILE_SIZE - 1, ty), Vector2(tx + TILE_SIZE - 1, ty + TILE_SIZE - 1), RESOURCE_RANGE_BORDER_COLOR, 1.5)
-
-## 绘制资源点标记方块 + 文字（一次性按类型着色，持久统一金色 + ★后缀）
+## 绘制资源点标记方块 + 文字（按类型着色）
+## M1 重构：原持久分支（金色 + ★ + 范围叠加）已移除，
+## 持久 slot 视觉与影响范围渲染由 M4 通过 PersistentSlot 通道接入
 func _draw_resource_slots() -> void:
 	for pos in _resource_slots:
 		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
-		# 已采集的一次性资源点不渲染
-		if not rs.is_persistent and rs.is_collected:
+		# 已采集的资源点不渲染
+		if rs.is_collected:
 			continue
 		var p: Vector2i = pos as Vector2i
 
-		# 按资源类型和是否持久选取底色
+		# 按资源类型选取底色
 		var color: Color
-		if rs.is_persistent:
-			color = RESOURCE_PERSISTENT_COLOR
-		else:
-			match rs.resource_type:
-				ResourceSlot.ResourceType.SUPPLY:
-					color = RESOURCE_SUPPLY_COLOR
-				ResourceSlot.ResourceType.HP_RESTORE:
-					color = RESOURCE_HP_COLOR
-				ResourceSlot.ResourceType.EXP:
-					color = RESOURCE_EXP_COLOR
-				_:
-					color = RESOURCE_SUPPLY_COLOR
+		match rs.resource_type:
+			ResourceSlot.ResourceType.SUPPLY:
+				color = RESOURCE_SUPPLY_COLOR
+			ResourceSlot.ResourceType.HP_RESTORE:
+				color = RESOURCE_HP_COLOR
+			ResourceSlot.ResourceType.EXP:
+				color = RESOURCE_EXP_COLOR
+			ResourceSlot.ResourceType.STONE:
+				color = RESOURCE_STONE_COLOR
+			_:
+				color = RESOURCE_SUPPLY_COLOR
 
 		# 绘制资源点标记方块
 		var rs_rect: Rect2 = Rect2(
@@ -1751,14 +1713,66 @@ func _draw_resource_slots() -> void:
 		)
 		draw_rect(rs_rect, color)
 
-		# 叠加资源类型文字标注（短标签来自 ResourceSlot.get_map_label()；持久资源加★后缀）
+		# 叠加资源类型文字标注（短标签来自 ResourceSlot.get_map_label()）
 		if _label_font != null:
-			var label_text: String = rs.get_map_label() + ("★" if rs.is_persistent else "")
+			_draw_slot_label(
+				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2.0, p.y * TILE_SIZE + TILE_SIZE / 2.0),
+				rs.get_map_label(),
+				Color(0.05, 0.05, 0.05)
+			)
+
+# ═══════════════════════════════════════════════════════════════════
+# M2 临时视觉（M4 替换后整段删除；登记于《待跟踪事项索引》P1）
+#
+# 临时性质：
+#   - 仅满足窗口 1 验收"启动后可见 26 持久 slot 分布"
+#   - 视觉粗糙：方形色块 + 字符（村/镇/核 + 势力字母）
+#   - M4 接入 PersistentSlot.influence_range 实装时，整段（颜色常量 + 函数 + 调用点）一并删除
+#
+# 删除锚点（grep 关键字）：
+#   - "_m2_temp_"
+#   - "M2_TEMP_"
+#   - "═══ M2 临时视觉"
+# ═══════════════════════════════════════════════════════════════════
+
+## 临时颜色：势力归属（M4 删除）
+const M2_TEMP_FACTION_COLORS: Dictionary = {
+	0: Color(0.55, 0.55, 0.55),   # NONE 中立 — 灰
+	1: Color(0.30, 0.55, 0.95),   # PLAYER — 蓝
+	2: Color(0.90, 0.35, 0.35),   # ENEMY_1 — 红
+}
+
+## 临时绘制：渲染 schema.persistent_slots 中所有持久 slot
+## 内圈色块按势力归属上色，文字为类型标签 + 等级
+func _m2_temp_draw_persistent_slots() -> void:
+	if _schema == null:
+		return
+	for slot in _schema.persistent_slots:
+		var p: Vector2i = slot.position
+		# 外框：略大于资源点的方块，避免视觉混淆
+		var outer: Rect2 = Rect2(
+			p.x * TILE_SIZE + 1,
+			p.y * TILE_SIZE + 1,
+			TILE_SIZE - 3,
+			TILE_SIZE - 3
+		)
+		var color: Color = M2_TEMP_FACTION_COLORS.get(slot.owner_faction, Color.MAGENTA) as Color
+		draw_rect(outer, color)
+		# 核心城镇加金色描边，凸显
+		if slot.type == PersistentSlot.Type.CORE_TOWN:
+			draw_rect(outer, Color(1.0, 0.85, 0.0), false, 2.0)
+		# 类型字符 + 等级
+		if _label_font != null:
+			var label_text: String = slot.get_map_label()
+			if slot.level > 0:
+				label_text += str(slot.level)
 			_draw_slot_label(
 				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2.0, p.y * TILE_SIZE + TILE_SIZE / 2.0),
 				label_text,
 				Color(0.05, 0.05, 0.05)
 			)
+
+# ═══ M2 临时视觉 end ═══
 
 ## 绘制正在移动的敌方关卡标记（基于动画位置）
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方

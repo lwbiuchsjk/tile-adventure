@@ -6,10 +6,10 @@ uid="uid://b4d5p7862m3ik"
 
 [deps]
 
-files=["res://assets/config/resource_slot_config.is.translation", "res://assets/config/resource_slot_config.output.translation", "res://assets/config/resource_slot_config.effective.translation", "res://assets/config/resource_slot_config.count.translation", "res://assets/config/resource_slot_config.weight.translation"]
+files=["res://assets/config/resource_slot_config.output.translation", "res://assets/config/resource_slot_config.count.translation", "res://assets/config/resource_slot_config.weight.translation"]
 
 source_file="res://assets/config/resource_slot_config.csv"
-dest_files=["res://assets/config/resource_slot_config.is.translation", "res://assets/config/resource_slot_config.output.translation", "res://assets/config/resource_slot_config.effective.translation", "res://assets/config/resource_slot_config.count.translation", "res://assets/config/resource_slot_config.weight.translation"]
+dest_files=["res://assets/config/resource_slot_config.output.translation", "res://assets/config/resource_slot_config.count.translation", "res://assets/config/resource_slot_config.weight.translation"]
 
 [params]
 

@@ -5,6 +5,11 @@
 # start_x/start_y: 通达性校验起点坐标
 # end_x/end_y: 通达性校验终点坐标
 # json_path: 非随机模式下的 JSON 地图文件路径
+#
+# —— M2 持久 slot 生成参数 ——
+# persistent_*: 城建锚 → 持久 slot 八阶段流水线参数
+# 数量基线见《持久slot地图生成设计》§3.1：26 = 2 核心 + 6 镇 + 18 村
+# 间距与势力场参考 §五；具体数值在 M2 实跑窗口 1 验收时校准（待跟踪事项索引 P1）
 key,value
 random_generate,true
 random_seed,-1
@@ -15,3 +20,14 @@ start_y,1
 end_x,30
 end_y,22
 json_path,res://test/maps/test_map.json
+persistent_total_count,26
+persistent_core_count,2
+persistent_town_count,6
+persistent_village_count,18
+persistent_min_dist_normal,3
+persistent_min_dist_core,5
+persistent_emerge_steps,3
+persistent_field_radius,20
+persistent_core_zone_min,0.125
+persistent_core_zone_max,0.25
+persistent_max_retries,5

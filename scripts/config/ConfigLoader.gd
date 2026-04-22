@@ -60,3 +60,36 @@ static func load_csv_kv(path: String) -> Dictionary:
 		if row.has("key") and row.has("value"):
 			result[row["key"]] = row["value"]
 	return result
+
+
+## 加载 PersistentSlot 配置（assets/config/persistent_slot_config.csv）
+## 返回以 (type, level) 复合键索引的字典：
+##   { Vector2i(type, level): {initial_range, max_range, growth_rate,
+##                              upgrade_stone_cost, upgrade_turns, output_table_key} }
+## 类型转换在加载时完成，调用方无需再 int()
+##
+## 设计：M1 基础数据层 §交付物 §配置文件预备
+## 数值校准：M5 升级建造 / M6 产出结算 阶段填实
+static func load_persistent_slot_config(
+	path: String = "res://assets/config/persistent_slot_config.csv"
+) -> Dictionary:
+	var rows: Array = load_csv(path)
+	var result: Dictionary = {}
+	for entry in rows:
+		var row: Dictionary = entry as Dictionary
+		# 必填字段缺失则跳过，避免空值入表
+		if not row.has("type") or not row.has("level"):
+			push_warning("ConfigLoader: persistent_slot_config 行缺 type/level，已跳过 -> " + str(row))
+			continue
+		var t: int = int(row["type"])
+		var lv: int = int(row["level"])
+		var key: Vector2i = Vector2i(t, lv)
+		result[key] = {
+			"initial_range":      int(row.get("initial_range", "0")),
+			"max_range":          int(row.get("max_range", "0")),
+			"growth_rate":        int(row.get("growth_rate", "0")),
+			"upgrade_stone_cost": int(row.get("upgrade_stone_cost", "0")),
+			"upgrade_turns":      int(row.get("upgrade_turns", "0")),
+			"output_table_key":   row.get("output_table_key", "") as String,
+		}
+	return result
