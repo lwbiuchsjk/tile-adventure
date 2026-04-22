@@ -1,2 +1,17 @@
-# Normalize EOL for all files that Git considers text files.
+# 跨端（Win/macOS/Linux）行尾统一为 LF
+# 防御性根治：避免任意端编辑器写入 CRLF 造成 git diff 假修改
+# 参照同目录 vibeTest 项目方案
+
+# 兜底：所有文本文件按内容自动判定 + 强制 LF
 * text=auto eol=lf
+
+# Godot 资源 / 脚本 / 配置 / 文档显式声明（Win 端 IDE 默认 CRLF 兜底失效时仍可保底）
+*.gd text eol=lf
+*.tscn text eol=lf
+*.tres text eol=lf
+*.cfg text eol=lf
+*.csv text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.ps1 text eol=lf
