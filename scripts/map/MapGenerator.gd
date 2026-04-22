@@ -52,6 +52,9 @@ class GenerateConfig:
 	var persistent_core_zone_min: float = 0.125
 	var persistent_core_zone_max: float = 0.25
 	var persistent_max_retries: int = 5
+	## 每方开局归属下限（设计 §3.2 三桶下限；双方共享同一套配置）
+	var persistent_faction_town_quota: int = 2
+	var persistent_faction_village_quota: int = 6
 
 # ─────────────────────────────────────────
 # 公共接口
@@ -106,6 +109,8 @@ static func _attach_persistent_slots(
 	pcfg.core_zone_min = config.persistent_core_zone_min
 	pcfg.core_zone_max = config.persistent_core_zone_max
 	pcfg.max_retries = config.persistent_max_retries
+	pcfg.faction_town_quota = config.persistent_faction_town_quota
+	pcfg.faction_village_quota = config.persistent_faction_village_quota
 
 	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, pcfg)
 	# 失败语义：generate() 内部超过 max_retries 时返回空数组

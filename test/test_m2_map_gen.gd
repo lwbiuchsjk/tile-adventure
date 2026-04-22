@@ -25,6 +25,7 @@ func _init() -> void:
 	_test_core_zone_and_init_state()
 	_test_seed_reproducibility()
 	_test_twenty_random_seeds()
+	_test_config_validation_traps()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -155,6 +156,66 @@ func _test_seed_reproducibility() -> void:
 				all_match = false
 				break
 		_assert(all_match, "同 seed 两次生成所有 slot 位置/类型/归属一致")
+
+
+## 8. 配置自检：每类非法输入都被入口拦截（返回空数组）
+## 验证 _validate_config 真正提前暴露问题，避免 max_retries 后才报错
+func _test_config_validation_traps() -> void:
+	var schema: MapSchema = _make_test_schema(32, 32)
+
+	# 8.1 配比与总数不一致
+	var cfg_a: PersistentSlotGenerator.GenConfig = _make_test_config(1)
+	cfg_a.town_count = 10  # 2 + 10 + 18 = 30 ≠ total_count(26)
+	_assert(PersistentSlotGenerator.generate(schema, cfg_a).is_empty(), "配比与总数不一致 → 拦截")
+
+	# 8.2 双方城镇下限超出总量
+	var cfg_b: PersistentSlotGenerator.GenConfig = _make_test_config(2)
+	cfg_b.faction_town_quota = 4  # 4 * 2 = 8 > town_count(6)
+	_assert(PersistentSlotGenerator.generate(schema, cfg_b).is_empty(), "城镇下限超量 → 拦截")
+
+	# 8.3 双方村庄下限超出总量
+	var cfg_c: PersistentSlotGenerator.GenConfig = _make_test_config(3)
+	cfg_c.faction_village_quota = 10  # 10 * 2 = 20 > village_count(18)
+	_assert(PersistentSlotGenerator.generate(schema, cfg_c).is_empty(), "村庄下限超量 → 拦截")
+
+	# 8.4 核心数非 2（MVP 限制）
+	var cfg_d: PersistentSlotGenerator.GenConfig = _make_test_config(4)
+	cfg_d.core_count = 3
+	cfg_d.total_count = 27  # 让配比一致避免被前一个检查拦截
+	_assert(PersistentSlotGenerator.generate(schema, cfg_d).is_empty(), "核心数非 2 → 拦截")
+
+	# 8.5 势力场半径为 0
+	var cfg_e: PersistentSlotGenerator.GenConfig = _make_test_config(5)
+	cfg_e.field_radius = 0
+	_assert(PersistentSlotGenerator.generate(schema, cfg_e).is_empty(), "势力场半径 0 → 拦截")
+
+	# 8.6 核心采样区间反转
+	var cfg_f: PersistentSlotGenerator.GenConfig = _make_test_config(6)
+	cfg_f.core_zone_min = 0.3
+	cfg_f.core_zone_max = 0.2
+	_assert(PersistentSlotGenerator.generate(schema, cfg_f).is_empty(), "核心区间反转 → 拦截")
+
+	# 8.7 地图尺寸为 0
+	var cfg_g: PersistentSlotGenerator.GenConfig = _make_test_config(7)
+	cfg_g.width = 0
+	_assert(PersistentSlotGenerator.generate(schema, cfg_g).is_empty(), "地图宽度 0 → 拦截")
+
+	# 8.8 下限合计 > 总数
+	var cfg_h: PersistentSlotGenerator.GenConfig = _make_test_config(8)
+	# core(2) + town_quota*2(2*2=4) + village_quota*2(11*2=22) = 28 > 26
+	cfg_h.faction_village_quota = 11
+	# 但单类 11*2=22 ≤ village_count(18)? 不，22 > 18 所以会被村庄下限超量先拦截
+	# 改成下限合计 > 总数但单类不超：core(2) + 3*2 + 9*2 = 26，需要 = 27 才触发合计超
+	cfg_h.faction_town_quota = 3   # 3*2=6 == town_count(6) 边界 OK
+	cfg_h.faction_village_quota = 9  # 9*2=18 == village_count(18) 边界 OK
+	# 总锁定 = 2 + 6 + 18 = 26，恰等于 total_count → 触发 push_warning 但 return ""，
+	# 应能成功生成（中立桶为 0，涌现染色无候选）
+	# 此 case 不验证拦截，仅验证不被 fatal
+	_assert(not PersistentSlotGenerator.generate(schema, cfg_h).is_empty(), "锁定 == 总数边界 → 仍可生成（中立桶 0）")
+
+	# 8.9 合法基线仍能通过
+	var cfg_ok: PersistentSlotGenerator.GenConfig = _make_test_config(9)
+	_assert(not PersistentSlotGenerator.generate(schema, cfg_ok).is_empty(), "默认配置 → 正常生成")
 
 
 ## 7. 连续 20 次随机 seed：无 crash + 三桶下限全满足

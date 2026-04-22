@@ -1548,6 +1548,8 @@ func _load_pcg(map_cfg: Dictionary, terrain_costs: Dictionary) -> void:
 	config.persistent_core_zone_min = float(map_cfg.get("persistent_core_zone_min", "0.125"))
 	config.persistent_core_zone_max = float(map_cfg.get("persistent_core_zone_max", "0.25"))
 	config.persistent_max_retries = int(map_cfg.get("persistent_max_retries", "5"))
+	config.persistent_faction_town_quota = int(map_cfg.get("persistent_faction_town_quota", "2"))
+	config.persistent_faction_village_quota = int(map_cfg.get("persistent_faction_village_quota", "6"))
 
 	_schema = MapGenerator.generate(config)
 	if _schema == null:
@@ -1761,11 +1763,9 @@ func _m2_temp_draw_persistent_slots() -> void:
 		# 核心城镇加金色描边，凸显
 		if slot.type == PersistentSlot.Type.CORE_TOWN:
 			draw_rect(outer, Color(1.0, 0.85, 0.0), false, 2.0)
-		# 类型字符 + 等级
+		# 类型字符 + 等级（无论 0 都显示，便于验收 / M5 升级后视觉一致）
 		if _label_font != null:
-			var label_text: String = slot.get_map_label()
-			if slot.level > 0:
-				label_text += str(slot.level)
+			var label_text: String = slot.get_map_label() + str(slot.level)
 			_draw_slot_label(
 				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2.0, p.y * TILE_SIZE + TILE_SIZE / 2.0),
 				label_text,
