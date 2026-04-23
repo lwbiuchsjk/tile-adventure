@@ -167,6 +167,9 @@ var _manage_ui: ManageUI = null
 ## 建造面板子系统（M5）
 var _build_panel_ui: BuildPanelUI = null
 
+## 敌方 AI（M7）
+var _enemy_ai: EnemyAI = null
+
 ## 两方石料库存（M5）—— { Faction 整数 ID: int 数量 }
 ## 玩家侧由 build_config.player_initial_stone 初始化；
 ## 敌方侧由 enemy_initial_stone 初始化，M7 真正消耗前只占位
@@ -256,9 +259,6 @@ var _total_hp_lost: int = 0
 var _total_max_hp: int = 0
 var _score_config: Dictionary = {}
 
-## 敌人强度轮次比例配置（缓存）
-var _enemy_tier_ratio_rows: Array = []
-
 ## 资源点字典 {Vector2i: ResourceSlot}
 var _resource_slots: Dictionary = {}
 
@@ -273,9 +273,6 @@ var _enemy_movement_enabled: bool = false
 
 ## 敌方移动力（从配置读取）
 var _enemy_movement_points: int = 6
-
-## 敌方是否已激活移动能力（首次战斗后全局激活）
-var _enemy_can_move: bool = false
 
 ## 敌方关卡占据位置的原始 SlotType（用于移动后恢复）
 var _original_slot_types: Dictionary = {}
@@ -355,7 +352,6 @@ func _ready() -> void:
 
 	# 加载敌人强度配置（generator 初始化后再注入，见下方）
 	var enemy_tier_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_TIER)
-	_enemy_tier_ratio_rows = ConfigLoader.load_csv(CONFIG_ENEMY_TIER_RATIO)
 
 	# 加载评分配置
 	_score_config = ConfigLoader.load_csv_kv(CONFIG_SCORE)
@@ -447,7 +443,9 @@ func _ready() -> void:
 	# 初始化回合管理器
 	_turn_manager = TurnManager.new()
 	_turn_manager.register_unit(_unit)
-	_turn_manager.turn_ended.connect(_on_turn_ended)
+	# M7：迁至阵营回合流程，监听 faction_turn_started 替代 legacy turn_ended
+	# 玩家侧 handler 在本 handler 中处理；敌方侧由 EnemyAI 自己 connect
+	_turn_manager.faction_turn_started.connect(_on_faction_turn_started)
 
 	# M5: 加载升级配置 + 石料库存 + 注册建造 tick
 	# 顺序固定：先 BuildSystem.load_level_config（tick 依赖配置），再 register
@@ -458,15 +456,17 @@ func _ready() -> void:
 		Faction.ENEMY_1: int(build_cfg.get("enemy_initial_stone", "0")),
 	}
 
-	# ⚠ Tick 注册顺序固定：M5 → M4（TickRegistry 按 FIFO 执行）
+	# ⚠ Tick 注册顺序固定：M5 → M4 → M7 REPELLED（TickRegistry 按 FIFO 执行）
 	# 自阵营回合开始时先跑 M5 建造完成（可能刷 max_range），
-	# 再跑 M4 占据快照（用新 max_range 增长），保证"升级完成本回合即生效"
+	# 再跑 M4 占据快照（用新 max_range 增长），最后跑 M7 REPELLED 冷却递减
 	TickRegistry.register(_on_build_tick)
 
 	# M4: 注册占据快照到 TickRegistry（自阵营回合开始锚点）
-	# MVP 只接 PLAYER 侧，由 _on_turn_ended 显式触发 run_ticks(PLAYER)；
-	# 敌方侧等 M7 把 WorldMap 迁到 start_faction_turn(ENEMY_1) 时自然生效
+	# M7 迁移后：WorldMap 完全走 start_faction_turn，TickRegistry 自动分发；无需手动 run_ticks
 	TickRegistry.register(_on_faction_tick)
+
+	# M7: REPELLED 冷却 tick（仅 ENEMY_1 回合生效，内部 faction 过滤）
+	TickRegistry.register(_tick_repelled_cooldowns)
 
 	# Camera 初始位置直接设到单位位置（首帧不需要平滑）
 	_camera.position = _unit_visual_pos
@@ -474,17 +474,33 @@ func _ready() -> void:
 	# 初始化子系统
 	_init_subsystems()
 
-	# 启动第一轮（触发 _on_round_started → 生成关卡）
+	# 启动第一轮（触发 _on_round_started → 生成资源点 + 预生成轮次奖励；M7 后不再生成敌方关卡）
 	_round_manager.start_current_round()
 
 	# 初始化地图标签字体（使用主题默认字体，供 _draw 中绘制文字标注）
 	_label_font = ThemeDB.fallback_font
 
-	# 更新 HUD
-	_update_hud()
+	# M7：开局预置 5 支敌方部队包（在敌方核心影响范围内随机空地）
+	# 必须在 start_current_round 之后（资源点已铺好、避免位置冲突）+ 首个玩家回合开始之前
+	_deploy_initial_enemy_packs()
 
-	# 计算初始可达范围
-	_refresh_reachable()
+	# M7：启动首个玩家回合（TickRegistry 跑 M4/M5 tick → emit faction_turn_started(PLAYER)
+	# → _on_faction_turn_started 接管 HUD / reachable 刷新）
+	_turn_manager.start_faction_turn(Faction.PLAYER)
+
+
+## M7 开局预置敌方部队包（敌方 AI 设计 §3.1）
+## MVP 初始 5 支；调用 EnemyReinforcement.spawn_batch 5 次，每次生成 1 支
+## 若核心影响范围内空地不足 5 个，能放几支放几支（不强制）
+func _deploy_initial_enemy_packs() -> void:
+	var target_count: int = 5
+	var placed: int = 0
+	for i in range(target_count):
+		var pack: LevelSlot = EnemyReinforcement.spawn_batch(self)
+		if pack != null:
+			placed += 1
+	if placed < target_count:
+		push_warning("WorldMap._deploy_initial_enemy_packs: 仅预置 %d / %d 支（核心影响范围空地不足）" % [placed, target_count])
 
 
 ## 场景退出时清理全局注册，避免 TickRegistry 残留悬空 Callable
@@ -494,6 +510,7 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	TickRegistry.unregister(_on_faction_tick)
 	TickRegistry.unregister(_on_build_tick)
+	TickRegistry.unregister(_tick_repelled_cooldowns)
 
 
 ## 初始化子系统（敌方移动、战斗 UI、管理 UI）
@@ -535,6 +552,12 @@ func _init_subsystems() -> void:
 	_build_panel_ui.create_ui(ui_layer)
 	_build_panel_ui.closed.connect(_on_build_panel_closed)
 	_build_panel_ui.upgrade_requested.connect(_on_upgrade_requested)
+
+	# 敌方 AI（M7）
+	_enemy_ai = EnemyAI.new()
+	_enemy_ai.name = "EnemyAI"
+	add_child(_enemy_ai)
+	_enemy_ai.init(self, _turn_manager)
 
 # ─────────────────────────────────────────
 # 输入处理
@@ -601,7 +624,7 @@ func _update_hud() -> void:
 			_round_manager.get_cleared_count(),
 			_round_manager.get_current_level_count()
 		])
-	round_parts.append("回合 %d" % _turn_manager.current_turn)
+	round_parts.append("回合 %d" % _turn_manager.player_faction_turn_count)
 	round_parts.append("补给 %d" % _supply)
 	# M5: 石料数字（玩家侧）
 	round_parts.append("石料 %d" % get_stone(Faction.PLAYER))
@@ -650,7 +673,7 @@ func _show_victory_text() -> void:
 		return
 	var total_rounds: int = _round_manager.get_total_rounds() if _round_manager != null else 1
 	_finish_label.text = "全部 %d 轮通关！流程胜利（回合 %d）\n%s" % [
-		total_rounds, _turn_manager.current_turn, _get_score_text()
+		total_rounds, _turn_manager.player_faction_turn_count, _get_score_text()
 	]
 	if _notice_bar != null:
 		_notice_bar.visible = true
@@ -660,7 +683,7 @@ func _show_defeat_text() -> void:
 	if _finish_label == null or _turn_manager == null:
 		return
 	_finish_label.text = "流程失败（回合 %d）\n%s" % [
-		_turn_manager.current_turn, _get_score_text()
+		_turn_manager.player_faction_turn_count, _get_score_text()
 	]
 	if _notice_bar != null:
 		_notice_bar.visible = true
@@ -808,27 +831,22 @@ func _get_blocked_positions() -> Dictionary:
 			blocked[pos] = true
 	return blocked
 
-## 回合结束回调：刷新可达范围，更新 HUD
-func _on_turn_ended(_turn_number: int) -> void:
-	# 每回合开始重置移动力
+## M7 阵营回合开始回调（玩家侧）
+## 由 TurnManager.start_faction_turn(PLAYER) 触发，在 TickRegistry 跑完 M4 快照 / M5 建造 tick 后执行
+## 职责：重置玩家单位移动力、刷新 HUD、刷新可达范围
+##
+## 敌方侧（ENEMY_1）由 EnemyAI._on_faction_turn_started 独立处理，两个 handler 按 faction 分流互不干扰
+func _on_faction_turn_started(faction: int) -> void:
+	if faction != Faction.PLAYER:
+		return
+	# 玩家回合开始：重置单位移动力
 	_unit.current_movement = _unit.max_movement
-
-	# M4: 模拟"PLAYER 下一回合开始"锚点，触发 TickRegistry
-	# 时序背景：legacy end_turn() → 此处即"大回合结束 / 下一 PLAYER 回合开始"
-	# 语义与 M5 建造 tick 共锚（升级建造设计 §5.5）
-	#
-	# ⚠ M7 迁移锚点（P1 审查项）：
-	#   当 WorldMap 改用 TurnManager.start_faction_turn 驱动阵营回合时，
-	#   start_faction_turn 内部已调 TickRegistry.run_ticks，**必须删除**本行，
-	#   否则 PLAYER tick 会被双触发（M4 occupy_turns +2、M5 建造进度 +2）
-	TickRegistry.run_ticks(Faction.PLAYER)
-
 	_update_hud()
 	_refresh_reachable()
 
 
 ## M4 自阵营回合 tick 回调：快照本势力所属 slot 的 garrison / occupy / influence 状态
-## 由 TickRegistry 在 _on_turn_ended 中显式调用驱动
+## 由 TickRegistry 在 TurnManager.start_faction_turn 中自动触发（M7 迁移后）
 func _on_faction_tick(faction: int) -> void:
 	if _schema == null:
 		return
@@ -911,7 +929,7 @@ func try_spend_stone(faction: int, amount: int) -> bool:
 
 
 ## 自阵营回合开始 tick 回调（M5）：推进所有本方 slot 的在建动作
-## 注册到 TickRegistry；由 _on_turn_ended 的 run_ticks(PLAYER) 带到
+## 注册到 TickRegistry；由 TurnManager.start_faction_turn 自动触发（双方阵营均适用）
 ## 注：本 handler 先于 M4 `_on_faction_tick` 执行（见 _ready 中的注册顺序锚点），
 ##     保证"升级完成后 max_range 抬升 → 同回合 M4 快照用新上限增长"
 func _on_build_tick(faction: int) -> void:
@@ -1069,8 +1087,11 @@ func _try_collect_resource_at(pos: Vector2i) -> void:
 		_show_notice("采集失败：%s" % ProductionSystem.format_dropped_text(dropped))
 	queue_redraw()
 
-## 回合结算流程（抽象为独立方法）
-## 扎营养成确认后调用，执行回合奖励发放后结束回合
+## 玩家回合结束结算流程（M7 迁移）
+## 扎营养成确认后调用：发放奖励 → 触发敌方阵营回合（TurnManager.start_faction_turn）
+##
+## M7 前的 legacy 流程：直接调 _enemy_movement.start_phase 或 end_turn
+## M7 新流程：end_faction_turn(PLAYER) → start_faction_turn(ENEMY_1) → EnemyAI 六步 → 回到 PLAYER
 func _on_turn_end_settlement() -> void:
 	if _game_finished or _check_defeat():
 		return
@@ -1085,26 +1106,75 @@ func _on_turn_end_settlement() -> void:
 			var reward_text: String = _format_rewards_text(rewards)
 			_show_notice("回合奖励：%s" % reward_text)
 
-	# 递减击退关卡的冷却回合数
-	_tick_repelled_cooldowns()
+	# M7 敌方回合触发：end 当前（PLAYER）+ start ENEMY_1
+	# start_faction_turn 内部会：TickRegistry.run_ticks（建造 tick / REPELLED 冷却 tick）→ 计数 +1 → emit signal
+	# signal 被 EnemyAI 接收，执行六步 2-5（步骤 1 已由 TickRegistry 完成）
+	#
+	# enemy_movement_enabled == false（调试开关）：
+	#   仍必须调 start_faction_turn(ENEMY_1) 让 TickRegistry 跑敌方建造 tick / REPELLED 冷却 tick，
+	#   否则敌方状态冻结；只短路移动阶段（由 start_enemy_move_phase 内部检查开关提前 phase_finished）
+	_turn_manager.end_faction_turn()
+	_turn_manager.current_faction = Faction.ENEMY_1
+	_turn_manager.start_faction_turn(Faction.ENEMY_1)
 
-	# 敌方移动阶段（异步，完成后再 end_turn）
-	if _enemy_can_move and _enemy_movement_enabled:
-		_enemy_movement.start_phase(
-			_schema, _level_slots, _unit.position,
-			_enemy_movement_points, _original_slot_types, _game_finished
-		)
-	else:
-		_turn_manager.end_turn()
 
 # ─────────────────────────────────────────
-# 敌方移动信号处理
+# 敌方 AI 协作接口
+# ─────────────────────────────────────────
+
+## 启动敌方移动阶段（由 EnemyAI._step_move_phase 调用）
+## 判定是否有可移动的敌方部队 + 玩家核心 target 是否存在
+## 无可移动 / 无 target → 直接触发 phase_finished（走 _on_enemy_phase_finished → 回 PLAYER）
+func start_enemy_move_phase() -> void:
+	if _game_finished or not _enemy_movement_enabled:
+		_on_enemy_phase_finished()
+		return
+	# M7 MVP：target 为玩家核心 persistent slot 位置
+	var target_pos: Vector2i = _get_player_core_pos()
+	if target_pos == Vector2i(-1, -1):
+		# 玩家核心失守锚点（M8 接入）：
+		#   M7 阶段仅 push_warning + 退化为追击玩家单位位置
+		#   M8 实装胜负判定时，此处应触发 _on_player_core_lost() → _game_finished = true + 显示失败文案
+		push_warning("WorldMap.start_enemy_move_phase: 玩家核心已失守（M8 失败钩子未实装），退化为追击玩家单位")
+		target_pos = _unit.position
+	_enemy_movement.start_phase(
+		_schema, _level_slots, _unit.position, target_pos,
+		_enemy_movement_points, _original_slot_types, _game_finished
+	)
+
+
+## 查找玩家核心 persistent slot 的位置
+## 返回 (-1, -1) 表示未找到（场景初始化未完成或核心已被敌方占据）
+func _get_player_core_pos() -> Vector2i:
+	if _schema == null:
+		return Vector2i(-1, -1)
+	for entry in _schema.persistent_slots:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null:
+			continue
+		if slot.type == PersistentSlot.Type.CORE_TOWN and slot.owner_faction == Faction.PLAYER:
+			return slot.position
+	return Vector2i(-1, -1)
+
+
+# ─────────────────────────────────────────
+# 敌方移动信号处理（M7 改造）
 # ─────────────────────────────────────────
 
 ## 敌方移动阶段完成回调
+## M7 迁移：end_faction_turn(ENEMY_1) → start_faction_turn(PLAYER)
+## start_faction_turn(PLAYER) 内部会跑 PLAYER tick，然后 emit signal → _on_faction_turn_started 继续玩家侧
+##
+## 防御（P2 审查）：仅在 current_faction == ENEMY_1 时切换；若被误调在玩家回合中，直接返回避免错误双 start
 func _on_enemy_phase_finished() -> void:
-	if not _game_finished:
-		_turn_manager.end_turn()
+	if _game_finished:
+		return
+	if _turn_manager.current_faction != Faction.ENEMY_1:
+		push_warning("WorldMap._on_enemy_phase_finished: current_faction != ENEMY_1，忽略该次回调")
+		return
+	_turn_manager.end_faction_turn()
+	_turn_manager.current_faction = Faction.PLAYER
+	_turn_manager.start_faction_turn(Faction.PLAYER)
 
 ## 强制战斗触发回调（敌方到达玩家相邻格）
 func _on_forced_battle_triggered(level: LevelSlot) -> void:
@@ -1116,116 +1186,14 @@ func _on_forced_battle_triggered(level: LevelSlot) -> void:
 		_enemy_movement.resume_after_battle()
 
 # ─────────────────────────────────────────
-# 关卡 Slot 管理
+# 关卡 Slot 管理（M7 重构）
 # ─────────────────────────────────────────
-
-## 清除地图上已击败的关卡 Slot（FUNCTION → NONE），保留击退状态的关卡
-func _clear_level_slots() -> void:
-	if _schema == null:
-		return
-	var keep: Dictionary = {}
-	for pos in _level_slots:
-		var p: Vector2i = pos as Vector2i
-		var lv: LevelSlot = _level_slots[p] as LevelSlot
-		if lv.is_repelled():
-			# 保留击退关卡
-			keep[p] = lv
-		else:
-			# 清除已击败/已挑战的关卡 Slot，恢复原始类型
-			var orig_type: int = _original_slot_types.get(p, MapSchema.SlotType.NONE) as int
-			_schema.set_slot(p.x, p.y, orig_type as MapSchema.SlotType)
-			_original_slot_types.erase(p)
-	_level_slots = keep
-
-## 从轮次比例配置中获取本轮各档位的生成计划
-## round_id: 轮次 ID（从 1 开始）
-## 返回 [{tier: int, count: int}, ...] 展开后的档位列表
-func _get_tier_plan_for_round(round_id: int) -> Array[Dictionary]:
-	var plan: Array[Dictionary] = []
-	for entry in _enemy_tier_ratio_rows:
-		var row: Dictionary = entry as Dictionary
-		var rid: int = int(row.get("round_id", "0"))
-		if rid != round_id:
-			continue
-		var tier: int = int(row.get("tier", "0"))
-		var count: int = int(row.get("count", "0"))
-		for i in range(count):
-			plan.append({"tier": tier})
-	return plan
-
-## 生成关卡并初始化 LevelSlot 数据
-## count: 本轮关卡数量（作为兜底，优先使用档位比例配置决定数量）
-## 保留击退状态的旧关卡，新关卡避开已占格子
-func _generate_level_slots(count: int) -> void:
-	if _schema == null:
-		return
-	# 构建排除列表：起点、终点、玩家当前位置 + 已有击退关卡的格子
-	var exclude: Array[Vector2i] = [_start_pos, _end_pos]
-	if _unit != null and not exclude.has(_unit.position):
-		exclude.append(_unit.position)
-	# M2：排除持久 slot 占据的格子，避免关卡与城建锚 slot 重叠
-	for ps in _schema.persistent_slots:
-		if not exclude.has(ps.position):
-			exclude.append(ps.position)
-	# 保留击退关卡，排除其占据的格子
-	for pos in _level_slots:
-		var p: Vector2i = pos as Vector2i
-		var lv: LevelSlot = _level_slots[p] as LevelSlot
-		if lv.is_repelled():
-			if not exclude.has(p):
-				exclude.append(p)
-
-	# 当前轮次索引（用于难度和奖励）
-	var round_index: int = _round_manager.get_current_round() if _round_manager != null else 0
-	var round_id: int = round_index + 1
-
-	# 从档位比例配置获取本轮生成计划
-	var tier_plan: Array[Dictionary] = _get_tier_plan_for_round(round_id)
-	# 如果有档位配置，使用配置中的总数；否则使用传入的 count
-	var actual_count: int = tier_plan.size() if not tier_plan.is_empty() else count
-
-	# 排除资源点占据的格子
-	for pos in _resource_slots:
-		var p: Vector2i = pos as Vector2i
-		if not exclude.has(p):
-			exclude.append(p)
-
-	# 在地图上随机放置关卡 Slot（M2 P1#4：注入 _world_rng 保证 seed 复现）
-	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_schema, actual_count, exclude, _world_rng)
-
-	# 构建新关卡字典（保留击退关卡 + 新增本轮关卡）
-	var new_slots: Dictionary = {}
-	# 先保留击退状态的旧关卡
-	for pos in _level_slots:
-		var p: Vector2i = pos as Vector2i
-		var lv: LevelSlot = _level_slots[p] as LevelSlot
-		if lv.is_repelled():
-			new_slots[p] = lv
-	# 新增本轮关卡（按档位生成部队）
-	for i in range(placed.size()):
-		var pos: Vector2i = placed[i]
-		var level: LevelSlot = LevelSlot.new()
-		level.position = pos
-		level.difficulty = round_index
-		# 确定档位：有档位计划则按计划分配，否则默认弱
-		var tier: int = 0
-		if i < tier_plan.size():
-			tier = int(tier_plan[i]["tier"])
-		level.tier = tier
-		# 按档位生成敌方部队
-		if _enemy_generator != null:
-			if not _enemy_generator._tier_configs.is_empty():
-				level.troops = _enemy_generator.generate_troops_for_tier(tier)
-			else:
-				level.troops = _enemy_generator.generate_troops()
-		# 为关卡预生成胜利奖励
-		if _reward_generator != null:
-			level.rewards = _reward_generator.generate_rewards_range(
-				_level_reward_pool_rows, round_id,
-				_level_reward_count_min, _level_reward_count_max
-			)
-		new_slots[pos] = level
-	_level_slots = new_slots
+#
+# M7 前：轮次切换时整批清理敌方关卡 + 整批生成新关卡
+# M7 后：敌方生成走 EnemyReinforcement（初始预置 + 每 5 回合增援）；
+#        击败的敌方部队包在 _post_battle_settlement 就地从 _level_slots 删除 + 恢复 schema slot
+#
+# 原 _clear_level_slots / _generate_level_slots / _get_tier_plan_for_round 已无调用方，M7 重构时删除
 
 
 ## 清除所有资源点（每轮次刷新前调用）
@@ -1297,29 +1265,19 @@ func _get_level_at(pos: Vector2i) -> LevelSlot:
 # 轮次管理
 # ─────────────────────────────────────────
 
-## 轮次开始回调：清除旧关卡，生成本轮新关卡和资源点，预生成轮次奖励
+## 轮次开始回调（M7 重构）
+## M7 前：每轮生成若干敌方关卡（按 _enemy_tier_ratio_rows 档位比例）+ 资源点
+## M7 后：敌方生成迁到"开局预置 + 每 5 敌方回合增援"（见 _deploy_initial_enemy_packs / EnemyReinforcement）；
+##        本函数只保留资源点的轮次刷新 + 轮次奖励预生成
+##
+## 轮次概念保留做玩家通关进度标记（多轮次通关可扩展为胜利条件之一）；
+## 当前 RoundManager.current_level_count 继承 round_config.csv 配置，击败敌方部队包时仍会触发 on_level_cleared
 func _on_round_started(round_index: int) -> void:
-	# 清除上一轮的关卡 Slot
-	_clear_level_slots()
-
 	# 清除上一轮的一次性资源点（保留持久资源点）
 	_clear_onetime_resource_slots()
 
-	# 生成本轮资源点（在关卡之前，让关卡排除资源点位置）
+	# 生成本轮资源点
 	_generate_resource_slots()
-
-	# 生成本轮关卡
-	var level_count: int = _round_manager.get_current_level_count()
-	_generate_level_slots(level_count)
-
-	# 将实际生成的关卡数量同步回 RoundManager（档位配置可能改变数量）
-	# 统计新增的未击败关卡数（排除击退状态的旧关卡）
-	var new_level_count: int = 0
-	for pos in _level_slots:
-		var lv: LevelSlot = _level_slots[pos] as LevelSlot
-		if not lv.is_defeated() and not lv.is_repelled():
-			new_level_count += 1
-	_round_manager.override_current_level_count(new_level_count)
 
 	# 预生成轮次胜利奖励
 	var round_id: int = round_index + 1
@@ -1484,10 +1442,8 @@ func _grant_level_rewards_for(level: LevelSlot) -> void:
 
 ## 战斗后共用处理：更新 HUD、失败判定、轮次推进
 ## 若处于敌方移动阶段的强制战斗，结算后继续处理移动队列
+## M7 迁移：原"首次战斗后激活敌方"逻辑移除，敌方 AI 开局即活跃（初始预置 5 支 + 每 5 回合增援）
 func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
-	# 首次战斗完成后激活敌方移动能力
-	if not _enemy_can_move and _enemy_movement_enabled:
-		_enemy_can_move = true
 
 	_update_hud()
 	queue_redraw()
@@ -1506,6 +1462,18 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 	# 非 forced 场景：玩家主动进入敌格战斗，victory 后单位停留在敌格位置
 	if defeated and not was_forced:
 		_try_player_occupy_at(_unit.position)
+
+	# M7: 击败的敌方部队包从 _level_slots 字典移除 + 恢复 MapSchema slot 标记
+	# M7 前由 _on_round_started → _clear_level_slots 整批清理；M7 后逐个即时清理
+	# 注意：REPELLED 状态保留，冷却递减由 _tick_repelled_cooldowns 管理
+	if defeated and level != null:
+		var lvpos: Vector2i = level.position
+		if _level_slots.has(lvpos):
+			_level_slots.erase(lvpos)
+		if _schema != null:
+			var orig_type: int = _original_slot_types.get(lvpos, MapSchema.SlotType.NONE) as int
+			_schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
+			_original_slot_types.erase(lvpos)
 	if defeated and _round_manager != null:
 		var round_cleared: bool = _round_manager.on_level_cleared()
 		_update_hud()
@@ -1600,8 +1568,13 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 # 击退冷却管理
 # ─────────────────────────────────────────
 
-## 递减所有击退关卡的冷却回合数，冷却结束则恢复为可交互
-func _tick_repelled_cooldowns() -> void:
+## REPELLED 冷却 tick（M7 迁移为 TickRegistry handler）
+## 由 TurnManager.start_faction_turn(ENEMY_1) 自动触发
+## 只在敌方自阵营回合开始时递减冷却（§7.1 步骤 1）
+## 语义：击退的敌方部队包在自己阵营下一回合开始时冷却 -1，归零恢复 UNCHALLENGED
+func _tick_repelled_cooldowns(faction: int) -> void:
+	if faction != Faction.ENEMY_1:
+		return
 	for pos in _level_slots:
 		var lv: LevelSlot = _level_slots[pos] as LevelSlot
 		if lv.is_repelled():

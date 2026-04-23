@@ -42,7 +42,11 @@ var _move_tween: Tween = null
 
 var _schema: MapSchema = null
 var _level_slots: Dictionary = {}
+## 玩家单位当前位置（用于强制战斗触发；敌方靠近玩家单位相邻格时触发战斗）
 var _player_pos: Vector2i = Vector2i.ZERO
+## M7 目标位置：敌方部队寻路目的地（玩家核心 persistent slot 位置）
+## 与 _player_pos 分离：target 是战略目标，player_pos 是战术阻挡点
+var _target_pos: Vector2i = Vector2i.ZERO
 var _movement_points: int = 6
 var _original_slot_types: Dictionary = {}
 var _game_over: bool = false
@@ -67,13 +71,19 @@ func get_moving_level() -> LevelSlot:
 
 
 ## 启动敌方移动阶段
-## 收集所有可移动关卡，按距离排序后逐个处理
+## 收集所有可移动关卡，按距离（到 target_pos）排序后逐个处理
+##
+## M7 新增 target_pos 参数（§五 AI 移动策略）：
+##   target_pos —— 战略目标（玩家核心 slot 位置）；寻路目的地
+##   player_pos —— 玩家单位位置；用于强制战斗触发（到达其相邻格）
+##   两者通常不同：核心是固定战略点，单位是移动战术点
 func start_phase(schema: MapSchema, level_slots: Dictionary,
-		player_pos: Vector2i, movement_points: int,
+		player_pos: Vector2i, target_pos: Vector2i, movement_points: int,
 		original_slot_types: Dictionary, game_over: bool) -> void:
 	_schema = schema
 	_level_slots = level_slots
 	_player_pos = player_pos
+	_target_pos = target_pos
 	_movement_points = movement_points
 	_original_slot_types = original_slot_types
 	_game_over = game_over
@@ -116,20 +126,25 @@ func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 	)
 
 
-## 获取可移动关卡列表，按距离玩家从近到远排序
-## 距离相同时按 y→x 排序
+## 获取可移动关卡列表，按距离 target_pos（玩家核心）从近到远排序
+## 距离相同时按 y→x 稳定排序
+## M7：仅 UNCHALLENGED 且归属 ENEMY_1 的 LevelSlot 参与；
+##     faction == NONE 的 legacy 敌方格（M7 前的关卡）也允许，兼容过渡期
 func _get_sorted_movable_levels() -> Array[LevelSlot]:
 	var movable: Array[LevelSlot] = []
 	for pos in _level_slots:
 		var lv: LevelSlot = _level_slots[pos] as LevelSlot
-		# 仅 UNCHALLENGED 状态的关卡参与移动
-		if lv.state == LevelSlot.State.UNCHALLENGED:
-			movable.append(lv)
+		if lv.state != LevelSlot.State.UNCHALLENGED:
+			continue
+		# 排除玩家归属的 LevelSlot（如果未来出现此场景）
+		if lv.faction == Faction.PLAYER:
+			continue
+		movable.append(lv)
 
-	var p_pos: Vector2i = _player_pos
+	var t_pos: Vector2i = _target_pos
 	movable.sort_custom(func(a: LevelSlot, b: LevelSlot) -> bool:
-		var dist_a: int = absi(a.position.x - p_pos.x) + absi(a.position.y - p_pos.y)
-		var dist_b: int = absi(b.position.x - p_pos.x) + absi(b.position.y - p_pos.y)
+		var dist_a: int = absi(a.position.x - t_pos.x) + absi(a.position.y - t_pos.y)
+		var dist_b: int = absi(b.position.x - t_pos.x) + absi(b.position.y - t_pos.y)
 		if dist_a != dist_b:
 			return dist_a < dist_b
 		if a.position.y != b.position.y:
@@ -157,10 +172,12 @@ func _process_next_move() -> void:
 		_process_next_move()
 		return
 
-	# 寻路：目标为玩家位置，阻挡其他所有关卡
+	# 寻路：目标为玩家核心（_target_pos），阻挡其他所有关卡 + 玩家单位
+	# 玩家单位位置视为阻挡，路径自然停在相邻格触发 forced battle
 	var blocked: Dictionary = _get_blocked_positions(level)
+	blocked[_player_pos] = true
 	var path_result: Pathfinder.PathResult = Pathfinder.find_path(
-		_schema, level.position, _player_pos, {}, blocked
+		_schema, level.position, _target_pos, {}, blocked
 	)
 
 	if path_result.path.size() < 2:
