@@ -170,6 +170,9 @@ var _build_panel_ui: BuildPanelUI = null
 ## 敌方 AI（M7）
 var _enemy_ai: EnemyAI = null
 
+## 胜负遮罩 UI（M8）—— 核心城镇翻转时显示胜利 / 失败 + 重开按钮
+var _victory_ui: VictoryUI = null
+
 ## 两方石料库存（M5）—— { Faction 整数 ID: int 数量 }
 ## 玩家侧由 build_config.player_initial_stone 初始化；
 ## 敌方侧由 enemy_initial_stone 初始化，M7 真正消耗前只占位
@@ -507,10 +510,14 @@ func _deploy_initial_enemy_packs() -> void:
 ## 重要性：TickRegistry._handlers 是 static，跨场景共享；不清理会在下次进入
 ## 场景时触发已释放的 handler 导致 Callable.is_valid() == false 被跳过，
 ## 看似无害但会堆积僵尸 handler
+##
+## M8 追加：VictoryJudge 同样走静态沉降 Callable，重开时必须 clear_sink
+## 否则旧场景的 _on_victory_decided 会在新场景中被错误调用
 func _exit_tree() -> void:
 	TickRegistry.unregister(_on_faction_tick)
 	TickRegistry.unregister(_on_build_tick)
 	TickRegistry.unregister(_tick_repelled_cooldowns)
+	VictoryJudge.clear_sink()
 
 
 ## 初始化子系统（敌方移动、战斗 UI、管理 UI）
@@ -558,6 +565,18 @@ func _init_subsystems() -> void:
 	_enemy_ai.name = "EnemyAI"
 	add_child(_enemy_ai)
 	_enemy_ai.init(self, _turn_manager)
+
+	# 胜负遮罩 UI（M8）
+	# 挂载顺序放在所有 UI 面板之后，保证遮罩渲染在最上层（吸收点击）
+	_victory_ui = VictoryUI.new()
+	_victory_ui.name = "VictoryUI"
+	add_child(_victory_ui)
+	_victory_ui.create_ui(ui_layer)
+	_victory_ui.restart_pressed.connect(_on_restart_pressed)
+
+	# M8：注册胜负回调；OccupationSystem.try_occupy 翻转核心城镇时触发
+	# reload_current_scene 后新的 _ready 会重新注册，_exit_tree 会 clear_sink 避免悬空
+	VictoryJudge.register_sink(_on_victory_decided)
 
 # ─────────────────────────────────────────
 # 输入处理
@@ -1132,16 +1151,73 @@ func start_enemy_move_phase() -> void:
 	# M7 MVP：target 为玩家核心 persistent slot 位置
 	var target_pos: Vector2i = _get_player_core_pos()
 	if target_pos == Vector2i(-1, -1):
-		# 玩家核心失守锚点（M8 接入）：
-		#   M7 阶段仅 push_warning + 退化为追击玩家单位位置
-		#   M8 实装胜负判定时，此处应触发 _on_player_core_lost() → _game_finished = true + 显示失败文案
-		push_warning("WorldMap.start_enemy_move_phase: 玩家核心已失守（M8 失败钩子未实装），退化为追击玩家单位")
-		target_pos = _unit.position
+		# M8 接入：玩家核心已失守 → 触发失败兜底
+		# 正常路径下 VictoryJudge 已在上一个敌方回合占据核心时触发 _on_victory_decided；
+		# 走到这里说明状态异常（VictoryJudge 未注册 / 重开后残留 / 核心初始化失败），
+		# 按失败处理 + 立刻结束 phase，避免敌方继续移动造成错乱
+		#
+		# 审查 P2 修复：用 push_error 而非 push_warning，明确这是异常状态下的降级处理，
+		# 便于从日志识别上游 bug（理论上不应触发）
+		push_error("WorldMap.start_enemy_move_phase: 玩家核心 persistent slot 未找到（异常态，降级判负）；检查 VictoryJudge 注册 / 核心生成流程")
+		_on_victory_decided(Faction.ENEMY_1)
+		_on_enemy_phase_finished()
+		return
 	_enemy_movement.start_phase(
 		_schema, _level_slots, _unit.position, target_pos,
 		_enemy_movement_points, _original_slot_types, _game_finished
 	)
 
+
+# ─────────────────────────────────────────
+# M8 胜负判定回调
+# ─────────────────────────────────────────
+
+## 胜负判定沉降回调（由 VictoryJudge.check_on_slot_owner_changed 触发）
+## winner_faction —— 胜利方势力 ID（翻转后占据核心城镇的势力）
+##
+## 职责：
+##   - 标记 _game_finished = true 阻断后续输入 / 敌方移动 / tick
+##   - 清空可达高亮（视觉冻结）
+##   - 弹出 VictoryUI 全屏遮罩（带评分 / 回合数副标题）
+##
+## 幂等性：
+##   VictoryJudge._finished 已拦截重复触发；本函数仍做 _game_finished 双保险，
+##   避免未来新增触发源（如手动 debug 调用）时重入
+func _on_victory_decided(winner_faction: int) -> void:
+	if _game_finished:
+		return
+	_game_finished = true
+	_reachable_tiles = {}
+
+	# 敌方移动阶段中触发时，通知 EnemyMovement 在下一次 _process_next_move 提前收场
+	# 避免后续部队包还在往玩家核心推进
+	if _enemy_movement != null:
+		_enemy_movement.notify_game_over()
+
+	queue_redraw()
+
+	var turn_count: int = 0
+	if _turn_manager != null:
+		turn_count = _turn_manager.player_faction_turn_count
+	var subtitle: String = "回合 %d  |  %s" % [turn_count, _get_score_text()]
+	if winner_faction == Faction.PLAYER:
+		if _victory_ui != null:
+			_victory_ui.show_victory(subtitle)
+	else:
+		if _victory_ui != null:
+			_victory_ui.show_defeat(subtitle)
+
+
+## 重开按钮回调（VictoryUI.restart_pressed）
+## MVP 策略：直接重载当前场景 —— 最干净的 reset，
+## TickRegistry / BuildSystem / VictoryJudge 的静态态由 _exit_tree + 新 _ready 的 load_config 覆盖
+func _on_restart_pressed() -> void:
+	get_tree().reload_current_scene()
+
+
+# ─────────────────────────────────────────
+# 敌方 AI 协作辅助
+# ─────────────────────────────────────────
 
 ## 查找玩家核心 persistent slot 的位置
 ## 返回 (-1, -1) 表示未找到（场景初始化未完成或核心已被敌方占据）

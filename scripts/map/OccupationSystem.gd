@@ -61,6 +61,11 @@ static func try_occupy(slot: PersistentSlot, unit_faction: int) -> bool:
 	slot.garrison_turns = 0
 	slot.occupy_turns = 0
 	slot.active_build = null
+
+	# M8 胜负判定钩子：核心城镇归属翻转 → 触发胜负
+	# VictoryJudge 内部会过滤非 CORE_TOWN；此处无需再判断类型，保持 try_occupy 职责单一
+	# MVP 无缓冲：占据即判定（《持久slot基础功能设计》§七）
+	VictoryJudge.check_on_slot_owner_changed(slot)
 	return true
 
 
