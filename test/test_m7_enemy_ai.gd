@@ -25,6 +25,8 @@ func _init() -> void:
 	_test_pathfinder_blocked_destination_contract()
 	_test_dynamic_target_adjacent_forced_battle()
 	_test_movable_levels_faction_whitelist()
+	_test_target_switch_range_threshold()
+	_test_display_id_assignment_stability()
 
 	# 清理静态状态
 	BuildSystem.clear_state()
@@ -350,6 +352,166 @@ func _test_movable_levels_faction_whitelist() -> void:
 		"未知势力（99）拦住（白名单外）")
 
 	em.queue_free()
+
+
+## 11. 阈值切换（M8 扩展）
+##     默认 R=10；玩家在阈值外即使比核心更近也不追玩家
+##     场景矩阵：distance vs threshold × d_player vs d_core
+func _test_target_switch_range_threshold() -> void:
+	print("-- AI 追玩家阈值切换")
+	var em: EnemyMovement = EnemyMovement.new()
+	em._target_switch_range = 10    # 显式指定，默认也是 10
+
+	# 场景 A：玩家在阈值内（d=5）且比核心近 → 追玩家
+	em._target_pos = Vector2i(0, 0)
+	em._player_pos = Vector2i(20, 0)
+	var p_a: LevelSlot = LevelSlot.new()
+	p_a.position = Vector2i(15, 0)    # d_player=5, d_core=15
+	_assert(em._pick_target_for(p_a) == em._player_pos, "d_player=5≤10 且 <15 → 追玩家")
+
+	# 场景 B：玩家在阈值外（d=11）即使比核心近也推核心
+	em._player_pos = Vector2i(25, 0)
+	var p_b: LevelSlot = LevelSlot.new()
+	p_b.position = Vector2i(14, 0)    # d_player=11, d_core=14
+	_assert(em._pick_target_for(p_b) == em._target_pos,
+		"d_player=11>10（阈值外）即使 <d_core=14 也推核心")
+
+	# 场景 C：阈值边界内（d=10）+ 比核心近 → 追玩家
+	em._player_pos = Vector2i(20, 0)
+	var p_c: LevelSlot = LevelSlot.new()
+	p_c.position = Vector2i(10, 0)    # d_player=10, d_core=10
+	# 注意：d_player=10<=10 但 d_player<d_core 为 10<10 false → 推核心
+	_assert(em._pick_target_for(p_c) == em._target_pos,
+		"d_player=10=d_core=10（tie）→ 推核心（兜底）")
+
+	var p_c2: LevelSlot = LevelSlot.new()
+	p_c2.position = Vector2i(10, 1)    # d_player=11, d_core=11
+	_assert(em._pick_target_for(p_c2) == em._target_pos, "d_player=11>10 → 推核心")
+
+	# 场景 D：阈值内 + 严格小于核心距离 → 追玩家
+	var p_d: LevelSlot = LevelSlot.new()
+	p_d.position = Vector2i(11, 0)    # d_player=9, d_core=11
+	_assert(em._pick_target_for(p_d) == em._player_pos,
+		"d_player=9≤10 且 <11 → 追玩家（边界内典型场景）")
+
+	# 场景 E：玩家贴在核心附近（d_core=2, d_player=15）→ 推核心（保证集火推核心压力）
+	em._player_pos = Vector2i(2, 0)
+	var p_e: LevelSlot = LevelSlot.new()
+	p_e.position = Vector2i(15, 0)   # d_player=13, d_core=15
+	_assert(em._pick_target_for(p_e) == em._target_pos,
+		"玩家贴核心 + pack 远（d_player=13>10）→ 推核心")
+
+	# min_target_distance 与 pick 同口径（新建 em 隔离上下文）
+	var em2: EnemyMovement = EnemyMovement.new()
+	em2._target_switch_range = 10
+	em2._target_pos = Vector2i(0, 0)
+	em2._player_pos = Vector2i(25, 0)
+	# pos_far_player: d_player=11（阈值外）→ min 取核心距 14
+	_assert(em2._min_target_distance(Vector2i(14, 0)) == 14,
+		"阈值外时 min_dist 取核心距离（=14）")
+	# pos_near_player: d_player=5, d_core=20 → min 取玩家距 5
+	em2._player_pos = Vector2i(20, 0)
+	_assert(em2._min_target_distance(Vector2i(15, 0)) == 5,
+		"追玩家场景 min_dist 取玩家距离（=5）")
+
+	em.queue_free()
+	em2.queue_free()
+
+
+## 12. display_id 分配稳定性
+##     同一组 slot 两次分配 → 同 ID；不同 position 的 slot → 不同 ID
+##     验证 (faction, type, y→x) 排序稳定性
+func _test_display_id_assignment_stability() -> void:
+	print("-- display_id 分配")
+
+	# 构造一组混合归属 / 类型 / 位置的 slot
+	var build_slots: Callable = func() -> Array[PersistentSlot]:
+		var result: Array[PersistentSlot] = []
+		# 玩家核心 @ (0,0)
+		result.append(_make_persistent_slot(Vector2i(0, 0),
+			PersistentSlot.Type.CORE_TOWN, Faction.PLAYER))
+		# 敌方核心 @ (31,31)
+		result.append(_make_persistent_slot(Vector2i(31, 31),
+			PersistentSlot.Type.CORE_TOWN, Faction.ENEMY_1))
+		# 玩家 3 个村庄（不同 y）
+		result.append(_make_persistent_slot(Vector2i(5, 3),
+			PersistentSlot.Type.VILLAGE, Faction.PLAYER))
+		result.append(_make_persistent_slot(Vector2i(2, 5),
+			PersistentSlot.Type.VILLAGE, Faction.PLAYER))
+		result.append(_make_persistent_slot(Vector2i(7, 2),
+			PersistentSlot.Type.VILLAGE, Faction.PLAYER))
+		# 玩家 1 个城镇
+		result.append(_make_persistent_slot(Vector2i(4, 4),
+			PersistentSlot.Type.TOWN, Faction.PLAYER))
+		# 敌方 2 个村庄
+		result.append(_make_persistent_slot(Vector2i(25, 28),
+			PersistentSlot.Type.VILLAGE, Faction.ENEMY_1))
+		result.append(_make_persistent_slot(Vector2i(27, 26),
+			PersistentSlot.Type.VILLAGE, Faction.ENEMY_1))
+		return result
+
+	var slots_a: Array[PersistentSlot] = build_slots.call() as Array[PersistentSlot]
+	PersistentSlotGenerator._assign_display_ids(slots_a)
+
+	# 核心检验
+	for s in slots_a:
+		if s.type == PersistentSlot.Type.CORE_TOWN:
+			_assert(s.display_id == "核心",
+				"核心城镇 display_id = '核心' (势力=%d)" % s.owner_faction)
+
+	# 玩家村庄按 (y,x) 升序：(7,2)=y=2, (5,3)=y=3, (2,5)=y=5 → 村庄1, 村庄2, 村庄3
+	var player_villages: Array[PersistentSlot] = []
+	for s in slots_a:
+		if s.type == PersistentSlot.Type.VILLAGE and s.owner_faction == Faction.PLAYER:
+			player_villages.append(s)
+	# 按 position 查找并断言
+	_assert(_find_village_at(player_villages, Vector2i(7, 2)).display_id == "村庄1",
+		"玩家村庄 (7,2) y=2 最小 → 村庄1")
+	_assert(_find_village_at(player_villages, Vector2i(5, 3)).display_id == "村庄2",
+		"玩家村庄 (5,3) y=3 → 村庄2")
+	_assert(_find_village_at(player_villages, Vector2i(2, 5)).display_id == "村庄3",
+		"玩家村庄 (2,5) y=5 → 村庄3")
+
+	# 玩家 TOWN 独立计数 → 城镇1
+	for s in slots_a:
+		if s.type == PersistentSlot.Type.TOWN and s.owner_faction == Faction.PLAYER:
+			_assert(s.display_id == "城镇1", "玩家唯一城镇 → 城镇1")
+
+	# 敌方村庄独立计数
+	var enemy_villages: Array[PersistentSlot] = []
+	for s in slots_a:
+		if s.type == PersistentSlot.Type.VILLAGE and s.owner_faction == Faction.ENEMY_1:
+			enemy_villages.append(s)
+	# (27,26) y=26, (25,28) y=28 → 敌方 村庄1, 村庄2
+	_assert(_find_village_at(enemy_villages, Vector2i(27, 26)).display_id == "村庄1",
+		"敌方村庄 (27,26) y=26 → 村庄1（独立计数）")
+	_assert(_find_village_at(enemy_villages, Vector2i(25, 28)).display_id == "村庄2",
+		"敌方村庄 (25,28) y=28 → 村庄2")
+
+	# 稳定性：再跑一次，ID 应一致
+	var slots_b: Array[PersistentSlot] = build_slots.call() as Array[PersistentSlot]
+	PersistentSlotGenerator._assign_display_ids(slots_b)
+	for i in range(slots_a.size()):
+		# slots_a / slots_b 是按 build 顺序构造的，索引对齐
+		_assert(slots_a[i].display_id == slots_b[i].display_id,
+			"稳定性：两次分配 index=%d 同 position (%d,%d) 得到相同 ID" % [i, slots_a[i].position.x, slots_a[i].position.y])
+
+
+## 辅助：按 position 在数组中查找 PersistentSlot
+func _find_village_at(arr: Array[PersistentSlot], pos: Vector2i) -> PersistentSlot:
+	for s in arr:
+		if s.position == pos:
+			return s
+	return null
+
+
+## 辅助：构造测试 PersistentSlot
+func _make_persistent_slot(pos: Vector2i, type: int, faction: int) -> PersistentSlot:
+	var s: PersistentSlot = PersistentSlot.new()
+	s.position = pos
+	s.type = type
+	s.owner_faction = faction
+	return s
 
 
 ## 构造测试用 LevelSlot（UNCHALLENGED + 指定归属）

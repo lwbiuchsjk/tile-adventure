@@ -50,6 +50,9 @@ var _target_pos: Vector2i = Vector2i.ZERO
 var _movement_points: int = 6
 var _original_slot_types: Dictionary = {}
 var _game_over: bool = false
+## M8 扩展：追玩家阈值。pack 到玩家距离 ≤ 该值 且 d_player < d_core 时才追玩家
+## 默认 10（与 battle_config.enemy_target_switch_range 同值）；start_phase 注入实际值
+var _target_switch_range: int = 10
 
 # ─────────────────────────────────────
 # 公开接口
@@ -71,15 +74,17 @@ func get_moving_level() -> LevelSlot:
 
 
 ## 启动敌方移动阶段
-## 收集所有可移动关卡，按距离（到 target_pos）排序后逐个处理
+## 收集所有可移动关卡，按距离（到动态 target）排序后逐个处理
 ##
-## M7 新增 target_pos 参数（§五 AI 移动策略）：
-##   target_pos —— 战略目标（玩家核心 slot 位置）；寻路目的地
-##   player_pos —— 玩家单位位置；用于强制战斗触发（到达其相邻格）
-##   两者通常不同：核心是固定战略点，单位是移动战术点
+## 参数：
+##   target_pos —— 战略目标（玩家核心 slot 位置）；寻路目的地的一个候选
+##   player_pos —— 玩家单位位置；用于强制战斗触发 + 动态目标的另一候选
+##   target_switch_range —— 追玩家阈值（默认 10）；pack 到玩家 ≤ 该值才可能追玩家
+##     传 -1 或 0 时退化为"永远推核心"（测试 / 调试用）
 func start_phase(schema: MapSchema, level_slots: Dictionary,
 		player_pos: Vector2i, target_pos: Vector2i, movement_points: int,
-		original_slot_types: Dictionary, game_over: bool) -> void:
+		original_slot_types: Dictionary, game_over: bool,
+		target_switch_range: int = 10) -> void:
 	_schema = schema
 	_level_slots = level_slots
 	_player_pos = player_pos
@@ -87,6 +92,7 @@ func start_phase(schema: MapSchema, level_slots: Dictionary,
 	_movement_points = movement_points
 	_original_slot_types = original_slot_types
 	_game_over = game_over
+	_target_switch_range = target_switch_range
 
 	_is_moving = true
 	_move_queue = _get_sorted_movable_levels()
@@ -159,22 +165,32 @@ func _get_sorted_movable_levels() -> Array[LevelSlot]:
 	return movable
 
 
-## 返回 pos 到"核心 / 玩家部队"两者中较近一方的曼哈顿距离
-## 用于动态目标的排序 + 选择
+## 返回 pos 到当前选中 target 的曼哈顿距离
+## 保持和 _pick_target_for 同口径：玩家在阈值外或比核心远 → min = d_core；否则 min = d_player
+## 保持一致是为了排序与目标选择结果对齐（排序顺序 = 实际追击的优先级）
 func _min_target_distance(pos: Vector2i) -> int:
 	var d_core: int = absi(pos.x - _target_pos.x) + absi(pos.y - _target_pos.y)
 	var d_player: int = absi(pos.x - _player_pos.x) + absi(pos.y - _player_pos.y)
-	return mini(d_core, d_player)
+	if d_player <= _target_switch_range and d_player < d_core:
+		return d_player
+	return d_core
 
 
 ## 为单个部队包挑选本次移动的 target
-## 规则：核心 / 玩家部队曼哈顿距离近者优先；相等时偏向核心（保持战略压力）
-## 返回值语义同 _target_pos：寻路目的地
+## 规则（M8 阈值扩展）：
+##   1. 玩家距离 ≤ _target_switch_range（默认 10） 且
+##   2. 玩家比核心更近（d_player < d_core）
+##   ↑ 两个条件同时满足 → target = 玩家
+##   其他情况（玩家远离 / 核心更近或相等）→ target = 核心（战略兜底）
+##
+## 设计意图：
+##   - 默认保持"推核心"战略压力，玩家核心仍是 AI 的最终目标
+##   - 玩家出击深入敌方 10 格内 + 比核心更近 → 近处 pack 切换追玩家（响应威胁）
+##   - 玩家贴在自己核心附近 → d_core 反而小，所有 pack 仍集火推核心
 func _pick_target_for(level: LevelSlot) -> Vector2i:
 	var d_core: int = absi(level.position.x - _target_pos.x) + absi(level.position.y - _target_pos.y)
 	var d_player: int = absi(level.position.x - _player_pos.x) + absi(level.position.y - _player_pos.y)
-	# 相等时选核心：战略目标兜底，避免所有敌人一窝蜂围玩家单位
-	if d_player < d_core:
+	if d_player <= _target_switch_range and d_player < d_core:
 		return _player_pos
 	return _target_pos
 

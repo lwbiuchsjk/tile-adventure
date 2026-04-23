@@ -192,7 +192,47 @@ static func _try_generate(
 	# 阶段 6：涌现延伸 m 步
 	_emerge(slots, cores, config, rng)
 
+	# 阶段 7（M8 扩展）：分配 display_id
+	# 依赖最终归属已定（§5/§6 染色 + 涌现完成），故放在最后
+	_assign_display_ids(slots)
+
 	return slots
+
+
+## 按 (势力, 类型, 位置) 稳定排序给每个 slot 分配人类可读 ID
+## 规则：
+##   CORE_TOWN：每势力恒为"核心"（无序号）
+##   VILLAGE / TOWN：按 position (y→x) 稳定排序后，势力内按类型从 1 递增
+##                   示例：玩家有 3 个村庄 → "村庄1"/"村庄2"/"村庄3"；敌方独立计数
+##
+## 稳定性依赖 position 排序 —— position 由 seed 唯一决定，故同 seed 两次生成 ID 一致
+## 中立归属（NONE）的 slot 也会被分配 ID（基于 type 统计），后续被玩家 / 敌方占据时 ID 保留不变
+static func _assign_display_ids(slots: Array[PersistentSlot]) -> void:
+	# 确定性排序：按 (owner_faction, type, y, x) 升序完整显式比较
+	# 决策背景：Array.sort_custom 不保证稳定性；但此处四个比较键足以唯一决定顺序
+	# （不同 slot 不会共享 position），因此结果与稳定排序等价，无需依赖稳定性实现
+	var sorted: Array[PersistentSlot] = slots.duplicate()
+	sorted.sort_custom(func(a: PersistentSlot, b: PersistentSlot) -> bool:
+		if a.owner_faction != b.owner_faction:
+			return a.owner_faction < b.owner_faction
+		if a.type != b.type:
+			return int(a.type) < int(b.type)
+		if a.position.y != b.position.y:
+			return a.position.y < b.position.y
+		return a.position.x < b.position.x
+	)
+
+	# 按势力 × 类型独立计数
+	var counters: Dictionary = {}   # { Vector2i(faction, type): int next_idx }
+	for slot in sorted:
+		if slot.type == PersistentSlot.Type.CORE_TOWN:
+			# 核心每势力唯一，不加序号
+			slot.display_id = "核心"
+			continue
+		var key: Vector2i = Vector2i(slot.owner_faction, int(slot.type))
+		var next_idx: int = int(counters.get(key, 1))
+		slot.display_id = "%s%d" % [slot.get_type_name(), next_idx]
+		counters[key] = next_idx + 1
 
 
 # ─────────────────────────────────────────
