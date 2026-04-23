@@ -2056,6 +2056,12 @@ const M4_FACTION_COLORS: Dictionary = {
 ## 影响范围覆盖层 alpha（半透明，避免遮挡地形 / 单位 / 可达高亮）
 const M4_INFLUENCE_ALPHA: float = 0.15
 
+## 影响范围菱形外边界描边 alpha + 线宽
+## 决策背景：填充统一色会让相邻同势力 slot 的菱形融成一片、分不清各自边界；
+## 追加描边后每个 slot 一条独立轮廓，相邻 slot 重叠处形成双线，视觉可辨
+const M4_INFLUENCE_BORDER_ALPHA: float = 0.55
+const M4_INFLUENCE_BORDER_WIDTH: float = 2.0
+
 ## 核心城镇金色描边（凸显势力首都）
 const M4_CORE_TOWN_BORDER: Color = Color(1.0, 0.85, 0.0)
 
@@ -2063,6 +2069,10 @@ const M4_CORE_TOWN_BORDER: Color = Color(1.0, 0.85, 0.0)
 ## 绘制所有已占据持久 slot 的影响范围覆盖层（曼哈顿菱形内所有格）
 ## 中立 slot / influence_range <= 0 不渲染
 ## 覆盖层先于 slot 本体绘制，保证本体图案可见；相邻 slot 覆盖区域色彩叠加属预期
+##
+## 描边策略：对菱形内每格，检查 4 个正交邻居是否仍在菱形内；
+## 越界邻居对应的那条边即为菱形外边界 → 用势力色实线画出。
+## 效果：每个 slot 一条独立菱形轮廓；相邻同势力 slot 范围重叠处自然出现"内外双线"示意交集
 func _draw_persistent_influence_ranges() -> void:
 	if _schema == null:
 		return
@@ -2076,15 +2086,18 @@ func _draw_persistent_influence_ranges() -> void:
 			continue
 		var base: Color = M4_FACTION_COLORS.get(slot.owner_faction, Color.MAGENTA) as Color
 		var overlay: Color = Color(base.r, base.g, base.b, M4_INFLUENCE_ALPHA)
+		var border: Color = Color(base.r, base.g, base.b, M4_INFLUENCE_BORDER_ALPHA)
 		var r: int = slot.influence_range
+		var cx: int = slot.position.x
+		var cy: int = slot.position.y
 		# 曼哈顿菱形：|dx| + |dy| <= r
 		for dy in range(-r, r + 1):
-			var y: int = slot.position.y + dy
+			var y: int = cy + dy
 			if y < 0 or y >= _schema.height:
 				continue
 			var dx_max: int = r - absi(dy)
 			for dx in range(-dx_max, dx_max + 1):
-				var x: int = slot.position.x + dx
+				var x: int = cx + dx
 				if x < 0 or x >= _schema.width:
 					continue
 				var rect: Rect2 = Rect2(
@@ -2094,6 +2107,28 @@ func _draw_persistent_influence_ranges() -> void:
 					TILE_SIZE - 1
 				)
 				draw_rect(rect, overlay)
+
+				# 描边：对 4 个正交邻居逐个检查，越界邻居对应的边即为菱形外缘
+				# 注意是菱形 ± 邻居关系，不是矩形边界——用 |dx'|+|dy'| > r 判定
+				var px: float = float(x * TILE_SIZE)
+				var py: float = float(y * TILE_SIZE)
+				var pw: float = float(TILE_SIZE)
+				# 上（dy-1）
+				if absi(dx) + absi(dy - 1) > r:
+					draw_line(Vector2(px, py), Vector2(px + pw, py),
+						border, M4_INFLUENCE_BORDER_WIDTH)
+				# 下（dy+1）
+				if absi(dx) + absi(dy + 1) > r:
+					draw_line(Vector2(px, py + pw), Vector2(px + pw, py + pw),
+						border, M4_INFLUENCE_BORDER_WIDTH)
+				# 左（dx-1）
+				if absi(dx - 1) + absi(dy) > r:
+					draw_line(Vector2(px, py), Vector2(px, py + pw),
+						border, M4_INFLUENCE_BORDER_WIDTH)
+				# 右（dx+1）
+				if absi(dx + 1) + absi(dy) > r:
+					draw_line(Vector2(px + pw, py), Vector2(px + pw, py + pw),
+						border, M4_INFLUENCE_BORDER_WIDTH)
 
 
 ## 绘制所有持久 slot 的本体标记：外框色块 + 核心城镇金边 + 类型等级文字

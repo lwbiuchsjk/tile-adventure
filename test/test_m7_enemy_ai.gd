@@ -21,6 +21,10 @@ func _init() -> void:
 	_test_repelled_cooldown_tick()
 	_test_greedy_upgrade_exhaust_stone()
 	_test_full_entry_via_faction_signal()
+	_test_dynamic_target_selection()
+	_test_pathfinder_blocked_destination_contract()
+	_test_dynamic_target_adjacent_forced_battle()
+	_test_movable_levels_faction_whitelist()
 
 	# 清理静态状态
 	BuildSystem.clear_state()
@@ -204,6 +208,157 @@ func _test_full_entry_via_faction_signal() -> void:
 
 	ai.queue_free()
 	world.queue_free()
+
+
+## 7. 动态目标选择（M8 扩展）
+##    EnemyMovement._pick_target_for / _min_target_distance：
+##    按 min(dist_to_core, dist_to_player) 选 target；相等时偏向核心
+func _test_dynamic_target_selection() -> void:
+	print("-- 动态目标选择")
+	var em: EnemyMovement = EnemyMovement.new()
+	em._target_pos = Vector2i(0, 0)      # 核心在左上
+	em._player_pos = Vector2i(10, 10)    # 玩家在右下
+
+	# 场景 1：pack 靠近核心（距核心 3，距玩家 17）→ target = 核心
+	var near_core: LevelSlot = LevelSlot.new()
+	near_core.position = Vector2i(2, 1)
+	var t1: Vector2i = em._pick_target_for(near_core)
+	_assert(t1 == em._target_pos, "距核心近的 pack 选核心")
+	_assert(em._min_target_distance(near_core.position) == 3,
+		"min 距离取到核心（3）")
+
+	# 场景 2：pack 靠近玩家（距玩家 2，距核心 18）→ target = 玩家
+	var near_player: LevelSlot = LevelSlot.new()
+	near_player.position = Vector2i(9, 9)
+	var t2: Vector2i = em._pick_target_for(near_player)
+	_assert(t2 == em._player_pos, "距玩家近的 pack 选玩家")
+	_assert(em._min_target_distance(near_player.position) == 2,
+		"min 距离取到玩家（2）")
+
+	# 场景 3：相等距离 → 偏向核心（战略目标兜底）
+	em._target_pos = Vector2i(0, 0)
+	em._player_pos = Vector2i(10, 0)
+	var middle: LevelSlot = LevelSlot.new()
+	middle.position = Vector2i(5, 0)     # 距两者均为 5
+	var t3: Vector2i = em._pick_target_for(middle)
+	_assert(t3 == em._target_pos,
+		"距离相等时偏向核心（避免所有部队一窝蜂围玩家）")
+
+	em.queue_free()
+
+
+## 8. Pathfinder blocked destination 契约（审查 P1 触发）
+##    验证：end 在 blocked_positions 中时 find_path 返回空路径（不是"停在相邻格"的路径）
+##    这是"target == player 时不能把玩家格放 blocked"的依据
+func _test_pathfinder_blocked_destination_contract() -> void:
+	print("-- Pathfinder blocked=end 契约")
+	var schema: MapSchema = MapSchema.new()
+	schema.init(10, 10)
+	schema.terrain_costs = {MapSchema.TerrainType.FLATLAND: 1.0}
+
+	var start: Vector2i = Vector2i(0, 0)
+	var end: Vector2i = Vector2i(5, 5)
+
+	# 场景 1：end 不在 blocked → 正常路径
+	var clean: Pathfinder.PathResult = Pathfinder.find_path(schema, start, end, {}, {})
+	_assert(clean.path.size() > 0, "end 不在 blocked → 路径非空")
+	_assert(clean.path.back() == end, "end 不在 blocked → 路径末尾 == end")
+
+	# 场景 2：end 在 blocked → 空路径（这是审查 P1 发现的关键约束）
+	var blocked: Dictionary = {end: true}
+	var blocked_path: Pathfinder.PathResult = Pathfinder.find_path(schema, start, end, {}, blocked)
+	_assert(blocked_path.path.size() == 0,
+		"end 在 blocked_positions → find_path 返回空路径（拒绝把 end 加入 open_set）")
+
+
+## 9. 动态目标集成：pack 与玩家相邻且 target=player → 直接触发 forced_battle（不移动）
+##    旧代码会走 trim 后 size<2 分支，pack 原地不动；修复后应该 emit 信号
+func _test_dynamic_target_adjacent_forced_battle() -> void:
+	print("-- pack 邻玩家 target=player forced_battle")
+	var schema: MapSchema = MapSchema.new()
+	schema.init(10, 10)
+	schema.terrain_costs = {MapSchema.TerrainType.FLATLAND: 1.0}
+
+	var em: EnemyMovement = EnemyMovement.new()
+	em.tile_size = 48
+
+	# 构造 LevelSlot 在 (4,5)；玩家在 (5,5)；核心在 (0,0)
+	# d_player = 1, d_core = 10 → pack_target = player_pos
+	# pack 已在 player 相邻格 → 走早退 forced_battle 分支
+	var pack: LevelSlot = LevelSlot.new()
+	pack.position = Vector2i(4, 5)
+	pack.state = LevelSlot.State.UNCHALLENGED
+	pack.faction = Faction.ENEMY_1
+
+	# 信号捕获：_test_dynamic_target_adjacent_forced_battle_captured 累积触发次数
+	var fired: Array[LevelSlot] = []
+	em.forced_battle_triggered.connect(func(lv: LevelSlot) -> void: fired.append(lv))
+
+	em.start_phase(
+		schema,
+		{pack.position: pack},
+		Vector2i(5, 5),    # player_pos
+		Vector2i(0, 0),    # target_pos (core)
+		6,                 # movement_points
+		{},                # original_slot_types
+		false              # game_over
+	)
+
+	_assert(fired.size() == 1,        "forced_battle 触发了 1 次")
+	_assert(fired[0] == pack,         "触发的 LevelSlot 就是该 pack")
+	_assert(pack.position == Vector2i(4, 5), "pack 未移动（原地触发战斗）")
+
+	em.queue_free()
+
+
+## 10. 可移动 pack 阵营白名单（审查 P2 收紧）
+##     注释写"仅 ENEMY_1 + NONE legacy"，实现也须按此白名单（不能只排除 PLAYER）
+##     未来扩展势力（ENEMY_2 / 中立可移动势力等）不应被误收入敌方移动队列
+func _test_movable_levels_faction_whitelist() -> void:
+	print("-- 可移动 pack 阵营白名单")
+	var schema: MapSchema = MapSchema.new()
+	schema.init(10, 10)
+	schema.terrain_costs = {MapSchema.TerrainType.FLATLAND: 1.0}
+
+	var em: EnemyMovement = EnemyMovement.new()
+	em._schema = schema
+	em._target_pos = Vector2i(0, 0)
+	em._player_pos = Vector2i(9, 9)
+
+	var pack_enemy: LevelSlot = _make_level_slot(Vector2i(1, 1), Faction.ENEMY_1)
+	var pack_none: LevelSlot = _make_level_slot(Vector2i(2, 2), Faction.NONE)
+	var pack_player: LevelSlot = _make_level_slot(Vector2i(3, 3), Faction.PLAYER)
+	# 模拟未来扩展：99 非任何已知势力（应被白名单拦住）
+	var pack_unknown: LevelSlot = _make_level_slot(Vector2i(4, 4), 99)
+
+	em._level_slots = {
+		pack_enemy.position: pack_enemy,
+		pack_none.position: pack_none,
+		pack_player.position: pack_player,
+		pack_unknown.position: pack_unknown,
+	}
+
+	var movable: Array = em._get_sorted_movable_levels()
+	var positions: Array[Vector2i] = []
+	for lv in movable:
+		positions.append(lv.position)
+
+	_assert(positions.has(pack_enemy.position), "ENEMY_1 pack 纳入")
+	_assert(positions.has(pack_none.position),  "NONE legacy pack 纳入")
+	_assert(not positions.has(pack_player.position), "PLAYER pack 拦住")
+	_assert(not positions.has(pack_unknown.position),
+		"未知势力（99）拦住（白名单外）")
+
+	em.queue_free()
+
+
+## 构造测试用 LevelSlot（UNCHALLENGED + 指定归属）
+func _make_level_slot(pos: Vector2i, faction: int) -> LevelSlot:
+	var lv: LevelSlot = LevelSlot.new()
+	lv.position = pos
+	lv.state = LevelSlot.State.UNCHALLENGED
+	lv.faction = faction
+	return lv
 
 
 # ─────────────────────────────────────────

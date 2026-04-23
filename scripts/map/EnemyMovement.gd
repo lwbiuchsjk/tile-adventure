@@ -126,25 +126,30 @@ func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 	)
 
 
-## 获取可移动关卡列表，按距离 target_pos（玩家核心）从近到远排序
+## 获取可移动关卡列表，按距离"最近目标"从近到远排序
 ## 距离相同时按 y→x 稳定排序
 ## M7：仅 UNCHALLENGED 且归属 ENEMY_1 的 LevelSlot 参与；
 ##     faction == NONE 的 legacy 敌方格（M7 前的关卡）也允许，兼容过渡期
+##
+## 动态目标（M8 扩展）：
+##   每个部队包独立评估 min(dist_to_core, dist_to_player_troop)，选近者作为自己的 target
+##   排序字段为该 pack 到"最近目标"的距离；移动时也用同一个 target（见 _pick_target_for）
+##   效果：玩家前出时近处敌人盯玩家、远处继续推核心，战略压力 + 战术灵活并存
 func _get_sorted_movable_levels() -> Array[LevelSlot]:
 	var movable: Array[LevelSlot] = []
 	for pos in _level_slots:
 		var lv: LevelSlot = _level_slots[pos] as LevelSlot
 		if lv.state != LevelSlot.State.UNCHALLENGED:
 			continue
-		# 排除玩家归属的 LevelSlot（如果未来出现此场景）
-		if lv.faction == Faction.PLAYER:
+		# 阵营白名单：ENEMY_1（M7 正式）+ NONE（M7 前 legacy 关卡兼容）
+		# 审查 P2 修复：旧实现只排除 PLAYER，会把未知扩展势力也纳入；显式白名单避免漏收紧
+		if lv.faction != Faction.ENEMY_1 and lv.faction != Faction.NONE:
 			continue
 		movable.append(lv)
 
-	var t_pos: Vector2i = _target_pos
 	movable.sort_custom(func(a: LevelSlot, b: LevelSlot) -> bool:
-		var dist_a: int = absi(a.position.x - t_pos.x) + absi(a.position.y - t_pos.y)
-		var dist_b: int = absi(b.position.x - t_pos.x) + absi(b.position.y - t_pos.y)
+		var dist_a: int = _min_target_distance(a.position)
+		var dist_b: int = _min_target_distance(b.position)
 		if dist_a != dist_b:
 			return dist_a < dist_b
 		if a.position.y != b.position.y:
@@ -152,6 +157,26 @@ func _get_sorted_movable_levels() -> Array[LevelSlot]:
 		return a.position.x < b.position.x
 	)
 	return movable
+
+
+## 返回 pos 到"核心 / 玩家部队"两者中较近一方的曼哈顿距离
+## 用于动态目标的排序 + 选择
+func _min_target_distance(pos: Vector2i) -> int:
+	var d_core: int = absi(pos.x - _target_pos.x) + absi(pos.y - _target_pos.y)
+	var d_player: int = absi(pos.x - _player_pos.x) + absi(pos.y - _player_pos.y)
+	return mini(d_core, d_player)
+
+
+## 为单个部队包挑选本次移动的 target
+## 规则：核心 / 玩家部队曼哈顿距离近者优先；相等时偏向核心（保持战略压力）
+## 返回值语义同 _target_pos：寻路目的地
+func _pick_target_for(level: LevelSlot) -> Vector2i:
+	var d_core: int = absi(level.position.x - _target_pos.x) + absi(level.position.y - _target_pos.y)
+	var d_player: int = absi(level.position.x - _player_pos.x) + absi(level.position.y - _player_pos.y)
+	# 相等时选核心：战略目标兜底，避免所有敌人一窝蜂围玩家单位
+	if d_player < d_core:
+		return _player_pos
+	return _target_pos
 
 
 ## 处理队列中下一个关卡
@@ -172,12 +197,31 @@ func _process_next_move() -> void:
 		_process_next_move()
 		return
 
-	# 寻路：目标为玩家核心（_target_pos），阻挡其他所有关卡 + 玩家单位
-	# 玩家单位位置视为阻挡，路径自然停在相邻格触发 forced battle
+	# 寻路：目标为本部队包动态挑选的 target（核心 / 玩家部队近者）
+	# blocked 规则（与 target 类型解耦）：
+	#   - target == core（或其它非玩家）：_player_pos 需放入 blocked，路径绕开玩家
+	#   - target == _player_pos 本身：不可把玩家格放入 blocked
+	#     原因：Pathfinder 在 blocked_positions.has(end) 时拒绝 end 进 open_set，直接返回空路径，
+	#     pack 原地不动 → 追玩家功能实际不工作。此时玩家格作为路径终点参与寻路，
+	#     再由下方 trim 逻辑剥掉末格，自然停在玩家相邻格
+	var pack_target: Vector2i = _pick_target_for(level)
 	var blocked: Dictionary = _get_blocked_positions(level)
-	blocked[_player_pos] = true
+	if pack_target != _player_pos:
+		blocked[_player_pos] = true
+
+	# 早退路径 1（target == 玩家 且 pack 已在玩家相邻格）：
+	#   Pathfinder 返回 [self, player_pos]，trim 后仅 [self]，后续 size<2 分支会跳过
+	#   → pack 原地不动、forced_battle 不触发；相邻状态被错过。
+	#   直接 emit forced_battle 让战斗流程接手（resume_after_battle 会处理下一个 pack）
+	if pack_target == _player_pos:
+		var d: int = absi(level.position.x - _player_pos.x) + absi(level.position.y - _player_pos.y)
+		if d == 1:
+			_moving_level = null
+			forced_battle_triggered.emit(level)
+			return
+
 	var path_result: Pathfinder.PathResult = Pathfinder.find_path(
-		_schema, level.position, _target_pos, {}, blocked
+		_schema, level.position, pack_target, {}, blocked
 	)
 
 	if path_result.path.size() < 2:
