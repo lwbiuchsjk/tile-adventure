@@ -22,6 +22,10 @@ Design/
 # Local IDE settings
 .vscode/settings.json
 
+# Codex CLI plugin local cache (可能是 file 或 dir，取决于 WSL / Win 端)
+.codex
+.codex/
+
 # Local Godot runner (path varies per machine)
 tools/run_godot.ps1
 
