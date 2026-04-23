@@ -49,6 +49,7 @@ const CONFIG_ENEMY_TIER_RATIO: String = "res://assets/config/enemy_tier_ratio_co
 const CONFIG_SCORE: String = "res://assets/config/score_config.csv"
 const CONFIG_RESOURCE_SLOT: String = "res://assets/config/resource_slot_config.csv"
 const CONFIG_BUILD: String = "res://assets/config/build_config.csv"
+const CONFIG_TOWN_TROOP_POOL: String = "res://assets/config/town_troop_pool.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -239,7 +240,10 @@ var _damage_increment: float = 0.0
 var _repel_player_damage_rate: float = 0.6
 var _repel_enemy_damage_rate: float = 0.6
 
-## 补给系统
+## 补给系统（MVP 玩家全局补给数值；HUD 显示、移动消耗、扎营恢复均读写此字段）
+## 语义偏差备忘（M6 审查 P2）：设计《持久slot基础功能设计》§"部队资源通道"要求补给
+## 按扎营部队隔离；MVP 仅一个玩家单位，全局字段语义成立。后续若扩展多部队 / 多单位，
+## 需要重构为"按部队 / 按扎营主体"的 ledger，此处是架构债锚点
 var _supply: int = 3
 var _camp_restore: int = 1
 
@@ -386,6 +390,12 @@ func _ready() -> void:
 	_enemy_generator = EnemyTroopGenerator.new()
 	_enemy_generator.init_from_config(enemy_pool_rows, enemy_spawn_cfg)
 	_enemy_generator.load_tier_config(enemy_tier_rows)
+
+	# M6: 产出结算——城镇部队道具池走独立 CSV（不污染敌方生成权重）
+	var town_pool_rows: Array = ConfigLoader.load_csv(CONFIG_TOWN_TROOP_POOL)
+	if town_pool_rows.is_empty():
+		push_error("WorldMap: town_troop_pool.csv 加载失败或为空；城镇 / 核心城镇产出会静默无输出")
+	ProductionSystem.load_troop_pool(town_pool_rows)
 
 	# 读取起终点坐标
 	_start_pos = Vector2i(
@@ -988,49 +998,75 @@ func _start_camp() -> void:
 	# 扎营恢复补给
 	_supply += _camp_restore
 
-	# M1 重构：持久 slot 扎营产出迁出 ResourceSlot 通道，
-	# 后续由 M6 产出结算基于 PersistentSlot.influence_range + 四项等权池接入
+	# M6: 持久 slot 扎营结算（玩家侧）
+	# 流程：camp_pos 查 C 作用域覆盖 → 逐 slot 按类型 × 等级产出 → 落地到石料 / 补给 / 背包
+	_settle_persistent_camp_production()
 
 	_update_hud()
 
 	# 打开养成面板（camp_mode = true，显示全部操作）
 	_manage_ui.open(_characters, _inventory, true)
 
-## 采集资源点：根据类型增加补给或生成道具
-func _collect_resource(rs: ResourceSlot) -> void:
-	if rs.resource_type == ResourceSlot.ResourceType.SUPPLY:
-		_supply += rs.output_amount
-	else:
-		# 生成对应道具并加入背包
-		var item: ItemData = ItemData.new()
-		if rs.resource_type == ResourceSlot.ResourceType.HP_RESTORE:
-			item.type = ItemData.ItemType.HP_RESTORE
-			item.display_name = "兵力恢复药"
-			item.value = rs.output_amount * 100
-			item.item_id = 9001
-		elif rs.resource_type == ResourceSlot.ResourceType.EXP:
-			item.type = ItemData.ItemType.EXP
-			item.display_name = "经验书"
-			item.value = rs.output_amount * 50
-			item.item_id = 9002
-		item.stack_count = 1
-		_inventory.add_items([item])
 
-## 尝试采集当前位置的一次性资源点
+## M6 扎营结算：ProductionSystem.settle_camp + apply_production + 飘字
+## RNG 使用 _world_rng 保证同 seed 运行结果可复现
+## 背包满 / 池空等失败条目另行通过 format_dropped_text 提示，避免"飘字说获得实际没有"的误导
+func _settle_persistent_camp_production() -> void:
+	if _schema == null or _unit == null:
+		return
+	var results: Array = ProductionSystem.settle_camp(
+		_unit.position, Faction.PLAYER, _schema.persistent_slots, _world_rng
+	)
+	if results.is_empty():
+		return
+	var add_supply: Callable = func(amount: int) -> void: _supply += amount
+	var add_stone_cb: Callable = func(amount: int) -> void: add_stone(Faction.PLAYER, amount)
+	# 背包入库返回是否成功（满时返回 false 供 apply_production 归 dropped）
+	var add_item_cb: Callable = func(item: ItemData) -> bool:
+		var n: int = _inventory.add_items([item])
+		return n > 0
+	var outcome: Dictionary = ProductionSystem.apply_production(
+		results, add_supply, add_stone_cb, add_item_cb
+	)
+
+	var applied: Array = outcome.get("applied", []) as Array
+	var dropped: Array = outcome.get("dropped", []) as Array
+	if not applied.is_empty():
+		_show_notice("扎营产出：%s" % ProductionSystem.format_results_text(applied))
+	if not dropped.is_empty():
+		_show_notice("扎营产出部分失败：%s" % ProductionSystem.format_dropped_text(dropped))
+
+## 尝试采集当前位置的一次性资源点（M6 改造）
+## 采集走 M6 等权池：忽略 slot 自身 resource_type / output_amount 配置，
+## 统一按 4 项等权随机抽 × 1/2 等权数量。视觉上 slot 仍按生成类型显示（盲盒式）
+## 备忘：视觉与采集结果的对齐是后续 UX 回看项，不在 M6 范围内
 func _try_collect_resource_at(pos: Vector2i) -> void:
 	if not _resource_slots.has(pos):
 		return
 	var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
-	# M1 重构：ResourceSlot 已回归一次性语义，仅判断是否已采集
 	if rs.is_collected:
 		return
-	# 一次性资源点：采集并标记，同时恢复地图 slot 状态
-	_collect_resource(rs)
+	# M6 等权抽取（单条产出结构）；注入 _world_rng 保证同 seed 复现
+	var entry: Dictionary = ProductionSystem.collect_immediate_slot(_world_rng)
+	var add_supply: Callable = func(amount: int) -> void: _supply += amount
+	var add_stone_cb: Callable = func(amount: int) -> void: add_stone(Faction.PLAYER, amount)
+	var add_item_cb: Callable = func(item: ItemData) -> bool:
+		var n: int = _inventory.add_items([item])
+		return n > 0
+	var outcome: Dictionary = ProductionSystem.apply_production(
+		[entry], add_supply, add_stone_cb, add_item_cb
+	)
+
 	rs.is_collected = true
-	# 将 MapSchema 中的 FUNCTION slot 恢复为 NONE，释放格子
 	if _schema != null:
 		_schema.set_slot(pos.x, pos.y, MapSchema.SlotType.NONE)
-	_show_notice("采集资源：%s" % rs.get_display_name())
+
+	var applied: Array = outcome.get("applied", []) as Array
+	var dropped: Array = outcome.get("dropped", []) as Array
+	if not applied.is_empty():
+		_show_notice("采集资源：%s" % ProductionSystem.format_results_text(applied))
+	if not dropped.is_empty():
+		_show_notice("采集失败：%s" % ProductionSystem.format_dropped_text(dropped))
 	queue_redraw()
 
 ## 回合结算流程（抽象为独立方法）
@@ -1913,9 +1949,13 @@ func _draw_tile(x: int, y: int) -> void:
 					Color.WHITE
 				)
 
-## 绘制资源点标记方块 + 文字（按类型着色）
-## M1 重构：原持久分支（金色 + ★ + 范围叠加）已移除，
-## 持久 slot 视觉与影响范围渲染由 M4 通过 PersistentSlot 通道接入
+## 即时资源点盲盒色（M6 视觉统一：采集前不显示具体类型，避免与"等权采集"规则冲突）
+const RESOURCE_BLIND_BOX_COLOR: Color = Color(0.55, 0.55, 0.60)
+
+## 绘制资源点标记方块 + 文字
+## M6 P1 修复：即时 slot 采集走 4 项等权池（忽略 slot 自身 resource_type），
+## 视觉上若按类型着色会误导玩家（以为是定向资源），故统一为盲盒灰色 + "?"
+## 原按类型着色的 RESOURCE_*_COLOR 常量保留以备他处引用，但本函数不再使用
 func _draw_resource_slots() -> void:
 	for pos in _resource_slots:
 		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
@@ -1924,34 +1964,19 @@ func _draw_resource_slots() -> void:
 			continue
 		var p: Vector2i = pos as Vector2i
 
-		# 按资源类型选取底色
-		var color: Color
-		match rs.resource_type:
-			ResourceSlot.ResourceType.SUPPLY:
-				color = RESOURCE_SUPPLY_COLOR
-			ResourceSlot.ResourceType.HP_RESTORE:
-				color = RESOURCE_HP_COLOR
-			ResourceSlot.ResourceType.EXP:
-				color = RESOURCE_EXP_COLOR
-			ResourceSlot.ResourceType.STONE:
-				color = RESOURCE_STONE_COLOR
-			_:
-				color = RESOURCE_SUPPLY_COLOR
-
-		# 绘制资源点标记方块
+		# 盲盒渲染：所有即时 slot 统一色块 + "?" 标签
 		var rs_rect: Rect2 = Rect2(
 			p.x * TILE_SIZE + SLOT_MARGIN,
 			p.y * TILE_SIZE + SLOT_MARGIN,
 			TILE_SIZE - SLOT_MARGIN * 2 - 1,
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
-		draw_rect(rs_rect, color)
+		draw_rect(rs_rect, RESOURCE_BLIND_BOX_COLOR)
 
-		# 叠加资源类型文字标注（短标签来自 ResourceSlot.get_map_label()）
 		if _label_font != null:
 			_draw_slot_label(
 				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2.0, p.y * TILE_SIZE + TILE_SIZE / 2.0),
-				rs.get_map_label(),
+				"?",
 				Color(0.05, 0.05, 0.05)
 			)
 

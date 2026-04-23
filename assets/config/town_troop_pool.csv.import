@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://dbdi5jt44c2k8"
+
+[deps]
+
+files=["res://assets/config/town_troop_pool.quality.translation", "res://assets/config/town_troop_pool.weight.translation"]
+
+source_file="res://assets/config/town_troop_pool.csv"
+dest_files=["res://assets/config/town_troop_pool.quality.translation", "res://assets/config/town_troop_pool.weight.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true
