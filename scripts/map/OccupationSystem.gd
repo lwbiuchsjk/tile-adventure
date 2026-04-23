@@ -54,16 +54,13 @@ static func try_occupy(slot: PersistentSlot, unit_faction: int) -> bool:
 	#   - owner 切换到新势力
 	#   - influence_range 重置为 initial_range（旧势力覆盖立即消失、新势力初始覆盖立即生效）
 	#   - garrison_turns / occupy_turns 清零
-	#   - level / 建造配置 / 历史记录保留，不动
+	#   - active_build 清空（被敌占取消在建，石料不退；M5 设计 §五"被敌占"）
+	#   - level / 产出配置 / 历史记录保留，不动
 	slot.owner_faction = unit_faction
 	slot.influence_range = slot.initial_range
 	slot.garrison_turns = 0
 	slot.occupy_turns = 0
-
-	# ⚠ M5 接入锚点（P1 审查项）：
-	#   M4 阶段 active_build 尚未真正被写入，此处保留原值；
-	#   M5 实装建造系统后，须在此追加 slot.active_build = null，
-	#   否则会出现"归属已翻转但在建动作继续 tick"的状态穿透
+	slot.active_build = null
 	return true
 
 

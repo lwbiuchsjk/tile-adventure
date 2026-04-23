@@ -48,6 +48,7 @@ const CONFIG_ENEMY_TIER: String = "res://assets/config/enemy_tier_config.csv"
 const CONFIG_ENEMY_TIER_RATIO: String = "res://assets/config/enemy_tier_ratio_config.csv"
 const CONFIG_SCORE: String = "res://assets/config/score_config.csv"
 const CONFIG_RESOURCE_SLOT: String = "res://assets/config/resource_slot_config.csv"
+const CONFIG_BUILD: String = "res://assets/config/build_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -161,6 +162,14 @@ var _battle_ui: BattleUI = null
 
 ## 装配管理面板子系统
 var _manage_ui: ManageUI = null
+
+## 建造面板子系统（M5）
+var _build_panel_ui: BuildPanelUI = null
+
+## 两方石料库存（M5）—— { Faction 整数 ID: int 数量 }
+## 玩家侧由 build_config.player_initial_stone 初始化；
+## 敌方侧由 enemy_initial_stone 初始化，M7 真正消耗前只占位
+var _stone_by_faction: Dictionary = {}
 
 # ─────────────────────────────────────────
 # 私有状态
@@ -430,6 +439,20 @@ func _ready() -> void:
 	_turn_manager.register_unit(_unit)
 	_turn_manager.turn_ended.connect(_on_turn_ended)
 
+	# M5: 加载升级配置 + 石料库存 + 注册建造 tick
+	# 顺序固定：先 BuildSystem.load_level_config（tick 依赖配置），再 register
+	BuildSystem.load_level_config(ConfigLoader.load_persistent_slot_config())
+	var build_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_BUILD)
+	_stone_by_faction = {
+		Faction.PLAYER: int(build_cfg.get("player_initial_stone", "0")),
+		Faction.ENEMY_1: int(build_cfg.get("enemy_initial_stone", "0")),
+	}
+
+	# ⚠ Tick 注册顺序固定：M5 → M4（TickRegistry 按 FIFO 执行）
+	# 自阵营回合开始时先跑 M5 建造完成（可能刷 max_range），
+	# 再跑 M4 占据快照（用新 max_range 增长），保证"升级完成本回合即生效"
+	TickRegistry.register(_on_build_tick)
+
 	# M4: 注册占据快照到 TickRegistry（自阵营回合开始锚点）
 	# MVP 只接 PLAYER 侧，由 _on_turn_ended 显式触发 run_ticks(PLAYER)；
 	# 敌方侧等 M7 把 WorldMap 迁到 start_faction_turn(ENEMY_1) 时自然生效
@@ -456,10 +479,11 @@ func _ready() -> void:
 
 ## 场景退出时清理全局注册，避免 TickRegistry 残留悬空 Callable
 ## 重要性：TickRegistry._handlers 是 static，跨场景共享；不清理会在下次进入
-## 场景时触发已释放的 _on_faction_tick 导致 Callable.is_valid() == false 被跳过，
+## 场景时触发已释放的 handler 导致 Callable.is_valid() == false 被跳过，
 ## 看似无害但会堆积僵尸 handler
 func _exit_tree() -> void:
 	TickRegistry.unregister(_on_faction_tick)
+	TickRegistry.unregister(_on_build_tick)
 
 
 ## 初始化子系统（敌方移动、战斗 UI、管理 UI）
@@ -494,13 +518,21 @@ func _init_subsystems() -> void:
 	_manage_ui.equip_requested.connect(_on_equip_troop)
 	_manage_ui.use_item_requested.connect(_on_use_item)
 
+	# 建造面板子系统（M5）
+	_build_panel_ui = BuildPanelUI.new()
+	_build_panel_ui.name = "BuildPanelUI"
+	add_child(_build_panel_ui)
+	_build_panel_ui.create_ui(ui_layer)
+	_build_panel_ui.closed.connect(_on_build_panel_closed)
+	_build_panel_ui.upgrade_requested.connect(_on_upgrade_requested)
+
 # ─────────────────────────────────────────
 # 输入处理
 # ─────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	# 动画播放中、战斗确认中、敌方移动中、管理面板打开中、扎营中或流程结束时锁定所有输入
-	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping:
+	# 动画播放中、战斗确认中、敌方移动中、管理面板打开中、扎营中、建造面板打开中或流程结束时锁定所有输入
+	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open:
 		return
 
 	# 鼠标左键点击：移动单位（需要补给 > 0）
@@ -561,6 +593,8 @@ func _update_hud() -> void:
 		])
 	round_parts.append("回合 %d" % _turn_manager.current_turn)
 	round_parts.append("补给 %d" % _supply)
+	# M5: 石料数字（玩家侧）
+	round_parts.append("石料 %d" % get_stone(Faction.PLAYER))
 	if _hud_round != null:
 		_hud_round.text = "  ".join(round_parts)
 
@@ -570,7 +604,7 @@ func _update_hud() -> void:
 
 	# 右区：快捷键提示
 	if _hud_keys != null:
-		_hud_keys.text = "[空格]扎营  [M]管理  [Q]放弃"
+		_hud_keys.text = "[空格]扎营  [B]建造  [M]管理  [Q]放弃"
 
 ## 获取所有角色部队的显示文本
 func _get_all_troops_display() -> String:
@@ -835,9 +869,118 @@ func _try_player_occupy_at(pos: Vector2i) -> bool:
 		queue_redraw()
 	return flipped
 
+
+# ─────────────────────────────────────────
+# M5 石料库存 + 建造系统
+# ─────────────────────────────────────────
+
+## 查询指定势力当前石料数量
+func get_stone(faction: int) -> int:
+	return int(_stone_by_faction.get(faction, 0))
+
+
+## 增加指定势力的石料（产出 / 奖励入账时调用；M6 产出结算会用）
+func add_stone(faction: int, amount: int) -> void:
+	if amount <= 0:
+		return
+	_stone_by_faction[faction] = get_stone(faction) + amount
+	_update_hud()
+
+
+## 尝试扣除指定势力的石料，返回是否成功
+## 石料不足时不扣除、不修改字典
+func try_spend_stone(faction: int, amount: int) -> bool:
+	if amount < 0:
+		return false
+	var current: int = get_stone(faction)
+	if current < amount:
+		return false
+	_stone_by_faction[faction] = current - amount
+	_update_hud()
+	return true
+
+
+## 自阵营回合开始 tick 回调（M5）：推进所有本方 slot 的在建动作
+## 注册到 TickRegistry；由 _on_turn_ended 的 run_ticks(PLAYER) 带到
+## 注：本 handler 先于 M4 `_on_faction_tick` 执行（见 _ready 中的注册顺序锚点），
+##     保证"升级完成后 max_range 抬升 → 同回合 M4 快照用新上限增长"
+func _on_build_tick(faction: int) -> void:
+	if _schema == null:
+		return
+	for entry in _schema.persistent_slots:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null:
+			continue
+		# 自阵营过滤：仅推进本方 slot（和 M4 过滤同口径）
+		if slot.owner_faction != faction:
+			continue
+		if slot.active_build == null:
+			continue
+		var finished: bool = BuildSystem.advance_tick(slot)
+		# notice 文案带坐标，多 slot 同回合完成时可辨识
+		# 敌方完成故意不提示（MVP 有意静默，M7 接入时再决策是否加侦察/情报反馈）
+		if finished and faction == Faction.PLAYER:
+			_show_notice("%s(%d,%d) 升级至 L%d" % [
+				slot.get_type_name(), slot.position.x, slot.position.y, slot.level
+			])
+	queue_redraw()
+
+
+## 打开建造面板
+## 列表内容：所有归属于 PLAYER 的持久 slot
+func _open_build_panel() -> void:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping:
+		return
+	_build_panel_ui.open(_get_player_persistent_slots(), get_stone(Faction.PLAYER))
+
+
+## 建造面板关闭回调
+## 关闭不推进回合（和 ManageUI 非扎营模式同语义）
+func _on_build_panel_closed() -> void:
+	_update_hud()
+	_refresh_reachable()
+
+
+## 升级请求回调（BuildPanelUI 按钮点击）
+## 流程：再校验 can_upgrade → 扣石料 → BuildSystem.start_upgrade → notice + 刷新面板
+## 面板按钮 disabled 已做一层校验，这里再做是防御（避免异步状态不一致）
+func _on_upgrade_requested(slot: PersistentSlot) -> void:
+	if not BuildSystem.can_upgrade(slot, Faction.PLAYER):
+		_show_notice("无法升级该 slot")
+		return
+	var cost: int = BuildSystem.get_upgrade_cost(slot)
+	if not try_spend_stone(Faction.PLAYER, cost):
+		_show_notice("石料不足")
+		return
+	if not BuildSystem.start_upgrade(slot, Faction.PLAYER):
+		# 理论不可达（can_upgrade 已通过）；石料已扣，退回
+		add_stone(Faction.PLAYER, cost)
+		_show_notice("启动升级失败")
+		return
+	_show_notice("%s 开始升级 → L%d" % [slot.get_type_name(), slot.level + 1])
+	# 面板仍打开：刷新显示
+	if _build_panel_ui.is_open:
+		_build_panel_ui.refresh(_get_player_persistent_slots(), get_stone(Faction.PLAYER))
+	queue_redraw()
+
+
+## 获取当前归属于 PLAYER 的所有持久 slot
+func _get_player_persistent_slots() -> Array[PersistentSlot]:
+	var result: Array[PersistentSlot] = []
+	if _schema == null:
+		return result
+	for entry in _schema.persistent_slots:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null:
+			continue
+		if slot.owner_faction == Faction.PLAYER:
+			result.append(slot)
+	return result
+
+
 ## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
 func _start_camp() -> void:
-	if _game_finished or _is_moving or _battle_ui.is_pending or _is_camping or _manage_ui.is_open:
+	if _game_finished or _is_moving or _battle_ui.is_pending or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open:
 		return
 	_is_camping = true
 	_camp_count += 1
@@ -1519,7 +1662,7 @@ func _format_rewards_text(rewards: Array[ItemData]) -> String:
 
 ## 放弃流程：直接结束，记为失败（无二次确认）
 func _on_abandon() -> void:
-	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:
 		return
 	_game_finished = true
 	_reachable_tiles = {}
@@ -1544,6 +1687,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 					_manage_ui.close()
 				else:
 					_open_manage_panel()
+			# B 键：打开/关闭建造面板（M5）
+			elif key.keycode == KEY_B:
+				if _build_panel_ui.is_open:
+					_build_panel_ui.close()
+				else:
+					_open_build_panel()
 			# Q 键：放弃流程
 			elif key.keycode == KEY_Q:
 				_on_abandon()
