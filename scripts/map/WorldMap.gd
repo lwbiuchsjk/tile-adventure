@@ -459,6 +459,19 @@ func _ready() -> void:
 		Faction.ENEMY_1: int(build_cfg.get("enemy_initial_stone", "0")),
 	}
 
+	# 地图生成后字段装配（M2/M4 遗留缺口修复）：
+	#   PersistentSlotGenerator._build_slot 只填 type / level / owner_faction，
+	#   initial_range / max_range / growth_rate / influence_range 全留默认 0。
+	#   核心城镇 L3 永不升级 → 影响范围永远不渲染；初始归属村庄/城镇同理。
+	#   此处按每个 slot 的当前 level 从配置注入，让影响范围系统在首个回合前就位。
+	# 依赖 BuildSystem.load_level_config 已完成（查 apply_level_fields 走 _level_config 读）
+	if _schema != null:
+		for entry in _schema.persistent_slots:
+			var slot: PersistentSlot = entry as PersistentSlot
+			if slot == null:
+				continue
+			BuildSystem.apply_level_fields(slot, slot.level)
+
 	# ⚠ Tick 注册顺序固定：M5 → M4 → M7 REPELLED（TickRegistry 按 FIFO 执行）
 	# 自阵营回合开始时先跑 M5 建造完成（可能刷 max_range），
 	# 再跑 M4 占据快照（用新 max_range 增长），最后跑 M7 REPELLED 冷却递减

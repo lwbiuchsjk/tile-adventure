@@ -55,6 +55,9 @@ func _init() -> void:
 	BuildSystem.clear_state()
 	TickRegistry.clear_all()
 
+	_test_apply_level_fields_bootstrap()
+	BuildSystem.clear_state()
+
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
 		quit(1)
@@ -310,6 +313,85 @@ func _test_tick_order_m5_before_m4() -> void:
 	_assert(slot.garrison_turns == 1,     "快照后 garrison_turns == 1")
 
 	TickRegistry.clear_all()
+
+
+## 13. apply_level_fields 地图生成后字段装配（M2/M4 遗留缺口修复）
+##     场景：PersistentSlotGenerator 产出的裸 slot（initial_range=max_range=0），
+##     对其调 apply_level_fields(slot, slot.level) 后应按 CSV 写入完整 range 字段
+##     核心 L3 / 村庄 L0 两个场景各跑一次
+func _test_apply_level_fields_bootstrap() -> void:
+	print("-- apply_level_fields 初始装配")
+	_load_config()
+
+	# 场景 1：核心城镇 L3（initial=3, max=4, growth=2）
+	var core: PersistentSlot = PersistentSlot.new()
+	core.type = PersistentSlot.Type.CORE_TOWN
+	core.level = 3
+	core.owner_faction = Faction.PLAYER
+	# 生成器产出态：字段全 0
+	_assert(core.initial_range == 0 and core.max_range == 0 and core.influence_range == 0,
+		"生成后核心 range 字段全为 0（复现 bug 起点）")
+
+	BuildSystem.apply_level_fields(core, core.level)
+	_assert(core.initial_range == 3, "核心 L3 initial_range 装配为 3")
+	_assert(core.max_range == 4,     "核心 L3 max_range 装配为 4（persistent_slot_config.csv L3 行）")
+	_assert(core.growth_rate == 2,   "核心 L3 growth_rate 装配为 2")
+	_assert(core.influence_range == 3, "influence_range 从 0 兜底到 initial=3（渲染即可见）")
+
+	# 场景 2：村庄 L0（initial=1, max=1, growth=0）—— 占据时 try_occupy 会 reset influence 为 initial
+	var village: PersistentSlot = PersistentSlot.new()
+	village.type = PersistentSlot.Type.VILLAGE
+	village.level = 0
+	village.owner_faction = Faction.PLAYER
+	BuildSystem.apply_level_fields(village, village.level)
+	_assert(village.initial_range == 1, "村庄 L0 initial_range 装配为 1")
+	_assert(village.max_range == 1,     "村庄 L0 max_range 装配为 1")
+	_assert(village.influence_range == 1, "influence_range 从 0 兜底到 initial=1")
+
+	# 场景 3：已驻扎中的 slot（influence 高于新 initial）再次调用不应拉低
+	var upgraded_owned: PersistentSlot = PersistentSlot.new()
+	upgraded_owned.type = PersistentSlot.Type.VILLAGE
+	upgraded_owned.level = 2
+	upgraded_owned.influence_range = 3    # 假设以前 growth 到 3
+	BuildSystem.apply_level_fields(upgraded_owned, upgraded_owned.level)
+	_assert(upgraded_owned.influence_range == 3,
+		"已驻扎高 influence 不被拉低（maxi 兜底方向正确）")
+
+	# 幂等性（审查 P2-1）：重复调用同一 slot 字段值不再变化
+	# 决策背景：apply_level_fields 是对外 API，可能被多次调用（如未来热重载 / 迁移工具）
+	# 保证重复调用安全便于集成方不必自行 dedup
+	var idem: PersistentSlot = PersistentSlot.new()
+	idem.type = PersistentSlot.Type.VILLAGE
+	idem.level = 1
+	BuildSystem.apply_level_fields(idem, idem.level)
+	var snap_initial: int = idem.initial_range
+	var snap_max: int = idem.max_range
+	var snap_growth: int = idem.growth_rate
+	var snap_influence: int = idem.influence_range
+	BuildSystem.apply_level_fields(idem, idem.level)
+	_assert(idem.initial_range == snap_initial, "幂等：重复调用 initial_range 不变")
+	_assert(idem.max_range == snap_max,         "幂等：重复调用 max_range 不变")
+	_assert(idem.growth_rate == snap_growth,    "幂等：重复调用 growth_rate 不变")
+	_assert(idem.influence_range == snap_influence, "幂等：重复调用 influence_range 不变（maxi 不会继续抬高）")
+
+	# 配置缺失分支（审查 P2-2）：非法 (type, level) 时字段保持原值
+	# 覆盖 cfg.is_empty() early return，确保不发生部分写入 / 字段被清零
+	var orphan: PersistentSlot = PersistentSlot.new()
+	orphan.type = PersistentSlot.Type.CORE_TOWN
+	orphan.level = 0   # 配置表只有 core_town L3，L0 查不到
+	orphan.initial_range = 99
+	orphan.max_range = 99
+	orphan.growth_rate = 99
+	orphan.influence_range = 99
+	BuildSystem.apply_level_fields(orphan, orphan.level)
+	_assert(orphan.initial_range == 99,   "配置缺失：initial_range 保持原值")
+	_assert(orphan.max_range == 99,       "配置缺失：max_range 保持原值")
+	_assert(orphan.growth_rate == 99,     "配置缺失：growth_rate 保持原值")
+	_assert(orphan.influence_range == 99, "配置缺失：influence_range 保持原值")
+
+	# null 防御
+	BuildSystem.apply_level_fields(null, 0)
+	_assert(true, "null 入参不抛错")
 
 
 ## 10. cancel_on_takeover 兼容入口

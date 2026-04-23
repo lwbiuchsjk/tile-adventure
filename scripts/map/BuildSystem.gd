@@ -171,20 +171,35 @@ static func _finish_upgrade(slot: PersistentSlot) -> void:
 	var target_level: int = slot.active_build.target_level
 	slot.level = target_level
 
-	# 按新等级刷影响范围配置
-	var cfg: Dictionary = get_level_config(slot.type, target_level)
-	if not cfg.is_empty():
-		slot.initial_range = int(cfg.get("initial_range", slot.initial_range))
-		slot.max_range = int(cfg.get("max_range", slot.max_range))
-		slot.growth_rate = int(cfg.get("growth_rate", slot.growth_rate))
-
-	# influence_range 不因升级倒退、也不瞬间跃升到 max；
-	# 但兜底到新 initial_range 避免字段自相矛盾：
-	# 真实场景——刚占回的村庄 influence=1，升 L2 后 initial 变 2，
-	# 若不兜底会留下 influence < initial_range 的异常态
-	slot.influence_range = maxi(slot.influence_range, slot.initial_range)
+	# 按新等级刷影响范围配置 / 兜底 influence_range
+	apply_level_fields(slot, target_level)
 
 	slot.active_build = null
+
+
+## 按 slot.type + level 从 _level_config 读取 initial_range / max_range / growth_rate
+## 并赋到 slot；同时把 influence_range 兜底到不低于 initial_range
+##
+## 用途：
+##   - 升级完成（_finish_upgrade 调用）
+##   - 地图生成后的字段初始化（WorldMap._ready 对每个 persistent_slot 调一次）
+##     否则 L3 初始核心城镇 / L0 初始归属村庄城镇的 range 字段全为 0，
+##     影响范围渲染和自阵营快照增长都失效（M2/M4 遗留装配缺口）
+##
+## influence_range 兜底策略（§六 MVP 边界）：
+##   - 不因升级倒退、也不瞬间跃升到 max
+##   - 兜底到 initial_range 避免"刚占回的村庄 influence=1、升 L2 后 initial=2"的字段矛盾
+##   - 初始化场景下相当于把 influence_range 从 0 拉到 initial_range
+static func apply_level_fields(slot: PersistentSlot, level: int) -> void:
+	if slot == null:
+		return
+	var cfg: Dictionary = get_level_config(slot.type, level)
+	if cfg.is_empty():
+		return
+	slot.initial_range = int(cfg.get("initial_range", slot.initial_range))
+	slot.max_range = int(cfg.get("max_range", slot.max_range))
+	slot.growth_rate = int(cfg.get("growth_rate", slot.growth_rate))
+	slot.influence_range = maxi(slot.influence_range, slot.initial_range)
 
 
 # ─────────────────────────────────────────
