@@ -35,6 +35,7 @@ const TYPE_NAMES: Dictionary = {
 
 ## 地图短标签映射（用于地图格内文字标注）
 ## 与 ResourceSlot.RESOURCE_MAP_LABELS 风格保持一致，字数精简
+## M8 扩展后地图改用 display_id 渲染，此常量保留做兜底 / fallback
 const TYPE_MAP_LABELS: Dictionary = {
 	Type.VILLAGE:   "村",
 	Type.TOWN:     "镇",
@@ -44,6 +45,14 @@ const TYPE_MAP_LABELS: Dictionary = {
 # ─────────────────────────────────────────
 # 设计 §三 七字段（核心契约）
 # ─────────────────────────────────────────
+
+## 人类可读 ID（地图格 + 建造面板共用，解决"坐标查询反人类"）
+## 格式：
+##   村庄 / 城镇：`类型名 + 势力内序号`（如 "村庄1", "城镇2"）；每势力各自从 1 开始
+##   核心城镇：`核心`（每势力只有一个，不加序号）
+## 由 PersistentSlotGenerator 在生成完成后按 (势力, 类型, position y→x) 稳定排序分配，
+## 保证 seed 复现两次得到相同 ID；M8 前未分配时为空串、UI 回退到 get_map_label
+var display_id: String = ""
 
 ## 在地图上的格坐标
 var position: Vector2i = Vector2i.ZERO

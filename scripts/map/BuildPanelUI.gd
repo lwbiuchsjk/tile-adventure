@@ -153,8 +153,47 @@ func refresh(slots: Array[PersistentSlot], stone: int) -> void:
 		_list_area.add_child(hint)
 		return
 
-	for slot in _slots:
+	# 按类型 + 等级 + display_id 数字序排序，让列表稳定且符合直觉
+	# 顺序：核心 → 城镇（按序号/等级）→ 村庄（按序号/等级）
+	# 决策背景：原注释"不排序"针对 display_id 未实装前的 MVP；display_id 到位后稳定排序提升查找效率
+	#
+	# 审查 P2 修复：用"数字后缀比较"替代字典序（原实现 "村庄10" < "村庄2" 字典序错位）
+	# MVP 数量 ≤ 9 碰不到，但保险起见按数字比；非数字后缀（如 "核心"）fallback 到字符串比
+	var sorted_slots: Array[PersistentSlot] = _slots.duplicate()
+	sorted_slots.sort_custom(func(a: PersistentSlot, b: PersistentSlot) -> bool:
+		# 核心 > 城镇 > 村庄：反向排序（CORE_TOWN=2 最大）→ 用 `>` 让核心在前
+		if a.type != b.type:
+			return int(a.type) > int(b.type)
+		if a.level != b.level:
+			return a.level < b.level
+		return _display_id_natural_less(a.display_id, b.display_id)
+	)
+	for slot in sorted_slots:
 		_list_area.add_child(_make_slot_row(slot, stone))
+
+
+## display_id natural compare：按尾部数字自然序（"村庄10" > "村庄2"）
+## 非数字结尾（"核心"）fallback 到字符串比较
+## 同类型 slot 前缀一致，只比尾部数字；未来扩展到非数字 ID 方案时此函数可适配
+func _display_id_natural_less(a: String, b: String) -> bool:
+	var num_a: int = _extract_trailing_number(a)
+	var num_b: int = _extract_trailing_number(b)
+	if num_a >= 0 and num_b >= 0:
+		return num_a < num_b
+	return a < b
+
+
+## 提取字符串尾部连续数字；无尾部数字返回 -1
+## "村庄10" → 10；"核心" → -1；"" → -1
+func _extract_trailing_number(s: String) -> int:
+	if s.is_empty():
+		return -1
+	var i: int = s.length() - 1
+	while i >= 0 and s[i].is_valid_int():
+		i -= 1
+	if i == s.length() - 1:
+		return -1    # 尾部无数字
+	return s.substr(i + 1).to_int()
 
 
 # ─────────────────────────────────────
@@ -166,11 +205,13 @@ func _make_slot_row(slot: PersistentSlot, stone: int) -> Control:
 	var row: HBoxContainer = HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 
-	# 左：位置 + 类型 + 等级
+	# 左：display_id + 等级 + 坐标（M8 扩展）
+	# display_id 是"村庄1"/"城镇2"/"核心"这种人类可读 ID，与地图格主字一致，
+	# 玩家看面板 "村庄1 L0" 就能去地图找标着"村庄1"的蓝色方块，免算坐标
+	# 坐标作为辅助保留，便于对位快速确认
 	var info: Label = Label.new()
-	info.text = "%s L%d  (%d,%d)" % [
-		slot.get_type_name(), slot.level, slot.position.x, slot.position.y
-	]
+	var id_text: String = slot.display_id if slot.display_id != "" else slot.get_type_name()
+	info.text = "%s L%d  (%d,%d)" % [id_text, slot.level, slot.position.x, slot.position.y]
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info.add_theme_color_override("font_color", Color(0.90, 0.90, 0.90))
 	row.add_child(info)

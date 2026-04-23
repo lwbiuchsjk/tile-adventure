@@ -124,6 +124,9 @@ const REPELLED_BORDER_COLOR: Color = Color(0.6, 0.3, 0.3, 0.5)
 ## 地图标签字号（格子放大后使用 12px）
 const LABEL_FONT_SIZE: int = 12
 
+## 持久 slot 等级角标字号（右上角 L0/1/2/3，小字与主 ID 分离）
+const LEVEL_BADGE_FONT_SIZE: int = 9
+
 ## 单位逐格移动动画耗时（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
 
@@ -277,6 +280,11 @@ var _enemy_movement_enabled: bool = false
 ## 敌方移动力（从配置读取）
 var _enemy_movement_points: int = 6
 
+## 敌方 AI 目标切换半径（曼哈顿距离）—— M8 扩展
+## dist(pack, player) <= 该值 + d_player < d_core → pack 追玩家；否则推核心
+## 默认 10（约为 enemy_movement_points*1.6，给 1-2 回合反应冗余）
+var _enemy_target_switch_range: int = 10
+
 ## 敌方关卡占据位置的原始 SlotType（用于移动后恢复）
 var _original_slot_types: Dictionary = {}
 
@@ -376,6 +384,15 @@ func _ready() -> void:
 	# 加载敌方移动配置
 	_enemy_movement_enabled = int(_battle_config.get("enemy_movement_enabled", "0")) == 1
 	_enemy_movement_points = int(_battle_config.get("enemy_movement_points", "6"))
+
+	# 审查 P2 修复：CSV 写坏时 int() 静默变 0 会让 AI 几乎永远推核心（阈值失效）
+	# 显式校验：非法值（< 1）回退到默认 10 + push_warning 便于排障
+	var raw_switch_range: int = int(_battle_config.get("enemy_target_switch_range", "10"))
+	if raw_switch_range < 1:
+		push_warning("WorldMap: battle_config.enemy_target_switch_range 非法值 %d，回退到 10" % raw_switch_range)
+		_enemy_target_switch_range = 10
+	else:
+		_enemy_target_switch_range = raw_switch_range
 
 	# 初始化奖励生成器
 	_reward_generator = RewardGenerator.new()
@@ -980,9 +997,8 @@ func _on_build_tick(faction: int) -> void:
 		# notice 文案带坐标，多 slot 同回合完成时可辨识
 		# 敌方完成故意不提示（MVP 有意静默，M7 接入时再决策是否加侦察/情报反馈）
 		if finished and faction == Faction.PLAYER:
-			_show_notice("%s(%d,%d) 升级至 L%d" % [
-				slot.get_type_name(), slot.position.x, slot.position.y, slot.level
-			])
+			var id_text: String = slot.display_id if slot.display_id != "" else slot.get_type_name()
+			_show_notice("%s 升级至 L%d" % [id_text, slot.level])
 	queue_redraw()
 
 
@@ -1017,7 +1033,8 @@ func _on_upgrade_requested(slot: PersistentSlot) -> void:
 		add_stone(Faction.PLAYER, cost)
 		_show_notice("启动升级失败")
 		return
-	_show_notice("%s 开始升级 → L%d" % [slot.get_type_name(), slot.level + 1])
+	var start_id_text: String = slot.display_id if slot.display_id != "" else slot.get_type_name()
+	_show_notice("%s 开始升级 → L%d" % [start_id_text, slot.level + 1])
 	# 面板仍打开：刷新显示
 	if _build_panel_ui.is_open:
 		_build_panel_ui.refresh(_get_player_persistent_slots(), get_stone(Faction.PLAYER))
@@ -1177,7 +1194,8 @@ func start_enemy_move_phase() -> void:
 		return
 	_enemy_movement.start_phase(
 		_schema, _level_slots, _unit.position, target_pos,
-		_enemy_movement_points, _original_slot_types, _game_finished
+		_enemy_movement_points, _original_slot_types, _game_finished,
+		_enemy_target_switch_range
 	)
 
 
@@ -2152,14 +2170,21 @@ func _draw_persistent_slots() -> void:
 		# 核心城镇叠加金色描边
 		if slot.type == PersistentSlot.Type.CORE_TOWN:
 			draw_rect(outer, M4_CORE_TOWN_BORDER, false, 2.0)
-		# 类型字符 + 等级（无论 0 都显示，M5 升级后视觉一致）
+
+		# M8 扩展：主字显示 display_id（村庄1/城镇2/核心），解决"坐标查询反人类"
+		# display_id 未分配（M8 前的 legacy / 测试 mock）时回退到 get_map_label + level
+		# 等级从主字中剥离，改用右上角小字角标，避免主字挤成 4 字符
 		if _label_font != null:
-			var label_text: String = slot.get_map_label() + str(slot.level)
-			_draw_slot_label(
-				Vector2(p.x * TILE_SIZE + TILE_SIZE / 2.0, p.y * TILE_SIZE + TILE_SIZE / 2.0),
-				label_text,
-				Color(0.05, 0.05, 0.05)
+			var center_px: Vector2 = Vector2(
+				p.x * TILE_SIZE + TILE_SIZE / 2.0,
+				p.y * TILE_SIZE + TILE_SIZE / 2.0
 			)
+			var main_text: String = slot.display_id if slot.display_id != "" else (slot.get_map_label() + str(slot.level))
+			_draw_slot_label(center_px, main_text, Color(0.05, 0.05, 0.05))
+
+			# 右上角等级角标（display_id 存在时才显示，legacy fallback 已含 level）
+			if slot.display_id != "":
+				_draw_level_badge(p, slot.level)
 
 ## 绘制正在移动的敌方关卡标记（基于动画位置）
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
@@ -2209,6 +2234,32 @@ func _draw_diamond(rect: Rect2, color: Color, filled: bool = true, width: float 
 		var outline: PackedVector2Array = points
 		outline.append(points[0])
 		draw_polyline(outline, color, width)
+
+## 绘制持久 slot 等级角标（格子右上角小字 "L0/1/2/3"）
+## grid_pos —— 该 slot 的格坐标，函数内自行算像素偏移
+## 字体使用 LEVEL_BADGE_FONT_SIZE（9px）；颜色与主字同深色以保持一致
+## 位置：格子右上距边 2-3px，不覆盖势力金边 / 外框
+func _draw_level_badge(grid_pos: Vector2i, level: int) -> void:
+	if _label_font == null:
+		return
+	var text: String = "L%d" % level
+	# 角标宽度估算（英文+数字约为字号 × 字符数 × 0.5）；右上靠边距 3px
+	var badge_px: Vector2 = Vector2(
+		grid_pos.x * TILE_SIZE + TILE_SIZE - 3,
+		grid_pos.y * TILE_SIZE + 3 + LEVEL_BADGE_FONT_SIZE
+	)
+	# 右对齐：draw_string 的起点是 baseline-left；向左偏移一个字串宽度
+	# 无需精确文本宽度测量——用负 offset 让 CENTER 区域右对齐到 badge_px
+	draw_string(
+		_label_font,
+		Vector2(badge_px.x - 16, badge_px.y),    # 16px 宽度区域，右对齐到 badge_px.x
+		text,
+		HORIZONTAL_ALIGNMENT_RIGHT,
+		16,
+		LEVEL_BADGE_FONT_SIZE,
+		Color(0.05, 0.05, 0.05)
+	)
+
 
 ## 在指定像素中心绘制居中文字标签
 ## center_px: 格的像素中心坐标；使用字体 ascent/descent 精确计算垂直基线位置
