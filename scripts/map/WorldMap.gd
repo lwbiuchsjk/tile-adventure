@@ -102,6 +102,12 @@ const ENEMY_SLOT_COLOR: Color = Color(0.80, 0.25, 0.25)
 ## 敌方关卡边框颜色（亮红，增强辨识度，兜底色）
 const ENEMY_BORDER_COLOR: Color = Color(1.0, 0.25, 0.20, 0.8)
 
+## UI 重构步骤 6：敌方菱形描边线宽 + 内阴影色
+## 线宽从 1.5 提到 3.0，让 tier 色更醒目；
+## 内阴影（暗红 alpha 0.4）营造体积感，"危险对象"更有分量
+const ENEMY_BORDER_WIDTH: float = 3.0
+const ENEMY_INNER_SHADOW_COLOR: Color = Color(0.40, 0.10, 0.10, 0.40)  ## #661A1A
+
 ## 敌方关卡强度档位边框颜色（弱=绿, 中=黄, 强=红, 超=紫）
 const TIER_BORDER_COLORS: Dictionary = {
 	0: Color(0.35, 0.80, 0.35, 0.8),  ## 弱：绿色  #59CC59
@@ -2020,11 +2026,21 @@ func _draw_tile(x: int, y: int) -> void:
 			draw_rect(slot_rect, slot_color)
 
 		# 敌方关卡：加菱形描边 + 文字（仅活跃状态显示文字）
+		# UI 重构步骤 6：描边线宽 1.5 → 3.0（tier 色更醒目）；
+		# 活跃状态再加一层内描边（内缩 2px 暗红）营造"危险对象体积感"
 		if is_enemy:
 			var border_color: Color = REPELLED_BORDER_COLOR
 			if not is_repelled and not level.is_defeated():
 				border_color = TIER_BORDER_COLORS.get(level.tier, ENEMY_BORDER_COLOR) as Color
-			_draw_diamond(slot_rect, border_color, false, 1.5)
+			_draw_diamond(slot_rect, border_color, false, ENEMY_BORDER_WIDTH)
+			# 内阴影：仅活跃敌方格绘制；REPELLED / DEFEATED 保持原有暗化语义
+			if not is_repelled and not level.is_defeated():
+				var inner_rect: Rect2 = Rect2(
+					slot_rect.position + Vector2(2, 2),
+					slot_rect.size - Vector2(4, 4)
+				)
+				if inner_rect.size.x > 0 and inner_rect.size.y > 0:
+					_draw_diamond(inner_rect, ENEMY_INNER_SHADOW_COLOR, false, 1.0)
 			# 活跃状态叠加强度文字标注（敌·弱 / 敌·中 / 敌·强 / 敌·超）
 			if _label_font != null and not level.is_defeated() and not is_repelled:
 				var tier_labels: Array[String] = ["敌·弱", "敌·中", "敌·强", "敌·超"]
