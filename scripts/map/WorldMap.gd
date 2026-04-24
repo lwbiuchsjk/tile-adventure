@@ -2083,6 +2083,13 @@ const M4_INFLUENCE_BORDER_WIDTH: float = 2.0
 ## 核心城镇金色描边（凸显势力首都）
 const M4_CORE_TOWN_BORDER: Color = Color(1.0, 0.85, 0.0)
 
+## 持久 slot 双层结构（UI 重构步骤 1）
+## 外环 = 势力色（归属识别）；内底 = 中性米白（文字承载，对比度最高）
+## 核心城镇额外金色中心徽记强化"首都"仪式感
+const M4_PERSISTENT_RING_WIDTH: int = 4        ## 外环厚度 px（占格 48 × 8%）
+const M4_PERSISTENT_INNER_BG: Color = Color(0.90, 0.88, 0.83)  ## 内底米白  #E6E0D4
+const M4_CORE_TOWN_EMBLEM_SIZE: int = 8        ## 核心城镇下方徽记（金色小菱形）边长 px
+
 
 ## 绘制所有已占据持久 slot 的影响范围覆盖层（曼哈顿菱形内所有格）
 ## 中立 slot / influence_range <= 0 不渲染
@@ -2149,8 +2156,14 @@ func _draw_persistent_influence_ranges() -> void:
 						border, M4_INFLUENCE_BORDER_WIDTH)
 
 
-## 绘制所有持久 slot 的本体标记：外框色块 + 核心城镇金边 + 类型等级文字
-## 视觉继承 M2 临时版本，不改变布局；归属翻转时势力色立即反映（由 try_occupy 触发 queue_redraw）
+## 绘制所有持久 slot 的本体标记
+## UI 重构步骤 1：双层结构 —— 外环势力色 + 内底中性米白 + 核心城镇金边 + 中心徽记
+##
+## 设计理由（[[地图视觉表现优化方案]] §三）：
+##   原整块势力色会让文字对比度随势力色变化，且远看只有"颜色块"；
+##   双层后外环负责归属识别，内底承载文字高对比度，据点升级为"结构化地图对象"
+##
+## 归属翻转时势力色立即反映（由 try_occupy 触发 queue_redraw）
 func _draw_persistent_slots() -> void:
 	if _schema == null:
 		return
@@ -2166,25 +2179,51 @@ func _draw_persistent_slots() -> void:
 			TILE_SIZE - 3
 		)
 		var color: Color = M4_FACTION_COLORS.get(slot.owner_faction, Color.MAGENTA) as Color
+
+		# 步骤 1 双层：外环（势力色填满）+ 内底（中性米白，内缩 ring_width）
 		draw_rect(outer, color)
-		# 核心城镇叠加金色描边
+		var ring: int = M4_PERSISTENT_RING_WIDTH
+		var inner: Rect2 = Rect2(
+			outer.position + Vector2(ring, ring),
+			outer.size - Vector2(ring * 2, ring * 2)
+		)
+		# 极端情况：格子变小 → ring*2 可能溢出，防御
+		if inner.size.x > 0 and inner.size.y > 0:
+			draw_rect(inner, M4_PERSISTENT_INNER_BG)
+
+		# 核心城镇第二识别特征：金色外描边 + 下方小金菱形徽记
+		# 徽记偏下（主字居中占主视觉），避免被文字压住
 		if slot.type == PersistentSlot.Type.CORE_TOWN:
 			draw_rect(outer, M4_CORE_TOWN_BORDER, false, 2.0)
+			var emblem_pos: Vector2 = outer.get_center() + Vector2(0, 12)
+			_draw_core_town_emblem(emblem_pos)
 
-		# M8 扩展：主字显示 display_id（村庄1/城镇2/核心），解决"坐标查询反人类"
-		# display_id 未分配（M8 前的 legacy / 测试 mock）时回退到 get_map_label + level
-		# 等级从主字中剥离，改用右上角小字角标，避免主字挤成 4 字符
+		# 主字（display_id）+ 等级角标
+		# display_id 落在内底米白上（任何势力色下对比度都最优）
+		# legacy fallback（未分配 display_id）保留旧行为 main_text 含 level
 		if _label_font != null:
-			var center_px: Vector2 = Vector2(
-				p.x * TILE_SIZE + TILE_SIZE / 2.0,
-				p.y * TILE_SIZE + TILE_SIZE / 2.0
-			)
+			var center_px: Vector2 = outer.get_center()
 			var main_text: String = slot.display_id if slot.display_id != "" else (slot.get_map_label() + str(slot.level))
 			_draw_slot_label(center_px, main_text, Color(0.05, 0.05, 0.05))
 
-			# 右上角等级角标（display_id 存在时才显示，legacy fallback 已含 level）
 			if slot.display_id != "":
 				_draw_level_badge(p, slot.level)
+
+
+## 绘制核心城镇中心金色菱形徽记（UI 重构步骤 1 · 核心第二识别特征）
+## 叠加在主字"核心"之下作为装饰层；靠形状 + 金色拉开和普通据点的区别
+## center_px: 格子像素中心
+func _draw_core_town_emblem(center_px: Vector2) -> void:
+	var s: float = float(M4_CORE_TOWN_EMBLEM_SIZE)
+	var half: float = s / 2.0
+	# 菱形 4 顶点（上 / 右 / 下 / 左）
+	var pts: PackedVector2Array = PackedVector2Array([
+		Vector2(center_px.x, center_px.y - half),
+		Vector2(center_px.x + half, center_px.y),
+		Vector2(center_px.x, center_px.y + half),
+		Vector2(center_px.x - half, center_px.y),
+	])
+	draw_colored_polygon(pts, M4_CORE_TOWN_BORDER)
 
 ## 绘制正在移动的敌方关卡标记（基于动画位置）
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
