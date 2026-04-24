@@ -2036,12 +2036,19 @@ func _draw_tile(x: int, y: int) -> void:
 				)
 
 ## 即时资源点盲盒色（M6 视觉统一：采集前不显示具体类型，避免与"等权采集"规则冲突）
-const RESOURCE_BLIND_BOX_COLOR: Color = Color(0.55, 0.55, 0.60)
+## UI 重构步骤 5：从冷灰 #8C8C99 改为暖浅灰 #B8B8B0（接近木箱感）+ 白描边，
+## 让资源点更像"可拾取对象"而非占位符
+const RESOURCE_BLIND_BOX_COLOR: Color = Color(0.72, 0.72, 0.69)        ## 暖浅灰  #B8B8B0
+const RESOURCE_BLIND_BOX_OUTLINE: Color = Color(1.0, 1.0, 1.0, 0.85)   ## 白描边 alpha 0.85
+const RESOURCE_BLIND_BOX_OUTLINE_WIDTH: float = 2.0
 
 ## 绘制资源点标记方块 + 文字
 ## M6 P1 修复：即时 slot 采集走 4 项等权池（忽略 slot 自身 resource_type），
 ## 视觉上若按类型着色会误导玩家（以为是定向资源），故统一为盲盒灰色 + "?"
 ## 原按类型着色的 RESOURCE_*_COLOR 常量保留以备他处引用，但本函数不再使用
+##
+## UI 重构步骤 5：箱体感 —— 浅灰底 + 白描边 + "?"
+## 形状保持方块（不改菱形，避免和敌方混淆）；语义上仍是盲盒不泄露类型
 func _draw_resource_slots() -> void:
 	for pos in _resource_slots:
 		var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
@@ -2050,14 +2057,15 @@ func _draw_resource_slots() -> void:
 			continue
 		var p: Vector2i = pos as Vector2i
 
-		# 盲盒渲染：所有即时 slot 统一色块 + "?" 标签
 		var rs_rect: Rect2 = Rect2(
 			p.x * TILE_SIZE + SLOT_MARGIN,
 			p.y * TILE_SIZE + SLOT_MARGIN,
 			TILE_SIZE - SLOT_MARGIN * 2 - 1,
 			TILE_SIZE - SLOT_MARGIN * 2 - 1
 		)
+		# 箱体：浅灰底 + 白描边 + 内部 "?"
 		draw_rect(rs_rect, RESOURCE_BLIND_BOX_COLOR)
+		draw_rect(rs_rect, RESOURCE_BLIND_BOX_OUTLINE, false, RESOURCE_BLIND_BOX_OUTLINE_WIDTH)
 
 		if _label_font != null:
 			_draw_slot_label(
