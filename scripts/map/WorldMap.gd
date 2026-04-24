@@ -60,12 +60,20 @@ const TILE_SIZE: int = 48
 
 ## 各地形渲染颜色（纯色块占位）
 ## key 使用整数字面量对应 MapSchema.TerrainType 枚举值
+## UI 重构步骤 9：重调明度 / 饱和度让地形回到背景层
+##   MOUNTAIN 更暗冷；HIGHLAND 更亮但克制；FLATLAND 降饱和（占格最多不抢眼）；
+##   LOWLAND 更冷（配合玩家冷蓝调）
 const TERRAIN_COLORS: Dictionary = {
-	0: Color(0.40, 0.35, 0.30),  ## MOUNTAIN：灰褐：高山  #665949
-	1: Color(0.50, 0.65, 0.30),  ## HIGHLAND：黄绿：高地  #80A64D
-	2: Color(0.35, 0.72, 0.40),  ## FLATLAND：绿色：平地  #59B866
-	3: Color(0.30, 0.55, 0.75),  ## LOWLAND：蓝色：洼地  #4D8CBF
+	0: Color(0.29, 0.25, 0.20),  ## MOUNTAIN：冷灰褐：高山  #4A3F33（原 #665949，降明度+去暖）
+	1: Color(0.61, 0.76, 0.38),  ## HIGHLAND：克制黄绿：高地  #9BC262（原 #80A64D，提亮度）
+	2: Color(0.43, 0.65, 0.47),  ## FLATLAND：自然绿：平地  #6EA577（原 #59B866，降饱和让背景安静）
+	3: Color(0.24, 0.48, 0.67),  ## LOWLAND：冷蓝：洼地  #3C7AAC（原 #4D8CBF，调冷避让玩家蓝）
 }
+
+## UI 重构步骤 9：地形轻量明暗噪声
+## 每格基于 (x, y) 哈希给地形色加 ±5% 亮度微扰，避免整齐色块的表格感
+## 同 seed 每格噪声一致，不闪烁；不引入真实贴图语义
+const TERRAIN_NOISE_RANGE: float = 0.05
 
 ## Slot 标记颜色（小方块叠加在地形色上）
 ## key 使用整数字面量对应 MapSchema.SlotType 枚举值（非敌方/资源用途的兜底色）
@@ -2011,6 +2019,16 @@ func _draw_tile(x: int, y: int) -> void:
 	var terrain: MapSchema.TerrainType = _schema.get_terrain(x, y)
 	var base_color: Color = TERRAIN_COLORS.get(terrain, Color.MAGENTA) as Color
 
+	# UI 重构步骤 9：基于 (x, y) 哈希给地形加轻量亮度噪声 ±5%
+	# 同 seed 结果一致（不闪烁），只为打破整齐色块的"表格感"
+	var noise: float = _terrain_brightness_noise(x, y)
+	base_color = Color(
+		clampf(base_color.r + noise, 0.0, 1.0),
+		clampf(base_color.g + noise, 0.0, 1.0),
+		clampf(base_color.b + noise, 0.0, 1.0),
+		base_color.a
+	)
+
 	# 绘制地形底色（留 1px 间隙形成网格线视觉效果）
 	var tile_rect: Rect2 = Rect2(
 		x * TILE_SIZE,
@@ -2340,6 +2358,17 @@ func _draw_diamond(rect: Rect2, color: Color, filled: bool = true, width: float 
 		var outline: PackedVector2Array = points
 		outline.append(points[0])
 		draw_polyline(outline, color, width)
+
+## UI 重构步骤 9：地形亮度噪声辅助函数
+## 基于 (x, y) 的确定性哈希返回 ±TERRAIN_NOISE_RANGE 范围内的亮度偏移
+## 同 seed 结果一致，不闪烁；目的只为打破"整齐表格感"
+func _terrain_brightness_noise(x: int, y: int) -> float:
+	# 素数混合 → [0, 100) 整数 → 归一化到 [-1, 1]
+	var h: int = (x * 73856093) ^ (y * 19349663)
+	var bucket: int = absi(h) % 100
+	var normalized: float = (float(bucket) / 50.0) - 1.0    # [-1, 1]
+	return normalized * TERRAIN_NOISE_RANGE
+
 
 ## 绘制持久 slot 等级角标（格子右上角小字 "L0/1/2/3"）
 ## grid_pos —— 该 slot 的格坐标，函数内自行算像素偏移
