@@ -2065,10 +2065,12 @@ func _draw_resource_slots() -> void:
 # ─────────────────────────────────────────
 
 ## 势力归属色：持久 slot 外框 + 影响范围覆盖层共用
+## UI 重构步骤 2：PLAYER 色相从 #4D8CF2 调整为 #3D6FE0（偏冷蓝），
+##   避免与 LOWLAND 洼地蓝 #4D8CBF 低对比度；保持和 ENEMY_1 红的二元对立
 const M4_FACTION_COLORS: Dictionary = {
-	0: Color(0.55, 0.55, 0.55),   ## NONE 中立 — 灰
-	1: Color(0.30, 0.55, 0.95),   ## PLAYER — 蓝
-	2: Color(0.90, 0.35, 0.35),   ## ENEMY_1 — 红
+	0: Color(0.55, 0.55, 0.55),   ## NONE 中立 — 灰  #8C8C8C
+	1: Color(0.24, 0.44, 0.88),   ## PLAYER — 冷蓝  #3D70E0（原 #4D8CF2 调冷以区别洼地）
+	2: Color(0.90, 0.35, 0.35),   ## ENEMY_1 — 红  #E65959
 }
 
 ## 影响范围覆盖层 alpha（半透明，避免遮挡地形 / 单位 / 可达高亮）
