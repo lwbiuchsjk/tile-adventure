@@ -79,7 +79,15 @@ const SLOT_COLORS: Dictionary = {
 const SLOT_MARGIN: int = 10
 
 ## 可达范围高亮色（半透明白色叠加）
-const REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.25)
+## UI 重构步骤 7：从 alpha 0.25 降到 0.08（弱化整格铺色），
+## 改由边界描边（REACHABLE_BORDER_COLOR）承担主要识别
+const REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.08)
+
+## UI 重构步骤 7：可达范围边界描边
+## 遍历可达集合 → 检查 4 邻居是否在集合内 → 只画外边的边
+## 蓝白冷调，与敌方红敌对；alpha 0.70 清晰但不霸占画面
+const REACHABLE_BORDER_COLOR: Color = Color(0.72, 0.85, 1.0, 0.70)    ## #B8D9FF alpha 0.70
+const REACHABLE_BORDER_WIDTH: float = 2.0
 
 ## 单位标记颜色（亮白色，醒目区分地形）
 const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
@@ -1953,6 +1961,10 @@ func _draw() -> void:
 	_draw_persistent_slots()
 
 	# 第二层：可达范围高亮
+	# UI 重构步骤 7：可达范围双通道渲染
+	#   - 整格铺 REACHABLE_COLOR（alpha 0.08，轻量背景提示）
+	#   - 外边界描边（只画邻居不在集合内的那条边），蓝白冷调
+	# 视觉效果：弱铺色提供"整体可达感"，描边提供"清晰边界"
 	for tile_pos in _reachable_tiles:
 		var pos: Vector2i = tile_pos as Vector2i
 		if _unit != null and pos == _unit.position:
@@ -1964,6 +1976,27 @@ func _draw() -> void:
 			TILE_SIZE - 1
 		)
 		draw_rect(rect, REACHABLE_COLOR)
+
+		# 边界描边：4 邻居中不在集合内的方向画一条边
+		var px: float = float(pos.x * TILE_SIZE)
+		var py: float = float(pos.y * TILE_SIZE)
+		var pw: float = float(TILE_SIZE)
+		# 上邻
+		if not _reachable_tiles.has(Vector2i(pos.x, pos.y - 1)):
+			draw_line(Vector2(px, py), Vector2(px + pw, py),
+				REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+		# 下邻
+		if not _reachable_tiles.has(Vector2i(pos.x, pos.y + 1)):
+			draw_line(Vector2(px, py + pw), Vector2(px + pw, py + pw),
+				REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+		# 左邻
+		if not _reachable_tiles.has(Vector2i(pos.x - 1, pos.y)):
+			draw_line(Vector2(px, py), Vector2(px, py + pw),
+				REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+		# 右邻
+		if not _reachable_tiles.has(Vector2i(pos.x + 1, pos.y)):
+			draw_line(Vector2(px + pw, py), Vector2(px + pw, py + pw),
+				REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
 
 	# 第三层：敌方关卡移动动画标记
 	if _enemy_movement.get_moving_level() != null:
