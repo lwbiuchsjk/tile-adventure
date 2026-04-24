@@ -418,11 +418,11 @@ func _test_target_switch_range_threshold() -> void:
 	em2.queue_free()
 
 
-## 12. display_id 分配稳定性
-##     同一组 slot 两次分配 → 同 ID；不同 position 的 slot → 不同 ID
-##     验证 (faction, type, y→x) 排序稳定性
+## 12. display_id 全局唯一分配（v2）
+##     验证：按类型全局计数、跨势力共享序列；核心保持"核心"；归属翻转不改变 ID
+##     v2 触发点：v1 按势力分桶会让玩家占据中立/敌方 slot 后出现同 ID 重名，反人类
 func _test_display_id_assignment_stability() -> void:
-	print("-- display_id 分配")
+	print("-- display_id 全局唯一分配")
 
 	# 构造一组混合归属 / 类型 / 位置的 slot
 	var build_slots: Callable = func() -> Array[PersistentSlot]:
@@ -453,52 +453,63 @@ func _test_display_id_assignment_stability() -> void:
 	var slots_a: Array[PersistentSlot] = build_slots.call() as Array[PersistentSlot]
 	PersistentSlotGenerator._assign_display_ids(slots_a)
 
-	# 核心检验
+	# 核心检验：两个核心都叫"核心"（MVP 颜色区分足够）
 	for s in slots_a:
 		if s.type == PersistentSlot.Type.CORE_TOWN:
 			_assert(s.display_id == "核心",
 				"核心城镇 display_id = '核心' (势力=%d)" % s.owner_faction)
 
-	# 玩家村庄按 (y,x) 升序：(7,2)=y=2, (5,3)=y=3, (2,5)=y=5 → 村庄1, 村庄2, 村庄3
-	var player_villages: Array[PersistentSlot] = []
-	for s in slots_a:
-		if s.type == PersistentSlot.Type.VILLAGE and s.owner_faction == Faction.PLAYER:
-			player_villages.append(s)
-	# 按 position 查找并断言
-	_assert(_find_village_at(player_villages, Vector2i(7, 2)).display_id == "村庄1",
-		"玩家村庄 (7,2) y=2 最小 → 村庄1")
-	_assert(_find_village_at(player_villages, Vector2i(5, 3)).display_id == "村庄2",
-		"玩家村庄 (5,3) y=3 → 村庄2")
-	_assert(_find_village_at(player_villages, Vector2i(2, 5)).display_id == "村庄3",
-		"玩家村庄 (2,5) y=5 → 村庄3")
+	# 所有村庄按 (y, x) 全局排序：
+	#   (7,2) y=2 → 村庄1（玩家）
+	#   (5,3) y=3 → 村庄2（玩家）
+	#   (2,5) y=5 → 村庄3（玩家）
+	#   (27,26) y=26 → 村庄4（敌方）
+	#   (25,28) y=28 → 村庄5（敌方）
+	_assert(_find_slot_at(slots_a, Vector2i(7, 2)).display_id == "村庄1",
+		"全局：村庄 (7,2) y=2 → 村庄1（玩家）")
+	_assert(_find_slot_at(slots_a, Vector2i(5, 3)).display_id == "村庄2",
+		"全局：村庄 (5,3) y=3 → 村庄2（玩家）")
+	_assert(_find_slot_at(slots_a, Vector2i(2, 5)).display_id == "村庄3",
+		"全局：村庄 (2,5) y=5 → 村庄3（玩家）")
+	_assert(_find_slot_at(slots_a, Vector2i(27, 26)).display_id == "村庄4",
+		"全局：村庄 (27,26) y=26 → 村庄4（敌方，续接玩家序号）")
+	_assert(_find_slot_at(slots_a, Vector2i(25, 28)).display_id == "村庄5",
+		"全局：村庄 (25,28) y=28 → 村庄5（敌方）")
 
-	# 玩家 TOWN 独立计数 → 城镇1
+	# 跨势力不重名：所有 "村庄N" 全地图唯一
+	var village_ids: Dictionary = {}
 	for s in slots_a:
-		if s.type == PersistentSlot.Type.TOWN and s.owner_faction == Faction.PLAYER:
-			_assert(s.display_id == "城镇1", "玩家唯一城镇 → 城镇1")
+		if s.type == PersistentSlot.Type.VILLAGE:
+			_assert(not village_ids.has(s.display_id),
+				"村庄 ID 全局唯一（%s 首次出现）" % s.display_id)
+			village_ids[s.display_id] = true
 
-	# 敌方村庄独立计数
-	var enemy_villages: Array[PersistentSlot] = []
+	# 城镇独立计数 → 城镇1
 	for s in slots_a:
-		if s.type == PersistentSlot.Type.VILLAGE and s.owner_faction == Faction.ENEMY_1:
-			enemy_villages.append(s)
-	# (27,26) y=26, (25,28) y=28 → 敌方 村庄1, 村庄2
-	_assert(_find_village_at(enemy_villages, Vector2i(27, 26)).display_id == "村庄1",
-		"敌方村庄 (27,26) y=26 → 村庄1（独立计数）")
-	_assert(_find_village_at(enemy_villages, Vector2i(25, 28)).display_id == "村庄2",
-		"敌方村庄 (25,28) y=28 → 村庄2")
+		if s.type == PersistentSlot.Type.TOWN:
+			_assert(s.display_id == "城镇1", "唯一城镇 → 城镇1")
+
+	# 归属翻转后 ID 保持不变（v2 核心保证）
+	var v1: PersistentSlot = _find_slot_at(slots_a, Vector2i(27, 26))
+	var before_id: String = v1.display_id    # "村庄4"
+	var before_faction: int = v1.owner_faction    # ENEMY_1
+	v1.owner_faction = Faction.PLAYER    # 模拟玩家占据
+	_assert(v1.display_id == before_id,
+		"归属翻转（%d → PLAYER）后 display_id 保持不变（%s）" % [before_faction, before_id])
 
 	# 稳定性：再跑一次，ID 应一致
 	var slots_b: Array[PersistentSlot] = build_slots.call() as Array[PersistentSlot]
 	PersistentSlotGenerator._assign_display_ids(slots_b)
 	for i in range(slots_a.size()):
-		# slots_a / slots_b 是按 build 顺序构造的，索引对齐
-		_assert(slots_a[i].display_id == slots_b[i].display_id,
-			"稳定性：两次分配 index=%d 同 position (%d,%d) 得到相同 ID" % [i, slots_a[i].position.x, slots_a[i].position.y])
+		# slots_a 中 (27,26) 已被改归属，但 slots_b 是 fresh 构造的；比较需要用 position 对齐
+		var pos: Vector2i = slots_a[i].position
+		var slot_b: PersistentSlot = _find_slot_at(slots_b, pos)
+		_assert(slots_a[i].display_id == slot_b.display_id,
+			"稳定性：position (%d,%d) 两次分配 ID 一致" % [pos.x, pos.y])
 
 
-## 辅助：按 position 在数组中查找 PersistentSlot
-func _find_village_at(arr: Array[PersistentSlot], pos: Vector2i) -> PersistentSlot:
+## 辅助：按 position 在数组中查找 PersistentSlot（类型无关）
+func _find_slot_at(arr: Array[PersistentSlot], pos: Vector2i) -> PersistentSlot:
 	for s in arr:
 		if s.position == pos:
 			return s

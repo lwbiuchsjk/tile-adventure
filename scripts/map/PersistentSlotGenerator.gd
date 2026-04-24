@@ -199,22 +199,25 @@ static func _try_generate(
 	return slots
 
 
-## 按 (势力, 类型, 位置) 稳定排序给每个 slot 分配人类可读 ID
-## 规则：
-##   CORE_TOWN：每势力恒为"核心"（无序号）
-##   VILLAGE / TOWN：按 position (y→x) 稳定排序后，势力内按类型从 1 递增
-##                   示例：玩家有 3 个村庄 → "村庄1"/"村庄2"/"村庄3"；敌方独立计数
+## 按 (类型, 位置) 确定性排序，全局唯一分配人类可读 ID
+## 规则（M8 v2：全局唯一）：
+##   CORE_TOWN：恒为"核心"（MVP 只有 2 个，靠势力色区分，核心不翻转无歧义）
+##   VILLAGE / TOWN：按 position (y→x) 排序后全地图从 1 递增
+##                   示例：18 个村庄全局 "村庄1..村庄18"；玩家 / 敌方 / 中立**共享**这个序列
+##
+## 决策背景（v2）：
+##   v1 按 (势力, 类型) 分桶独立计数。玩家占据中立/敌方 slot 后，该 slot 的 display_id 保留，
+##   但可能与玩家已有同 ID slot 重名（例如玩家有"村庄2"，又占了原中立桶里的"村庄2"），反人类
+##   v2 改全局唯一：ID 生成时一次定死、永不随归属翻转变化；玩家拥有的 ID 可能不连续
+##   （如"村庄2, 村庄5, 村庄8"）但每个 ID 在地图上唯一指向一格，查找方便
 ##
 ## 稳定性依赖 position 排序 —— position 由 seed 唯一决定，故同 seed 两次生成 ID 一致
-## 中立归属（NONE）的 slot 也会被分配 ID（基于 type 统计），后续被玩家 / 敌方占据时 ID 保留不变
+##
+## 确定性排序注意：Array.sort_custom 不保证稳定性；此处 (type, y, x) 三键足以唯一决定顺序
+## （不同 slot 不会共享 position），结果与稳定排序等价
 static func _assign_display_ids(slots: Array[PersistentSlot]) -> void:
-	# 确定性排序：按 (owner_faction, type, y, x) 升序完整显式比较
-	# 决策背景：Array.sort_custom 不保证稳定性；但此处四个比较键足以唯一决定顺序
-	# （不同 slot 不会共享 position），因此结果与稳定排序等价，无需依赖稳定性实现
 	var sorted: Array[PersistentSlot] = slots.duplicate()
 	sorted.sort_custom(func(a: PersistentSlot, b: PersistentSlot) -> bool:
-		if a.owner_faction != b.owner_faction:
-			return a.owner_faction < b.owner_faction
 		if a.type != b.type:
 			return int(a.type) < int(b.type)
 		if a.position.y != b.position.y:
@@ -222,14 +225,13 @@ static func _assign_display_ids(slots: Array[PersistentSlot]) -> void:
 		return a.position.x < b.position.x
 	)
 
-	# 按势力 × 类型独立计数
-	var counters: Dictionary = {}   # { Vector2i(faction, type): int next_idx }
+	# 按类型全局计数（不分势力）
+	var counters: Dictionary = {}   # { int type: int next_idx }
 	for slot in sorted:
 		if slot.type == PersistentSlot.Type.CORE_TOWN:
-			# 核心每势力唯一，不加序号
 			slot.display_id = "核心"
 			continue
-		var key: Vector2i = Vector2i(slot.owner_faction, int(slot.type))
+		var key: int = int(slot.type)
 		var next_idx: int = int(counters.get(key, 1))
 		slot.display_id = "%s%d" % [slot.get_type_name(), next_idx]
 		counters[key] = next_idx + 1
