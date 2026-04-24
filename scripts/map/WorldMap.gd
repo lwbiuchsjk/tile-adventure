@@ -2080,7 +2080,9 @@ const M4_FACTION_COLORS: Dictionary = {
 }
 
 ## 影响范围覆盖层 alpha（半透明，避免遮挡地形 / 单位 / 可达高亮）
-const M4_INFLUENCE_ALPHA: float = 0.15
+## UI 重构步骤 4：从 0.15 降到 0.08，势力范围明确退为辅助层，
+## 不再主导画面；识别靠描边（M4_INFLUENCE_BORDER_ALPHA=0.55）承担
+const M4_INFLUENCE_ALPHA: float = 0.08
 
 ## 影响范围菱形外边界描边 alpha + 线宽
 ## 决策背景：填充统一色会让相邻同势力 slot 的菱形融成一片、分不清各自边界；
