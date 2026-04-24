@@ -84,6 +84,12 @@ const REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.25)
 ## 单位标记颜色（亮白色，醒目区分地形）
 const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
 
+## UI 重构步骤 3：单位描边 + 投影
+## 描边让白底在浅色地形 / 可达高亮区不漂浮；投影营造棋子感
+const UNIT_OUTLINE_COLOR: Color = Color(0.15, 0.15, 0.15)    ## 深灰描边  #262626
+const UNIT_OUTLINE_WIDTH: float = 1.5                         ## 描边线宽
+const UNIT_SHADOW_COLOR: Color = Color(0.0, 0.0, 0.0, 0.30)   ## 投影半透黑
+
 ## 单位标记边距（像素）
 const UNIT_MARGIN: int = 8
 
@@ -2325,6 +2331,13 @@ func _draw_slot_label(center_px: Vector2, text: String, color: Color) -> void:
 
 
 ## 绘制单位标记（基于视觉位置，支持动画中的平滑移动）
+## UI 重构步骤 3：加深色描边 + 投影，消除"漂浮感"，让单位稳定为第一视觉锚点
+##
+## 绘制顺序（自底向上）：
+##   1. 投影：右下偏移 +2px 的半透明黑矩形
+##   2. 主体：白色方块
+##   3. 描边：深色 1.5 px 外边
+##   4. 文字：居中"我"字
 func _draw_unit_marker() -> void:
 	var rect: Rect2 = Rect2(
 		_unit_visual_pos.x - TILE_SIZE / 2 + UNIT_MARGIN,
@@ -2332,7 +2345,17 @@ func _draw_unit_marker() -> void:
 		TILE_SIZE - UNIT_MARGIN * 2 - 1,
 		TILE_SIZE - UNIT_MARGIN * 2 - 1
 	)
+
+	# 投影：右下偏移 2px、半透明黑；营造棋子感而非平面 sticker
+	var shadow_rect: Rect2 = Rect2(rect.position + Vector2(2, 2), rect.size)
+	draw_rect(shadow_rect, UNIT_SHADOW_COLOR)
+
+	# 主体白色方块
 	draw_rect(rect, UNIT_COLOR)
-	# 叠加「我」字标注，深色文字与亮白色背景形成对比
+
+	# 深色描边：在浅色地形 / 高亮区防漂浮
+	draw_rect(rect, UNIT_OUTLINE_COLOR, false, UNIT_OUTLINE_WIDTH)
+
+	# "我"字居中
 	if _label_font != null:
 		_draw_slot_label(_unit_visual_pos, "我", Color(0.15, 0.15, 0.15))
