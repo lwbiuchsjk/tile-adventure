@@ -2146,11 +2146,14 @@ func _draw_resource_slots() -> void:
 # ─────────────────────────────────────────
 
 ## 势力归属色：持久 slot 外框 + 影响范围覆盖层共用
-## UI 重构步骤 2：PLAYER 色相从 #4D8CF2 调整为 #3D6FE0（偏冷蓝），
-##   避免与 LOWLAND 洼地蓝 #4D8CBF 低对比度；保持和 ENEMY_1 红的二元对立
+## UI 重构步骤 2 + 调色迭代：
+##   v1 `#4D8CF2` 和 LOWLAND `#4D8CBF` 几乎同色，冲突严重
+##   v2 `#3D70E0` 调冷但 R 分量和洼地完全一致，只在 B 差 0.21，仍低对比度
+##   v3（本次）饱和青蓝 `#1A8FE6`：R 大幅降 (0.10)，G 提高 (0.56)，
+##        明度约 170 vs 洼地 110，差距 60 拉开；保留蓝色身份
 const M4_FACTION_COLORS: Dictionary = {
 	0: Color(0.55, 0.55, 0.55),   ## NONE 中立 — 灰  #8C8C8C
-	1: Color(0.24, 0.44, 0.88),   ## PLAYER — 冷蓝  #3D70E0（原 #4D8CF2 调冷以区别洼地）
+	1: Color(0.10, 0.56, 0.90),   ## PLAYER — 饱和青蓝  #1A8FE6
 	2: Color(0.90, 0.35, 0.35),   ## ENEMY_1 — 红  #E65959
 }
 
@@ -2159,21 +2162,32 @@ const M4_FACTION_COLORS: Dictionary = {
 ## 不再主导画面；识别靠描边（M4_INFLUENCE_BORDER_ALPHA=0.55）承担
 const M4_INFLUENCE_ALPHA: float = 0.08
 
-## 影响范围菱形外边界描边 alpha + 线宽
+## 影响范围菱形外边界描边参数
 ## 决策背景：填充统一色会让相邻同势力 slot 的菱形融成一片、分不清各自边界；
 ## 追加描边后每个 slot 一条独立轮廓，相邻 slot 重叠处形成双线，视觉可辨
-const M4_INFLUENCE_BORDER_ALPHA: float = 0.55
+##
+## 调色迭代：描边色从纯势力色 alpha 0.55 改为"势力色暗化 × 0.4 + alpha 0.70"
+## 原因：玩家蓝 + 洼地蓝同色时，纯势力色描边会被地形色吸掉；
+## 暗化后（如玩家青蓝变深海蓝）在任何地形上都明显深于背景，边界稳定可辨
+## 仍保留势力色相（暗化 × 系数而非改深灰），势力归属信息不丢
+const M4_INFLUENCE_BORDER_DARKEN: float = 0.40    ## 势力色暗化系数
+const M4_INFLUENCE_BORDER_ALPHA: float = 0.70
 const M4_INFLUENCE_BORDER_WIDTH: float = 2.0
 
 ## 核心城镇金色描边（凸显势力首都）
 const M4_CORE_TOWN_BORDER: Color = Color(1.0, 0.85, 0.0)
 
-## 持久 slot 双层结构（UI 重构步骤 1）
-## 外环 = 势力色（归属识别）；内底 = 中性米白（文字承载，对比度最高）
+## 持久 slot 三层结构（UI 重构步骤 1 + 调色迭代）
+## 外环势力色（归属识别）→ 白色分离线（几何分离，即使色相冲突也能识别）→ 内底米白（文字承载）
 ## 核心城镇额外金色中心徽记强化"首都"仪式感
-const M4_PERSISTENT_RING_WIDTH: int = 4        ## 外环厚度 px（占格 48 × 8%）
-const M4_PERSISTENT_INNER_BG: Color = Color(0.90, 0.88, 0.83)  ## 内底米白  #E6E0D4
-const M4_CORE_TOWN_EMBLEM_SIZE: int = 8        ## 核心城镇下方徽记（金色小菱形）边长 px
+##
+## 三层而非双层的理由：当玩家蓝 / 敌方红与地形色相近时（如玩家蓝 vs 洼地蓝），
+## 仅靠势力色 + 米白内底仍可能低对比度；加一条白色分离线确保几何边界清晰
+const M4_PERSISTENT_RING_WIDTH: int = 4                           ## 外环厚度 px（占格 48 × 8%）
+const M4_PERSISTENT_SEPARATOR_COLOR: Color = Color(1.0, 1.0, 1.0) ## 分离线纯白
+const M4_PERSISTENT_SEPARATOR_WIDTH: int = 1                      ## 分离线厚度 px
+const M4_PERSISTENT_INNER_BG: Color = Color(0.90, 0.88, 0.83)     ## 内底米白  #E6E0D4
+const M4_CORE_TOWN_EMBLEM_SIZE: int = 8                           ## 核心城镇下方徽记（金色小菱形）边长 px
 
 
 ## 绘制所有已占据持久 slot 的影响范围覆盖层（曼哈顿菱形内所有格）
@@ -2196,7 +2210,9 @@ func _draw_persistent_influence_ranges() -> void:
 			continue
 		var base: Color = M4_FACTION_COLORS.get(slot.owner_faction, Color.MAGENTA) as Color
 		var overlay: Color = Color(base.r, base.g, base.b, M4_INFLUENCE_ALPHA)
-		var border: Color = Color(base.r, base.g, base.b, M4_INFLUENCE_BORDER_ALPHA)
+		# 描边色：势力色暗化 × DARKEN 系数 + alpha，保留势力色相但深于地形色
+		var d: float = M4_INFLUENCE_BORDER_DARKEN
+		var border: Color = Color(base.r * d, base.g * d, base.b * d, M4_INFLUENCE_BORDER_ALPHA)
 		var r: int = slot.influence_range
 		var cx: int = slot.position.x
 		var cy: int = slot.position.y
@@ -2265,16 +2281,24 @@ func _draw_persistent_slots() -> void:
 		)
 		var color: Color = M4_FACTION_COLORS.get(slot.owner_faction, Color.MAGENTA) as Color
 
-		# 步骤 1 双层：外环（势力色填满）+ 内底（中性米白，内缩 ring_width）
+		# 三层结构：外环势力色 → 白分离线 → 内底米白
+		# 即使势力色和地形色相近（如玩家蓝 ↔ 洼地蓝），白分离线也能清晰勾出据点边界
 		draw_rect(outer, color)
 		var ring: int = M4_PERSISTENT_RING_WIDTH
-		var inner: Rect2 = Rect2(
+		var separator_rect: Rect2 = Rect2(
 			outer.position + Vector2(ring, ring),
 			outer.size - Vector2(ring * 2, ring * 2)
 		)
-		# 极端情况：格子变小 → ring*2 可能溢出，防御
-		if inner.size.x > 0 and inner.size.y > 0:
-			draw_rect(inner, M4_PERSISTENT_INNER_BG)
+		if separator_rect.size.x > 0 and separator_rect.size.y > 0:
+			draw_rect(separator_rect, M4_PERSISTENT_SEPARATOR_COLOR)
+			# 内底再内缩 separator_width，米白承载文字
+			var sep: int = M4_PERSISTENT_SEPARATOR_WIDTH
+			var inner: Rect2 = Rect2(
+				separator_rect.position + Vector2(sep, sep),
+				separator_rect.size - Vector2(sep * 2, sep * 2)
+			)
+			if inner.size.x > 0 and inner.size.y > 0:
+				draw_rect(inner, M4_PERSISTENT_INNER_BG)
 
 		# 核心城镇第二识别特征：金色外描边 + 下方小金菱形徽记
 		# 徽记偏下（主字居中占主视觉），避免被文字压住
