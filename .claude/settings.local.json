@@ -9,7 +9,10 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:hub.docker.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(cat)",
+      "Bash(chmod +x /mnt/d/坚果云/tile-advanture-design/.git/hooks/pre-commit)",
+      "Read(//mnt/d/坚果云/tile-advanture-design/.git/hooks/**)"
     ]
   }
 }
