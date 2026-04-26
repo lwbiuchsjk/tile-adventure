@@ -9,6 +9,7 @@
 		}
 	],
 	"settings": {
-		"godotTools.lsp.serverPort": 6200
+        "godotTools.lsp.serverPort": 6200,
+        "powershell.cwd": "tile-adventure"
 	}
 }
