@@ -29,5 +29,8 @@ Design/
 # Local Godot runner (path varies per machine)
 tools/run_godot.ps1
 
+# Local environment config (Obsidian CLI / vault name / per-machine paths)
+tools/local_env.json
+
 # Web export output (CI handles export and deploy)
 output/
