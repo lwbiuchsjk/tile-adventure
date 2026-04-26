@@ -89,49 +89,85 @@ const SLOT_COLORS: Dictionary = {
 const SLOT_MARGIN: int = 10
 
 ## 可达范围高亮色（半透明白色叠加）
-## UI 重构步骤 7：从 alpha 0.25 降到 0.08（弱化整格铺色），
-## 改由边界描边（REACHABLE_BORDER_COLOR）承担主要识别
-const REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.08)
+## 沿革：
+##   - UI 重构步骤 7：从 alpha 0.25 降到 0.08（弱化整格铺色），由边界描边主导识别
+##   - Civ 化阶段 A 后续：势力范围升级为"硬外缘 alpha 1.0 宽 3.0 + 内向渐变 0.22/0.12/0.05"
+##     视觉强度颠倒——"立即操作"的可达范围被"长期状态"的势力范围压在背景层
+##   - 当前：白色双通道全面加强，恢复"立即操作 > 长期状态"信息层级
+##     填充 0.08 → 0.18；描边色浅蓝白 #B8D9FF → 纯白；alpha 0.70 → 1.0；宽 2.0 → 3.5（略超势力范围 3.0）
+const REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.18)
 
-## UI 重构步骤 7：可达范围边界描边
-## 遍历可达集合 → 检查 4 邻居是否在集合内 → 只画外边的边
-## 蓝白冷调，与敌方红敌对；alpha 0.70 清晰但不霸占画面
-const REACHABLE_BORDER_COLOR: Color = Color(0.72, 0.85, 1.0, 0.70)    ## #B8D9FF alpha 0.70
-const REACHABLE_BORDER_WIDTH: float = 2.0
+## 可达范围边界描边（合集化 —— 4 邻居不在集合内的方向画外边）
+## 纯白 alpha 1.0 + 宽 3.5，与势力色（青蓝 / 玫红）色相完全脱钩，强度压过势力范围一档
+const REACHABLE_BORDER_COLOR: Color = Color(1.0, 1.0, 1.0, 1.0)    ## #FFFFFF alpha 1.0
+const REACHABLE_BORDER_WIDTH: float = 3.5
 
-## 单位标记颜色（亮白色，醒目区分地形）
+## 单位标记内底色（白色，承载"我"字 + 在地形上保留对比度）
 const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
 
-## UI 重构步骤 3：单位描边 + 投影
-## 描边让白底在浅色地形 / 可达高亮区不漂浮；投影营造棋子感
-const UNIT_OUTLINE_COLOR: Color = Color(0.15, 0.15, 0.15)    ## 深灰描边  #262626
-const UNIT_OUTLINE_WIDTH: float = 1.5                         ## 描边线宽
+## UI 重构步骤 3：单位投影（圆形棋子感）
+## 旧的"白主体 + 深灰描边"已被"圆形 + 玩家蓝外环 + 白心"替代——
+## 形状区分（圆 vs 方/菱）+ 玩家蓝身份语义双管齐下，避免单位被白色可达边吞没、
+## 也避免与同样"蓝边白心"的玩家建筑混淆（建筑是方形）
 const UNIT_SHADOW_COLOR: Color = Color(0.0, 0.0, 0.0, 0.30)   ## 投影半透黑
 
-## 单位标记边距（像素）
+## 单位标记边距（像素）—— 圆形半径 = (TILE_SIZE - UNIT_MARGIN*2) / 2
 const UNIT_MARGIN: int = 8
+
+## 玩家单位外环厚度（px）—— 环色复用 M4_FACTION_COLORS[Faction.PLAYER]，保证 UI 一致
+## 环宽 3 略薄于建筑 4，因为单位整体小一档（半径 16 vs 建筑半边长 24）
+const UNIT_PLAYER_RING_WIDTH: int = 3
 
 ## 已挑战关卡变暗系数（同一轮内已挑战但尚未切换的关卡）
 const CHALLENGED_DIM: float = 0.4
 
-## 敌方关卡底色（暗红，文字为主要信息载体）#CC4040
-const ENEMY_SLOT_COLOR: Color = Color(0.80, 0.25, 0.25)
+## 敌方关卡底色 —— 统一为标准敌方红，与持久敌方建筑势力色同源
+## 沿革：
+##   v1 暗红 #CC4040 单色 + tier 跨色相边框（绿/黄/红/紫）
+##   v2 饱和冷红 #FF3D4D 单色 + tier 红色家族边框 —— tier 中描边色与底色相同消失（致命 bug）
+##   v3（R-Bold）底色按 tier 明度梯度（浅红粉 → 黑红）+ 主字"弱/中/强/超" —— 文字 14px 在小空间糊
+##   v4（米字小菱形 + 尺寸梯度）—— 但底色 4 档梯度让"超档黑红"被白小菱形覆盖出现反语义
+##   v5（当前）底色统一 #FF3D4D —— 强度完全靠 3 个独立直觉通道（尺寸 + 小菱形数 + 描边宽度）；
+##              底色不再与小菱形数量"打架"，与持久敌方建筑共享"敌方"身份红
+const ENEMY_SLOT_COLOR: Color = Color(1.00, 0.24, 0.30)
 
-## 敌方关卡边框颜色（亮红，增强辨识度，兜底色）
+## 敌方菱形描边 —— 统一黑红色，宽度按 tier 梯度
+## 黑红 #1A0008 与红底高对比；宽度梯度收窄到 2.0/2.5/3.0/3.5（v4 的 4.5 过粗压迫小菱形）
+const TIER_BORDER_COLOR: Color = Color(0.10, 0.00, 0.03, 1.0)
+const TIER_BORDER_WIDTHS: Dictionary = {
+	0: 2.0,
+	1: 2.5,
+	2: 3.0,
+	3: 3.5,
+}
+
+## 敌方关卡边框颜色（兜底，仅 level.tier 越界时使用）
 const ENEMY_BORDER_COLOR: Color = Color(1.0, 0.25, 0.20, 0.8)
 
-## UI 重构步骤 6：敌方菱形描边线宽 + 内阴影色
-## 线宽从 1.5 提到 3.0，让 tier 色更醒目；
-## 内阴影（暗红 alpha 0.4）营造体积感，"危险对象"更有分量
-const ENEMY_BORDER_WIDTH: float = 3.0
-const ENEMY_INNER_SHADOW_COLOR: Color = Color(0.40, 0.10, 0.10, 0.40)  ## #661A1A
+## 敌方强度图形化（米字 4 小菱形）
+## 外菱形以"米字"线四等分，4 个小菱形（上/下/左/右）按 tier 累积点亮：
+##   tier 0 弱：上 1 个（独立 tip）
+##   tier 1 中：上+下 2 个（垂直对称）
+##   tier 2 强：上+左+右 3 个（T 型，左右对称）
+##   tier 3 超：4 个全亮（恰好组合成完整内嵌菱形）
+## 小菱形配色：金色填充（无描边） —— 红+金经典威慑配色，与玩家/敌方核心金边同源（"金=重要标识"），
+##             与玩家蓝白阵营形成"蓝白文明 vs 红金军阀"对位
+## 小菱形尺寸：外菱形 0.3 倍居中分布
+##   v5 初版 0.4 倍，4 个小菱形仍偏大、底色显示区域偏小；
+##   缩到 0.3 倍后底色 70%+ 区域可见，1 个 vs 3 个的差异更直接（"少且小"vs"分散漂浮"语义不模糊）
+const ENEMY_TIER_DOT_COLOR: Color = Color(1.0, 0.84, 0.0)         ## 金色 #FFD700
+const ENEMY_TIER_DOT_SIZE_RATIO: float = 0.3
 
-## 敌方关卡强度档位边框颜色（弱=绿, 中=黄, 强=红, 超=紫）
-const TIER_BORDER_COLORS: Dictionary = {
-	0: Color(0.35, 0.80, 0.35, 0.8),  ## 弱：绿色  #59CC59
-	1: Color(0.90, 0.80, 0.20, 0.8),  ## 中：黄色  #E6CC33
-	2: Color(1.00, 0.30, 0.25, 0.8),  ## 强：红色  #FF4D40
-	3: Color(0.75, 0.35, 0.90, 0.8),  ## 超：紫色  #BF59E6
+## 敌方外菱形按 tier 的格内边距（像素）—— 尺寸梯度通道
+## 占格比例：弱 67% / 中 75% / 强 83% / 超 90%
+##   弱档显著最小（67%）+ 小菱形居中（不在米字 4 方向），与其他档形成"位置 + 尺寸"双重区分
+##   1 个居中小菱形 vs 3 个 T 型小菱形语义完全不同，远观一眼可辨
+## margin = (TILE_SIZE - TILE_SIZE * 占比) / 2，TILE_SIZE = 48
+const ENEMY_TIER_SLOT_MARGINS: Dictionary = {
+	0: 8,   ## 67% 占格 —— 弱档显著最小
+	1: 6,   ## 75%
+	2: 4,   ## 83%
+	3: 2,   ## 92%
 }
 
 ## 一次性资源点底色（按类型区分）
@@ -2048,7 +2084,7 @@ func _draw_tile(x: int, y: int) -> void:
 		var is_enemy: bool = false
 		var is_repelled: bool = false
 
-		# 敌方格使用专用暗红底色；其他 slot 使用 SLOT_COLORS 兜底色
+		# 敌方格统一标准敌方红底色；其他 slot 使用 SLOT_COLORS 兜底色
 		var slot_color: Color
 		if level != null:
 			# 正在移动的关卡跳过静态渲染（由 _draw_enemy_move_marker 负责）
@@ -2066,11 +2102,15 @@ func _draw_tile(x: int, y: int) -> void:
 		else:
 			slot_color = SLOT_COLORS.get(slot, Color.WHITE) as Color
 
+		# 敌方菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；其他 slot 仍用统一 SLOT_MARGIN
+		var rect_margin: int = SLOT_MARGIN
+		if is_enemy and not is_repelled and not level.is_defeated() and ENEMY_TIER_SLOT_MARGINS.has(level.tier):
+			rect_margin = ENEMY_TIER_SLOT_MARGINS[level.tier]
 		var slot_rect: Rect2 = Rect2(
-			x * TILE_SIZE + SLOT_MARGIN,
-			y * TILE_SIZE + SLOT_MARGIN,
-			TILE_SIZE - SLOT_MARGIN * 2 - 1,
-			TILE_SIZE - SLOT_MARGIN * 2 - 1
+			x * TILE_SIZE + rect_margin,
+			y * TILE_SIZE + rect_margin,
+			TILE_SIZE - rect_margin * 2 - 1,
+			TILE_SIZE - rect_margin * 2 - 1
 		)
 		# 敌方关卡用菱形绘制，其他 Slot 保持矩形
 		if is_enemy:
@@ -2078,31 +2118,18 @@ func _draw_tile(x: int, y: int) -> void:
 		else:
 			draw_rect(slot_rect, slot_color)
 
-		# 敌方关卡：加菱形描边 + 文字（仅活跃状态显示文字）
-		# UI 重构步骤 6：描边线宽 1.5 → 3.0（tier 色更醒目）；
-		# 活跃状态再加一层内描边（内缩 2px 暗红）营造"危险对象体积感"
+		# 敌方关卡：菱形描边 + 米字小菱形图形（仅活跃状态）
+		# 视觉栈简化为 3 层：底色（统一红） → 外描边（黑红 + 宽度梯度） → 金色小菱形（米字累积）
 		if is_enemy:
 			var border_color: Color = REPELLED_BORDER_COLOR
+			var border_width: float = TIER_BORDER_WIDTHS.get(1, 2.5)  ## 兜底用中档宽度
 			if not is_repelled and not level.is_defeated():
-				border_color = TIER_BORDER_COLORS.get(level.tier, ENEMY_BORDER_COLOR) as Color
-			_draw_diamond(slot_rect, border_color, false, ENEMY_BORDER_WIDTH)
-			# 内阴影：仅活跃敌方格绘制；REPELLED / DEFEATED 保持原有暗化语义
+				border_color = TIER_BORDER_COLOR
+				border_width = TIER_BORDER_WIDTHS.get(level.tier, 2.5)
+			_draw_diamond(slot_rect, border_color, false, border_width)
+			# 米字 4 小菱形：按 tier 累积点亮（活跃状态）
 			if not is_repelled and not level.is_defeated():
-				var inner_rect: Rect2 = Rect2(
-					slot_rect.position + Vector2(2, 2),
-					slot_rect.size - Vector2(4, 4)
-				)
-				if inner_rect.size.x > 0 and inner_rect.size.y > 0:
-					_draw_diamond(inner_rect, ENEMY_INNER_SHADOW_COLOR, false, 1.0)
-			# 活跃状态叠加强度文字标注（敌·弱 / 敌·中 / 敌·强 / 敌·超）
-			if _label_font != null and not level.is_defeated() and not is_repelled:
-				var tier_labels: Array[String] = ["敌·弱", "敌·中", "敌·强", "敌·超"]
-				var tier_text: String = tier_labels[level.tier] if level.tier < tier_labels.size() else "敌?"
-				_draw_slot_label(
-					Vector2(x * TILE_SIZE + TILE_SIZE / 2.0, y * TILE_SIZE + TILE_SIZE / 2.0),
-					tier_text,
-					Color.WHITE
-				)
+				_draw_enemy_tier_pattern(slot_rect, level.tier)
 
 ## 即时资源点盲盒色（M6 视觉统一：采集前不显示具体类型，避免与"等权采集"规则冲突）
 ## UI 重构步骤 5：从冷灰 #8C8C99 改为暖浅灰 #B8B8B0（接近木箱感）+ 白描边，
@@ -2442,6 +2469,66 @@ func _draw_diamond(rect: Rect2, color: Color, filled: bool = true, width: float 
 		outline.append(points[0])
 		draw_polyline(outline, color, width)
 
+
+## 绘制敌方 tier 米字小菱形图形（按 tier 累积点亮）
+## 弱档（tier 0）特殊处理：单菱形**居外菱形正中**，与外菱形已显著缩小（67% 占格）共同强化"弱"语义
+## 中/强/超档：按米字 4 方向（上/下/左/右）累积点亮，每个小菱形为外菱形 ENEMY_TIER_DOT_SIZE_RATIO 倍尺寸
+##
+## 点亮策略：
+##   tier 0 弱：1 个**居中**小菱形 —— "小且单点居中"语义
+##   tier 1 中：上 + 下 2 个（垂直对称，米字方向）
+##   tier 2 强：上 + 左 + 右 3 个（T 型，米字方向）
+##   tier 3 超：4 个全亮（米字阵列）
+##
+## 弱档单独居中而非"上"的理由：1 个 vs 3 个的位置完全不同（中央 vs 米字外缘），
+##                            视觉语义不会模糊（中点单兵 vs 外缘环绕）
+##
+## 颜色：金色填充（无描边）—— 与红底高对比，不喧宾夺主
+func _draw_enemy_tier_pattern(outer_rect: Rect2, tier: int) -> void:
+	var px: float = outer_rect.position.x
+	var py: float = outer_rect.position.y
+	var w: float = outer_rect.size.x
+	var h: float = outer_rect.size.y
+	# 小菱形尺寸 + 半边距
+	var dot_size: Vector2 = Vector2(w, h) * ENEMY_TIER_DOT_SIZE_RATIO
+	var dot_half: Vector2 = dot_size * 0.5
+	# 弱档：居外菱形正中
+	if tier == 0:
+		var center_pt: Vector2 = Vector2(px + w / 2.0, py + h / 2.0)
+		var center_rect: Rect2 = Rect2(center_pt - dot_half, dot_size)
+		_draw_diamond(center_rect, ENEMY_TIER_DOT_COLOR)
+		return
+	# 中/强/超：米字 4 方向中心点（上/下偏移 h/4，左/右偏移 w/4）
+	var top_center: Vector2 = Vector2(px + w / 2.0, py + h / 4.0)
+	var bottom_center: Vector2 = Vector2(px + w / 2.0, py + h * 3.0 / 4.0)
+	var left_center: Vector2 = Vector2(px + w / 4.0, py + h / 2.0)
+	var right_center: Vector2 = Vector2(px + w * 3.0 / 4.0, py + h / 2.0)
+	# 4 个小菱形 rect
+	var top_rect: Rect2 = Rect2(top_center - dot_half, dot_size)
+	var bottom_rect: Rect2 = Rect2(bottom_center - dot_half, dot_size)
+	var left_rect: Rect2 = Rect2(left_center - dot_half, dot_size)
+	var right_rect: Rect2 = Rect2(right_center - dot_half, dot_size)
+	# 按 tier 收集要点亮的小菱形
+	var lit: Array[Rect2] = []
+	if tier == 1:
+		lit.append(top_rect)
+		lit.append(bottom_rect)
+	elif tier == 2:
+		lit.append(top_rect)
+		lit.append(left_rect)
+		lit.append(right_rect)
+	elif tier == 3:
+		lit.append(top_rect)
+		lit.append(bottom_rect)
+		lit.append(left_rect)
+		lit.append(right_rect)
+	else:
+		return
+	# 每个小菱形：金色实心填充，无描边
+	for r in lit:
+		_draw_diamond(r, ENEMY_TIER_DOT_COLOR)
+
+
 ## UI 重构步骤 9：地形亮度噪声辅助函数
 ## 基于 (x, y) 的确定性哈希返回 ±TERRAIN_NOISE_RANGE 范围内的亮度偏移
 ## 同 seed 结果一致，不闪烁；目的只为打破"整齐表格感"
@@ -2505,27 +2592,28 @@ func _draw_slot_label(center_px: Vector2, text: String, color: Color) -> void:
 ## UI 重构步骤 3：加深色描边 + 投影，消除"漂浮感"，让单位稳定为第一视觉锚点
 ##
 ## 绘制顺序（自底向上）：
-##   1. 投影：右下偏移 +2px 的半透明黑矩形
-##   2. 主体：白色方块
-##   3. 描边：深色 1.5 px 外边
+##   1. 投影：圆形右下偏移 +2px 的半透明黑
+##   2. 玩家蓝外环：实色大圆，承担"我方"身份识别
+##   3. 白色内圆：内底，承载"我"字 + 与地形保持对比度
 ##   4. 文字：居中"我"字
+##
+## 形状选择圆而非方：
+##   - 与玩家建筑（方/菱）形成"形状即语义"区分，避免远观混淆
+##   - 与可达范围白色硬边（矩形格 4 邻接拼成的矩形轮廓）形态不同，不被吞没
+##   - 圆形契合"棋子"语义
 func _draw_unit_marker() -> void:
-	var rect: Rect2 = Rect2(
-		_unit_visual_pos.x - TILE_SIZE / 2 + UNIT_MARGIN,
-		_unit_visual_pos.y - TILE_SIZE / 2 + UNIT_MARGIN,
-		TILE_SIZE - UNIT_MARGIN * 2 - 1,
-		TILE_SIZE - UNIT_MARGIN * 2 - 1
-	)
+	var center: Vector2 = Vector2(_unit_visual_pos.x, _unit_visual_pos.y)
+	var radius: float = float(TILE_SIZE - UNIT_MARGIN * 2) * 0.5
 
-	# 投影：右下偏移 2px、半透明黑；营造棋子感而非平面 sticker
-	var shadow_rect: Rect2 = Rect2(rect.position + Vector2(2, 2), rect.size)
-	draw_rect(shadow_rect, UNIT_SHADOW_COLOR)
+	# 投影：右下偏移 2px、半透明黑；圆形棋子感
+	draw_circle(center + Vector2(2, 2), radius, UNIT_SHADOW_COLOR)
 
-	# 主体白色方块
-	draw_rect(rect, UNIT_COLOR)
+	# 玩家蓝外环（实色大圆）—— 与玩家建筑外环同色，统一"我方"语义
+	var ring_color: Color = M4_FACTION_COLORS[Faction.PLAYER] as Color
+	draw_circle(center, radius, ring_color)
 
-	# 深色描边：在浅色地形 / 高亮区防漂浮
-	draw_rect(rect, UNIT_OUTLINE_COLOR, false, UNIT_OUTLINE_WIDTH)
+	# 白色内圆（半径减环宽）—— 在地形上保留对比度，并承载文字
+	draw_circle(center, radius - UNIT_PLAYER_RING_WIDTH, UNIT_COLOR)
 
 	# "我"字居中
 	if _label_font != null:
