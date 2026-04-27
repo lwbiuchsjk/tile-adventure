@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "Read",
+      "Bash(git:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(cd:*)",
+      "Bash(mkdir:*)",
+      "Bash(pwd)",
+      "Bash(date:*)",
+      "WebFetch",
+      "WebSearch",
+      "mcp__plugin_discord_discord__reply",
+      "mcp__plugin_discord_discord__fetch_messages"
+    ]
+  }
+}
