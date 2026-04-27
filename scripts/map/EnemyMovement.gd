@@ -13,9 +13,20 @@ signal redraw_requested
 
 ## 逐格动画速度（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
+## 视口跳过判定的软边界（单位：格）
+## 视口可见矩形向外扩展该格数后再做"全路径在外"判定，避免边缘格"中心刚好出框"被误跳过造成视觉断层
+## 0 = 严格按视口边界；1 = 留 1 格缓冲（推荐默认）
+const VISIBLE_RECT_PADDING_TILES: int = 1
+## Rect2 兜底用的大有限值（替代 INF 避免 has_point 在 Godot 中行为不确定）
+## 大于任何合法地图像素坐标即可（参考 100×100 格 × TILE_SIZE 64 = 6400，1e9 远超任何正常地图）
+const RECT_FALLBACK_LIMIT: float = 1.0e9
 ## 格像素尺寸（由 WorldMap 在初始化时注入，须与 WorldMap.TILE_SIZE 保持一致）
 ## 默认值 0 为非法值，未注入时会在 _grid_to_pixel_center 中触发断言
 var tile_size: int = 0
+## 摄像机引用（由 WorldMap 在 _init_subsystems 注入）
+## 用于计算视口可见矩形：路径全在视口外时跳过 Tween 直接结算，避免玩家看不到的移动产生可感停顿
+## 未注入（_camera == null）时退化为"永不跳过"，保守兜底
+var _camera: Camera2D = null
 
 # ─────────────────────────────────────
 # 内部状态
@@ -304,11 +315,25 @@ func _truncate_path(full_path: Array[Vector2i], movement: int) -> Array[Vector2i
 
 
 ## 播放逐格移动动画
+## 视口外路径优化：若 path 上每一格的像素中心都不在摄像机可见矩形内，
+## 跳过 Tween 直接把视觉位置 set 到终点 + 通过 deferred 调用 _on_move_finished
+## 串接现有占据 / 强制战斗 / 队列推进流程，避免敌方回合在屏幕外产生可感停顿
 func _start_animation(path: Array[Vector2i]) -> void:
 	_visual_pos = _grid_to_pixel_center(path[0])
 
 	if _move_tween != null and _move_tween.is_valid():
 		_move_tween.kill()
+		_move_tween = null
+
+	# 视口外跳过分支：仅当摄像机已注入且整条路径全部在可见矩形之外时触发
+	# 用 call_deferred 而非直接调用，避免在同一栈帧内深递归
+	# (_process_next_move → _start_animation → _on_move_finished → _process_next_move)
+	# 与原 tween_callback 的"下一帧触发"语义保持一致
+	if _camera != null and _is_path_entirely_off_screen(path, _compute_visible_rect()):
+		_visual_pos = _grid_to_pixel_center(path[path.size() - 1])
+		redraw_requested.emit()
+		call_deferred("_on_move_finished")
+		return
 
 	_move_tween = create_tween()
 	for i in range(1, path.size()):
@@ -317,6 +342,51 @@ func _start_animation(path: Array[Vector2i]) -> void:
 		_move_tween.tween_callback(func() -> void: redraw_requested.emit())
 
 	_move_tween.tween_callback(_on_move_finished)
+
+
+## 计算摄像机当前可见矩形（世界坐标），并按 VISIBLE_RECT_PADDING_TILES 向外扩边
+## 推导：center = _camera.get_screen_center_position()
+##      half = (viewport_size / zoom) * 0.5
+##      最终 rect = Rect2(center - half, half * 2).grow(padding_tiles * tile_size)
+## _camera == null 或 zoom 异常（接近 0）时返回一个大但有限的 Rect2 兜底，
+## 让 _is_path_entirely_off_screen 永远返回 false（即"永远不跳过"）
+## 不用 INF：Godot 中 Rect2.has_point 对 INF/NaN 边界的行为缺乏官方明确说明，
+## 改用 RECT_FALLBACK_LIMIT 这种大有限值，含义清晰且 has_point 行为确定
+func _compute_visible_rect() -> Rect2:
+	if _camera == null:
+		return _fallback_rect()
+	var viewport: Viewport = _camera.get_viewport()
+	if viewport == null:
+		return _fallback_rect()
+	var view_size: Vector2 = viewport.get_visible_rect().size
+	var zoom: Vector2 = _camera.zoom
+	# zoom 任一分量过小时退化为永远可见，避免除零或矩形爆炸
+	if zoom.x < 0.0001 or zoom.y < 0.0001:
+		return _fallback_rect()
+	var half: Vector2 = Vector2(view_size.x / zoom.x, view_size.y / zoom.y) * 0.5
+	var center: Vector2 = _camera.get_screen_center_position()
+	var rect: Rect2 = Rect2(center - half, half * 2.0)
+	# 向外扩 padding 格作为软边界，避免边缘格"中心刚好出框"被误跳过
+	if VISIBLE_RECT_PADDING_TILES > 0 and tile_size > 0:
+		rect = rect.grow(float(VISIBLE_RECT_PADDING_TILES * tile_size))
+	return rect
+
+
+## 兜底矩形：覆盖所有合法地图坐标的大有限矩形
+## 用于 _camera / viewport / zoom 异常时让 _is_path_entirely_off_screen 永远返回 false
+func _fallback_rect() -> Rect2:
+	var limit: float = RECT_FALLBACK_LIMIT
+	return Rect2(Vector2(-limit, -limit), Vector2(limit * 2.0, limit * 2.0))
+
+
+## 判定路径是否完全位于视口可见矩形之外
+## 粒度：路径上每一格的像素中心都不在 rect 内 → true
+## 选用"全路径在外"而非"起点+终点在外"，避免敌人从视口一侧"瞬移穿过"视口的视觉断层
+func _is_path_entirely_off_screen(path: Array[Vector2i], rect: Rect2) -> bool:
+	for pos in path:
+		if rect.has_point(_grid_to_pixel_center(pos)):
+			return false
+	return true
 
 
 ## 移动动画完成回调

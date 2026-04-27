@@ -621,9 +621,12 @@ func _init_subsystems() -> void:
 	var ui_layer: CanvasLayer = $UILayer
 
 	# 敌方移动子系统（注入格子尺寸，保证视觉位置计算与 WorldMap 一致）
+	# 同时注入摄像机引用：EnemyMovement 用其计算视口可见矩形，
+	# 路径全在视口外时跳过 Tween 直接结算（详见 EnemyMovement._start_animation）
 	_enemy_movement = EnemyMovement.new()
 	_enemy_movement.name = "EnemyMovement"
 	_enemy_movement.tile_size = TILE_SIZE
+	_enemy_movement._camera = _camera
 	add_child(_enemy_movement)
 	_enemy_movement.phase_finished.connect(_on_enemy_phase_finished)
 	_enemy_movement.forced_battle_triggered.connect(_on_forced_battle_triggered)
