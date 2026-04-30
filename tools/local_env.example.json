@@ -1,5 +1,9 @@
 {
   "obsidian_cli": "<path/to/Obsidian.com>",
   "vault_name": "tile-advanture-design",
-  "design_dir": "tile-advanture-design"
+  "design_dir": "tile-advanture-design",
+  "ccr": {
+    "environment_id": "<env_xxx, Anthropic CCR runtime env>",
+    "explore_trigger_id": "<trig_xxx, 夜间探索 routine>"
+  }
 }
