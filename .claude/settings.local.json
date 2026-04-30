@@ -12,7 +12,9 @@
       "WebSearch",
       "Bash(cat)",
       "Bash(chmod +x /mnt/d/坚果云/tile-advanture-design/.git/hooks/pre-commit)",
-      "Read(//mnt/d/坚果云/tile-advanture-design/.git/hooks/**)"
+      "Read(//mnt/d/坚果云/tile-advanture-design/.git/hooks/**)",
+      "mcp__plugin_discord_discord__reply",
+      "Skill(schedule)"
     ]
   }
 }
