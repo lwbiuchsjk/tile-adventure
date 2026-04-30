@@ -19,8 +19,9 @@ _kb_sync/images/
 design/
 Design/
 
-# Local IDE settings
+# Local IDE / agent tool settings
 .vscode/settings.json
+.claude/settings.local.json
 
 # Codex CLI plugin local cache (可能是 file 或 dir，取决于 WSL / Win 端)
 .codex
