@@ -122,6 +122,16 @@ Godot 4.6，GDScript，Git 版本控制
 4. **归档**：任务完成且冒烟测试通过后，frontmatter `状态/` 改为 `状态/已归档`，索引行从「活跃」移至「已归档」。
 5. **防膨胀**：「活跃」≤10 条。接近上限时审视是否有可合并 / 已实际完成的条目。
 
+# 探索系统状态速查
+
+夜间 _explore agent 的运行时排查入口。详细架构见 [[_explore/搭建指南]]。
+
+- **调度在远端**：Anthropic CCR RemoteTrigger，**本机 crontab 无条目，不要查**
+- **trigger_id / environment_id 位置**：`tools/local_env.json` → `ccr.explore_trigger_id` / `ccr.environment_id`
+- **cron**：`0 18 * * *` UTC = 北京 02:00；当前时间用 `date -u` 与 `next_run_at` 对照
+- **一键查 trigger 状态**：内置 `RemoteTrigger` 工具 `action=get trigger_id=<id>`，关注 `enabled` / `cron_expression` / `next_run_at` / `updated_at`
+- **健康判定 4 信号**：`queue.md` 进行中区为空 + `_explore/log/<UTC_DATE>/` 三件套齐（STARTED / 主报告 / INDEX）+ `_INBOX.md` 末行日期一致 + design repo `git log` 见连续 `[STEP-0]…[STEP-4]`；任一异常先查 `FAILURE_<TASK_NUM>_<N>.md`
+
 # 提交兜底（pre-commit hook）
 
 本地 `.git/hooks/pre-commit` 在每次提交前运行两个检查脚本，任一失败即阻断提交：
