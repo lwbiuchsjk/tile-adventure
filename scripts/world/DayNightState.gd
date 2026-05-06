@@ -50,6 +50,11 @@ static var _attached_turn_manager: TurnManager = null
 ## 扎营场景由 _start_camp 设为 NIGHT，PLAYER 回合开始时自动清
 static var _phase_override: int = _NO_OVERRIDE
 
+## 上次成功分发给 sink 的 phase；_NO_OVERRIDE 作"未分发"哨兵
+## 用于去重：相同 phase 不重复 call sink，避免冗余 redraw（codex-rescue 审查 P2 修复）
+## sink 未注册时 dispatch 不更新此字段，保证未来注册后首次分发不会被错误去重
+static var _last_dispatched_phase: int = _NO_OVERRIDE
+
 
 # ─────────────────────────────────────
 # 状态查询接口
@@ -106,37 +111,44 @@ static func attach_to_turn_manager(turn_manager: TurnManager) -> void:
 
 ## 注册阶段切换回调
 ## 多次调用以最后一次为准；sink 签名 func(phase: Phase) -> void
+##
+## 注意：本接口**不回放**当前 phase（codex-rescue P3 提示）。
+## 调用方如果想拿到注册时刻的 phase，需在 register 后自己调一次 current(turn_manager)。
+## 设计权衡：保持接口语义最小化；自动回放会让"先 set_phase_override 后 register"场景的语义复杂化
 static func register_phase_changed_sink(sink: Callable) -> void:
 	_phase_changed_sink = sink
 
 
 ## 主动设置 phase override（用户跑测反馈引入）
 ## 用例：_start_camp 按下瞬间设 NIGHT，让滤镜立即生效
-## 同值不重复触发 sink，避免 redraw 抖动
+## 同值不重复改 _phase_override；分发去重由 _dispatch_phase_changed 保证
 static func set_phase_override(phase: Phase) -> void:
 	if _phase_override == int(phase):
 		return
 	_phase_override = int(phase)
-	if _phase_changed_sink.is_valid():
-		_phase_changed_sink.call(phase)
+	_dispatch_phase_changed(phase)
 
 
 ## 清除 phase override，回到 current_faction 推断
 ## 通常由 _on_faction_turn_started 切到 PLAYER 时自动调用，无需 WorldMap 显式清
+##
+## 防御性：访问 _attached_turn_manager.current_faction 前用 is_instance_valid 校验
+## 避免极端时序下旧 TurnManager 已释放但静态引用未清造成的运行时风险（codex-rescue P2 修复）
 static func clear_phase_override() -> void:
 	if _phase_override == _NO_OVERRIDE:
 		return
 	_phase_override = _NO_OVERRIDE
-	# 触发一次 sink 让订阅者按当前 faction 重算（可能从 NIGHT 切到 DAY）
-	if _phase_changed_sink.is_valid() and _attached_turn_manager != null:
-		_phase_changed_sink.call(_faction_to_phase(_attached_turn_manager.current_faction))
+	if _attached_turn_manager == null or not is_instance_valid(_attached_turn_manager):
+		return
+	_dispatch_phase_changed(_faction_to_phase(_attached_turn_manager.current_faction))
 
 
-## 清理 sink + 解绑 TurnManager listener + 复位 override
-## 场景 _exit_tree 时调用，避免跨场景悬空 Callable / 残留 connect
+## 清理 sink + 解绑 TurnManager listener + 复位 override + 复位分发记录
+## 场景 _exit_tree 时调用，避免跨场景悬空 Callable / 残留 connect / 错误去重
 static func clear_sinks() -> void:
 	_phase_changed_sink = Callable()
 	_phase_override = _NO_OVERRIDE
+	_last_dispatched_phase = _NO_OVERRIDE
 	if _attached_turn_manager != null and is_instance_valid(_attached_turn_manager):
 		if _attached_turn_manager.faction_turn_started.is_connected(_on_faction_turn_started):
 			_attached_turn_manager.faction_turn_started.disconnect(_on_faction_turn_started)
@@ -150,14 +162,27 @@ static func clear_sinks() -> void:
 ## TurnManager.faction_turn_started 信号回调 → 转发给 phase_changed sink
 ## 切到 PLAYER 时自动清 override（夜晚结束）
 ## faction != ENEMY_1 一律视为白天（PLAYER 是显式白天；其他保留为白天默认）
+##
+## 分发去重：扎营时已通过 set_phase_override 分发过 NIGHT，这里 ENEMY_1 切换时
+## 计算出的 phase 仍是 NIGHT，由 _dispatch_phase_changed 内部去重，避免冗余 redraw
 static func _on_faction_turn_started(faction: int) -> void:
 	# PLAYER 回合到来 = 夜晚结束 → 清 override；其他切换不动 override
 	if faction == Faction.PLAYER and _phase_override != _NO_OVERRIDE:
 		_phase_override = _NO_OVERRIDE
-	if not _phase_changed_sink.is_valid():
-		return
 	# 计算分发的 phase：override 仍生效则按 override，否则按 faction 推断
 	var phase: Phase = (_phase_override as Phase) if _phase_override != _NO_OVERRIDE else _faction_to_phase(faction)
+	_dispatch_phase_changed(phase)
+
+
+## 集中分发入口：去重 + 防御性
+## 仅在 sink 已注册且与上次分发不同时触发
+## sink 未注册时**不更新** _last_dispatched_phase——保证未来注册后首次分发不会被错误去重
+static func _dispatch_phase_changed(phase: Phase) -> void:
+	if not _phase_changed_sink.is_valid():
+		return
+	if _last_dispatched_phase == int(phase):
+		return
+	_last_dispatched_phase = int(phase)
 	_phase_changed_sink.call(phase)
 
 
