@@ -1,3 +1,4 @@
 [submodule "tile-advanture-design"]
 	path = tile-advanture-design
 	url = https://github.com/lwbiuchsjk/tile-adventure-design.git
+	ignore = all
