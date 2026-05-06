@@ -636,6 +636,8 @@ func _exit_tree() -> void:
 	TickRegistry.unregister(_on_build_tick)
 	TickRegistry.unregister(_tick_repelled_cooldowns)
 	VictoryJudge.clear_sink()
+	# D MVP：清理昼夜监听 + sink，避免跨场景残留 connect / 悬空 Callable
+	DayNightState.clear_sinks()
 
 
 ## 初始化子系统（敌方移动、战斗 UI、管理 UI）
@@ -707,6 +709,14 @@ func _init_subsystems() -> void:
 	# M8：注册胜负回调；OccupationSystem.try_occupy 翻转核心城镇时触发
 	# reload_current_scene 后新的 _ready 会重新注册，_exit_tree 会 clear_sink 避免悬空
 	VictoryJudge.register_sink(_on_victory_decided)
+
+	# D MVP：把 TurnManager.faction_turn_started 包装为 phase_changed
+	# attach 内部对同一 turn_manager 重复挂接是幂等的；reload 后旧 turn_manager
+	# 会先被 clear_sinks 解绑（_exit_tree 中处理），新场景再 attach 新实例
+	DayNightState.attach_to_turn_manager(_turn_manager)
+	# 阶段切换时立即触发 redraw，保证夜晚滤镜在 faction 切换瞬间出现
+	# （否则要等 EnemyMovement 第一次 redraw_requested 才更新视觉）
+	DayNightState.register_phase_changed_sink(_on_day_night_phase_changed)
 
 # ─────────────────────────────────────────
 # 输入处理
@@ -1169,6 +1179,11 @@ func _start_camp() -> void:
 	_is_camping = true
 	_camp_count += 1
 
+	# D MVP：扎营按下瞬间进入夜晚（用户跑测 2026-05-06 反馈）
+	# 不等到 ENEMY_1 回合切换才生效——玩家心智上扎营即入夜
+	# override 由 DayNightState 在新 PLAYER 回合开始时自动清
+	DayNightState.set_phase_override(DayNightState.Phase.NIGHT)
+
 	# 扎营恢复补给
 	# F MVP：作为"扎营整顿"的第一条事件呈现；放在持久 slot 产出之前 push，
 	# 保证事件队列顺序与玩家心智一致（先恢复，再产出）
@@ -1402,6 +1417,13 @@ func _on_victory_decided(winner_faction: int) -> void:
 ## TickRegistry / BuildSystem / VictoryJudge 的静态态由 _exit_tree + 新 _ready 的 load_config 覆盖
 func _on_restart_pressed() -> void:
 	get_tree().reload_current_scene()
+
+
+## D MVP：昼夜阶段切换回调
+## 仅作 redraw 触发——保证 faction 切换瞬间夜晚滤镜立刻出现 / 消失
+## 未来美术接入时可在此加淡入淡出 Tween；视野限制接入时可在此重算可见格集
+func _on_day_night_phase_changed(_phase: int) -> void:
+	queue_redraw()
 
 
 # ─────────────────────────────────────────
@@ -2170,6 +2192,16 @@ func _draw() -> void:
 	# 第四层：单位标记（基于视觉位置）
 	if _unit != null:
 		_draw_unit_marker()
+
+	# 第五层：D MVP 夜晚滤镜占位
+	# 仅在 is_night 时叠加深蓝半透明覆盖整个地图区域；HUD 在独立 CanvasLayer 不受影响
+	# 后续接美术时替换为渐变 / shader（见 D MVP §8 备注）
+	if DayNightState.is_night(_turn_manager):
+		var night_rect: Rect2 = Rect2(
+			Vector2.ZERO,
+			Vector2(_schema.width, _schema.height) * TILE_SIZE
+		)
+		draw_rect(night_rect, Color(0.5, 0.5, 0.7, 0.35), true)
 
 ## 绘制单格地形色块及 Slot 标记
 func _draw_tile(x: int, y: int) -> void:
