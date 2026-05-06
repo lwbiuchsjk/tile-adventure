@@ -108,11 +108,11 @@ Godot 4.6，GDScript，Git 版本控制
 
 ## 活跃（≤10 条硬上限）
 
-- [城建锚_持久slot](tile-advanture-design/进度/城建锚_持久slot_推进进度.md) — M1-M8 代码已交付，M8 九点验证待跑
+- [探索体验_重生周期](tile-advanture-design/进度/探索体验_重生周期_推进进度.md) — 设计已审稿通过，A-F 实装待新会话启动（建议 A 起步）
 
 ## 已归档
 
-（暂无）
+- [城建锚_持久slot](tile-advanture-design/进度/城建锚_持久slot_推进进度.md) — M1-M7 代码作"探索体验"底座沉淀；M8 验证因方案换轨冻结
 
 ## 进度维护规则
 
