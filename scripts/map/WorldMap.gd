@@ -242,6 +242,10 @@ var _enemy_ai: EnemyAI = null
 ## 胜负遮罩 UI（M8）—— 核心城镇翻转时显示胜利 / 失败 + 重开按钮
 var _victory_ui: VictoryUI = null
 
+## 事件面板 UI（探索体验·F MVP）—— 扎营产出 / 即时 slot 采集 / 入队等叙事性奖励
+## 挂在 ManageUI / BuildPanelUI 之上、VictoryUI 之下（由 _init_subsystems 挂载顺序保证）
+var _event_panel: EventPanelUI = null
+
 ## 两方石料库存（M5）—— { Faction 整数 ID: int 数量 }
 ## 玩家侧由 build_config.player_initial_stone 初始化；
 ## 敌方侧由 enemy_initial_stone 初始化，M7 真正消耗前只占位
@@ -683,6 +687,15 @@ func _init_subsystems() -> void:
 	add_child(_enemy_ai)
 	_enemy_ai.init(self, _turn_manager)
 
+	# 事件面板 UI（探索体验·F MVP）
+	# 挂载位置：所有交互面板之后、VictoryUI 之前——
+	#   层级覆盖 ManageUI / BuildPanelUI（玩家先确认事件再操作其他面板），
+	#   但低于 VictoryUI（胜负遮罩可覆盖未确认的事件）
+	_event_panel = EventPanelUI.new()
+	_event_panel.name = "EventPanelUI"
+	add_child(_event_panel)
+	_event_panel.create_ui(ui_layer)
+
 	# 胜负遮罩 UI（M8）
 	# 挂载顺序放在所有 UI 面板之后，保证遮罩渲染在最上层（吸收点击）
 	_victory_ui = VictoryUI.new()
@@ -700,8 +713,9 @@ func _init_subsystems() -> void:
 # ─────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	# 动画播放中、战斗确认中、敌方移动中、管理面板打开中、扎营中、建造面板打开中或流程结束时锁定所有输入
-	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open:
+	# 动画播放中、战斗确认中、敌方移动中、管理 / 建造 / 事件面板打开中、扎营中或流程结束时锁定所有输入
+	# 事件面板（F MVP）：玩家未确认事件前禁止地图点击 / 空格扎营，避免叠加触发
+	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open:
 		return
 
 	# 鼠标左键点击：移动单位（需要补给 > 0）
@@ -1095,7 +1109,7 @@ func _on_build_tick(faction: int) -> void:
 ## A 基线收束 MVP：_build_upgrade_enabled 守卫在玩家手动升级入口前置；
 ## 默认 false 即"按 [B] 不弹板"，给一行 notice 说明，避免玩家不知道键失效。
 func _open_build_panel() -> void:
-	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open:
 		return
 	if not _build_upgrade_enabled:
 		_show_notice("当前阶段不可手动升级")
@@ -1150,13 +1164,19 @@ func _get_player_persistent_slots() -> Array[PersistentSlot]:
 
 ## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
 func _start_camp() -> void:
-	if _game_finished or _is_moving or _battle_ui.is_pending or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open:
+	if _game_finished or _is_moving or _battle_ui.is_pending or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open:
 		return
 	_is_camping = true
 	_camp_count += 1
 
 	# 扎营恢复补给
+	# F MVP：作为"扎营整顿"的第一条事件呈现；放在持久 slot 产出之前 push，
+	# 保证事件队列顺序与玩家心智一致（先恢复，再产出）
 	_supply += _camp_restore
+	if _camp_restore > 0:
+		_event_panel.push_event(_build_reward_event(
+			"扎营休整", "扎营整顿队伍，恢复补给×%d" % _camp_restore
+		))
 
 	# M6: 持久 slot 扎营结算（玩家侧）
 	# 流程：camp_pos 查 C 作用域覆盖 → 逐 slot 按类型 × 等级产出 → 落地到石料 / 补给 / 背包
@@ -1191,10 +1211,43 @@ func _settle_persistent_camp_production() -> void:
 
 	var applied: Array = outcome.get("applied", []) as Array
 	var dropped: Array = outcome.get("dropped", []) as Array
+	# F MVP：成功条目走事件面板（每条产出独立事件，符合 §3 / §7 场景 2 逐条呈现预期）
+	# 失败条目（背包满 / 池空）属于错误反馈，仍走 _show_notice 飘字
 	if not applied.is_empty():
-		_show_notice("扎营产出：%s" % ProductionSystem.format_results_text(applied))
+		for entry in applied:
+			var entry_dict: Dictionary = entry as Dictionary
+			var entry_text: String = ProductionSystem.format_results_text([entry_dict])
+			_event_panel.push_event(_build_reward_event(
+				"扎营产出", "扎营时整顿物资，获得：%s" % entry_text
+			))
 	if not dropped.is_empty():
 		_show_notice("扎营产出部分失败：%s" % ProductionSystem.format_dropped_text(dropped))
+
+
+## 构造 reward 事件 payload（F MVP §4 reward 模板）
+## title / narrative 由调用方组装；本函数只负责套通用结构
+## 入库统一在调用方完成，事件仅作叙事呈现，result_callback 留空
+func _build_reward_event(title: String, narrative: String) -> Dictionary:
+	return {
+		"type": "reward",
+		"title": title,
+		"narrative": narrative,
+		"actions": [{"label": "确认", "result": "confirm"}],
+		"payload": {},
+	}
+
+
+## 战斗胜利事件 helper：把关卡奖励 + 部队奖励合并到单条事件
+## 用户跑测反馈：战斗一次性获得多个奖励应合并展示，避免连点 N 次确认
+## rewards 为空（背包满全丢 / 关卡无奖励）则跳过，不弹空事件
+func _push_battle_victory_event(rewards: Array[ItemData]) -> void:
+	if rewards.is_empty():
+		return
+	var reward_text: String = _format_rewards_text(rewards)
+	_event_panel.push_event(_build_reward_event(
+		"战斗胜利", "击败敌方部队，获得：%s" % reward_text
+	))
+
 
 ## 尝试采集当前位置的一次性资源点（M6 改造）
 ## 采集走 M6 等权池：忽略 slot 自身 resource_type / output_amount 配置，
@@ -1223,8 +1276,16 @@ func _try_collect_resource_at(pos: Vector2i) -> void:
 
 	var applied: Array = outcome.get("applied", []) as Array
 	var dropped: Array = outcome.get("dropped", []) as Array
+	# F MVP：即时 slot 采集走事件面板（与扎营产出同 reward 模板，叙事前缀不同）
+	# 池空 / 背包满等失败走 _show_notice，与扎营保持一致
+	# 注意：本函数早前已有 var entry，这里循环变量改名避免 shadow 冲突
 	if not applied.is_empty():
-		_show_notice("采集资源：%s" % ProductionSystem.format_results_text(applied))
+		for applied_entry in applied:
+			var entry_dict: Dictionary = applied_entry as Dictionary
+			var entry_text: String = ProductionSystem.format_results_text([entry_dict])
+			_event_panel.push_event(_build_reward_event(
+				"采集所获", "途经采集所获，获得：%s" % entry_text
+			))
 	if not dropped.is_empty():
 		_show_notice("采集失败：%s" % ProductionSystem.format_dropped_text(dropped))
 	queue_redraw()
@@ -1246,7 +1307,10 @@ func _on_turn_end_settlement() -> void:
 		if not rewards.is_empty():
 			_inventory.add_items(rewards)
 			var reward_text: String = _format_rewards_text(rewards)
-			_show_notice("回合奖励：%s" % reward_text)
+			# F MVP：回合奖励是"一次性整组"奖励，合并到一条事件呈现
+			_event_panel.push_event(_build_reward_event(
+				"回合奖励", "回合结束清点物资，获得：%s" % reward_text
+			))
 
 	# M7 敌方回合触发：end 当前（PLAYER）+ start ENEMY_1
 	# start_faction_turn 内部会：TickRegistry.run_ticks（建造 tick / REPELLED 冷却 tick）→ 计数 +1 → emit signal
@@ -1545,9 +1609,12 @@ func _on_battle_repel_chosen() -> void:
 
 	if all_wiped:
 		# 击退但全灭 → 转为击败，发放奖励
+		# F MVP：关卡奖励 + 部队奖励合并到一条战斗胜利事件中展示
 		level.mark_defeated()
-		_grant_level_rewards_for(level)
-		_grant_troop_reward(troop_snapshot)
+		var battle_rewards: Array[ItemData] = []
+		battle_rewards.append_array(_grant_level_rewards_for(level))
+		battle_rewards.append_array(_grant_troop_reward(troop_snapshot))
+		_push_battle_victory_event(battle_rewards)
 	else:
 		# 标记为击退，设置冷却
 		level.mark_repelled(_repel_cooldown_turns)
@@ -1585,11 +1652,11 @@ func _on_battle_defeat_chosen() -> void:
 	# 标记为击败
 	level.mark_defeated()
 
-	# 发放关卡胜利奖励
-	_grant_level_rewards_for(level)
-
-	# 从敌方部队中随机抽取 1 支作为部队道具奖励
-	_grant_troop_reward(troop_snapshot)
+	# F MVP：发放关卡奖励 + 部队奖励，合并到一条战斗胜利事件中展示
+	var battle_rewards: Array[ItemData] = []
+	battle_rewards.append_array(_grant_level_rewards_for(level))
+	battle_rewards.append_array(_grant_troop_reward(troop_snapshot))
+	_push_battle_victory_event(battle_rewards)
 
 	# 后处理
 	_post_battle_settlement(level, was_forced)
@@ -1615,9 +1682,10 @@ func _apply_player_damages(result: BattleResolver.BattleResult) -> void:
 
 ## 从敌方部队快照中随机抽取 1 支，转为 TROOP 道具加入背包
 ## 背包已满时直接丢弃
-func _grant_troop_reward(troop_snapshot: Array[TroopData]) -> void:
+## F MVP 重构：返回入库成功的 items，由调用方汇总到战斗胜利事件中合并展示
+func _grant_troop_reward(troop_snapshot: Array[TroopData]) -> Array[ItemData]:
 	if troop_snapshot.is_empty():
-		return
+		return [] as Array[ItemData]
 	# 随机抽取 1 支敌方部队
 	var picked: TroopData = troop_snapshot[randi_range(0, troop_snapshot.size() - 1)]
 	# 转为 TROOP 道具
@@ -1630,16 +1698,17 @@ func _grant_troop_reward(troop_snapshot: Array[TroopData]) -> void:
 	# 尝试加入背包（满则丢弃）
 	var added: int = _inventory.add_items([item])
 	if added > 0:
-		_show_notice("获得部队奖励：%s" % item.get_display_text())
+		return [item] as Array[ItemData]
+	return [] as Array[ItemData]
 
 ## 发放指定关卡的胜利奖励
-func _grant_level_rewards_for(level: LevelSlot) -> void:
-	if level == null:
-		return
-	if not level.rewards.is_empty():
-		_inventory.add_items(level.rewards)
-		var reward_text: String = _format_rewards_text(level.rewards)
-		_show_notice("战斗胜利！获得奖励：%s" % reward_text)
+## F MVP 重构：返回入库成功的 items，由调用方汇总到战斗胜利事件中合并展示
+## MVP 简化：暂不区分 dropped（背包满），与重构前的 _show_notice 行为一致
+func _grant_level_rewards_for(level: LevelSlot) -> Array[ItemData]:
+	if level == null or level.rewards.is_empty():
+		return [] as Array[ItemData]
+	_inventory.add_items(level.rewards)
+	return level.rewards.duplicate()
 
 ## 战斗后共用处理：更新 HUD、失败判定、轮次推进
 ## 若处于敌方移动阶段的强制战斗，结算后继续处理移动队列
@@ -1704,7 +1773,7 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 
 ## 打开装配管理面板（非扎营模式，仅允许替换）
 func _open_manage_panel() -> void:
-	if _game_finished or _battle_ui.is_pending or _is_moving or _is_camping:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _is_camping or _event_panel.is_open:
 		return
 	_manage_ui.open(_characters, _inventory, false)
 
@@ -1855,6 +1924,7 @@ func _get_active_troops() -> Array[TroopData]:
 # ─────────────────────────────────────────
 
 ## 发放轮次胜利奖励
+## F MVP：轮次通关奖励合并展示在一条事件中
 func _grant_round_rewards() -> void:
 	if _round_manager == null:
 		return
@@ -1863,7 +1933,9 @@ func _grant_round_rewards() -> void:
 		return
 	_inventory.add_items(rewards)
 	var reward_text: String = _format_rewards_text(rewards)
-	_show_notice("轮次通关奖励：%s" % reward_text)
+	_event_panel.push_event(_build_reward_event(
+		"轮次通关", "通关本轮，获得：%s" % reward_text
+	))
 
 
 ## 格式化奖励列表为显示文本
@@ -1897,6 +1969,9 @@ func _on_abandon() -> void:
 func _unhandled_key_input(event: InputEvent) -> void:
 	# 敌方移动阶段锁定所有快捷键输入
 	if _enemy_movement.is_moving():
+		return
+	# F MVP：事件面板打开时锁定 M / B / Q 等快捷键，避免绕过事件面板的"阻塞玩家操作"语义
+	if _event_panel != null and _event_panel.is_open:
 		return
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
