@@ -346,6 +346,15 @@ var _enemy_movement_enabled: bool = false
 ## 敌方移动力（从配置读取）
 var _enemy_movement_points: int = 6
 
+## 玩家手动建造/升级入口开关（A 基线收束 MVP）
+## false：玩家无法通过任何 UI 路径触发自身 slot 升级（保留 BuildSystem 全部逻辑供敌方 AI 使用）
+## true：开放旧入口（调试 / 未来若放开手动升级时改值即可，无需删守卫）
+var _build_upgrade_enabled: bool = false
+
+## 敌方部队进入玩家曼哈顿距离 ≤ 该值时触发强制战斗（A 基线收束 MVP）
+## 默认 3；从 battle_config.forced_battle_range 读
+var _forced_battle_range: int = 3
+
 ## 敌方 AI 目标切换半径（曼哈顿距离）—— M8 扩展
 ## dist(pack, player) <= 该值 + d_player < d_core → pack 追玩家；否则推核心
 ## 默认 10（约为 enemy_movement_points*1.6，给 1-2 回合反应冗余）
@@ -459,6 +468,15 @@ func _ready() -> void:
 		_enemy_target_switch_range = 10
 	else:
 		_enemy_target_switch_range = raw_switch_range
+
+	# 强制战斗触发距离（A 基线收束 MVP）
+	# 默认 3；CSV 写坏（≤ 0）时回退到默认 + push_warning，参考上面 enemy_target_switch_range 的兜底
+	var raw_force_range: int = int(_battle_config.get("forced_battle_range", "3"))
+	if raw_force_range < 1:
+		push_warning("WorldMap: battle_config.forced_battle_range 非法值 %d，回退到 3" % raw_force_range)
+		_forced_battle_range = 3
+	else:
+		_forced_battle_range = raw_force_range
 
 	# 初始化奖励生成器
 	_reward_generator = RewardGenerator.new()
@@ -1073,8 +1091,14 @@ func _on_build_tick(faction: int) -> void:
 
 ## 打开建造面板
 ## 列表内容：所有归属于 PLAYER 的持久 slot
+##
+## A 基线收束 MVP：_build_upgrade_enabled 守卫在玩家手动升级入口前置；
+## 默认 false 即"按 [B] 不弹板"，给一行 notice 说明，避免玩家不知道键失效。
 func _open_build_panel() -> void:
 	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping:
+		return
+	if not _build_upgrade_enabled:
+		_show_notice("当前阶段不可手动升级")
 		return
 	_build_panel_ui.open(_get_player_persistent_slots(), get_stone(Faction.PLAYER))
 
@@ -1264,7 +1288,8 @@ func start_enemy_move_phase() -> void:
 	_enemy_movement.start_phase(
 		_schema, _level_slots, _unit.position, target_pos,
 		_enemy_movement_points, _original_slot_types, _game_finished,
-		_enemy_target_switch_range
+		_enemy_target_switch_range,
+		_forced_battle_range
 	)
 
 
@@ -1764,22 +1789,32 @@ func _tick_repelled_cooldowns(faction: int) -> void:
 ## 从 player_config 初始化多角色和部队
 ## 每个角色自动装配一支随机兵种、配置品质的部队
 ## 后续扩展接口：支持从角色池抽取、手动装配
+##
+## 配置字段 `initial_character_count`：
+##   A 基线收束 MVP 起统一使用该名字（旧 `character_count` 兼容回退一段时间，方便老存档/分支拉新）。
+##   重生周期 MVP（B）会引入"英雄池 + 入队"流程，届时该字段语义为"开局已入队角色数"。
 func _init_player(player_cfg: Dictionary) -> void:
-	var char_count: int = int(player_cfg.get("character_count", "3"))
+	# 优先读新字段；缺省时回退到旧字段；都没有则按 A MVP 默认 1（单英雄启动）
+	var char_count: int = int(player_cfg.get("initial_character_count",
+		player_cfg.get("character_count", "1")))
 	var init_quality: int = int(player_cfg.get("initial_troop_quality", "0"))
 
 	_characters = []
 	_total_max_hp = 0
+	# A 基线收束 MVP：仅第一个角色装配初始部队，其余留空槽（A MVP 期 char_count==1，
+	# 永远只构造一个角色；旧 `character_count` fallback 到 >1 时也保持"单英雄起步 + 后续入队"语义，
+	# 与 [[C_扎营里程碑入队_MVP]] 入队流程对齐）
 	for i in range(char_count):
 		var ch: CharacterData = CharacterData.new()
 		ch.id = i + 1
-		# 随机抽取兵种（0~4，可重复）
-		var troop: TroopData = TroopData.new()
-		troop.troop_type = randi_range(0, 4) as TroopData.TroopType
-		troop.quality = init_quality as TroopData.Quality
-		ch.troop = troop
+		if i == 0:
+			# 随机抽取兵种（0~4，可重复）
+			var troop: TroopData = TroopData.new()
+			troop.troop_type = randi_range(0, 4) as TroopData.TroopType
+			troop.quality = init_quality as TroopData.Quality
+			ch.troop = troop
+			_total_max_hp += troop.max_hp
 		_characters.append(ch)
-		_total_max_hp += troop.max_hp
 
 
 # ─────────────────────────────────────────
@@ -1873,7 +1908,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 				else:
 					_open_manage_panel()
 			# B 键：打开/关闭建造面板（M5）
+			# A 基线收束 MVP：玩家手动升级入口默认关；按下直接给 notice 不打开面板。
+			# 真正的守卫已在 _open_build_panel 内完成；这里前置 return 是显式语义层防御
+			# （未来若放开手动升级，仅改 _build_upgrade_enabled 即可，无需删守卫）。
 			elif key.keycode == KEY_B:
+				if not _build_upgrade_enabled and not _build_panel_ui.is_open:
+					_show_notice("当前阶段不可手动升级")
+					return
 				if _build_panel_ui.is_open:
 					_build_panel_ui.close()
 				else:

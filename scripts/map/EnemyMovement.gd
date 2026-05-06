@@ -6,7 +6,7 @@ extends Node
 
 ## 移动阶段完成（队列清空或被中断）
 signal phase_finished
-## 强制战斗触发（敌方到达玩家相邻格）
+## 强制战斗触发（敌方进入玩家曼哈顿距离 ≤ _forced_battle_range 范围；A 基线收束 MVP 起从硬编码"相邻格"扩展为可配置范围）
 signal forced_battle_triggered(level: LevelSlot)
 ## 请求父节点重绘（动画帧更新）
 signal redraw_requested
@@ -53,7 +53,7 @@ var _move_tween: Tween = null
 
 var _schema: MapSchema = null
 var _level_slots: Dictionary = {}
-## 玩家单位当前位置（用于强制战斗触发；敌方靠近玩家单位相邻格时触发战斗）
+## 玩家单位当前位置（用于强制战斗触发；敌方进入玩家曼哈顿距离 ≤ _forced_battle_range 时触发战斗）
 var _player_pos: Vector2i = Vector2i.ZERO
 ## M7 目标位置：敌方部队寻路目的地（玩家核心 persistent slot 位置）
 ## 与 _player_pos 分离：target 是战略目标，player_pos 是战术阻挡点
@@ -64,6 +64,10 @@ var _game_over: bool = false
 ## M8 扩展：追玩家阈值。pack 到玩家距离 ≤ 该值 且 d_player < d_core 时才追玩家
 ## 默认 10（与 battle_config.enemy_target_switch_range 同值）；start_phase 注入实际值
 var _target_switch_range: int = 10
+## A 基线收束 MVP：强制战斗触发距离（曼哈顿）
+## pack 移动后到玩家距离 ≤ 该值 时触发战斗
+## 默认 3（与 battle_config.forced_battle_range 同值）；start_phase 注入实际值
+var _forced_battle_range: int = 3
 
 # ─────────────────────────────────────
 # 公开接口
@@ -92,10 +96,12 @@ func get_moving_level() -> LevelSlot:
 ##   player_pos —— 玩家单位位置；用于强制战斗触发 + 动态目标的另一候选
 ##   target_switch_range —— 追玩家阈值（默认 10）；pack 到玩家 ≤ 该值才可能追玩家
 ##     传 -1 或 0 时退化为"永远推核心"（测试 / 调试用）
+##   forced_battle_range —— 强制战斗触发距离（默认 3）；pack 到玩家 ≤ 该值时触发战斗
 func start_phase(schema: MapSchema, level_slots: Dictionary,
 		player_pos: Vector2i, target_pos: Vector2i, movement_points: int,
 		original_slot_types: Dictionary, game_over: bool,
-		target_switch_range: int = 10) -> void:
+		target_switch_range: int = 10,
+		forced_battle_range: int = 3) -> void:
 	_schema = schema
 	_level_slots = level_slots
 	_player_pos = player_pos
@@ -104,6 +110,7 @@ func start_phase(schema: MapSchema, level_slots: Dictionary,
 	_original_slot_types = original_slot_types
 	_game_over = game_over
 	_target_switch_range = target_switch_range
+	_forced_battle_range = forced_battle_range
 
 	_is_moving = true
 	_move_queue = _get_sorted_movable_levels()
@@ -397,7 +404,9 @@ func _on_move_finished() -> void:
 
 	var level_pos: Vector2i = _moving_level.position
 	var dist: int = absi(level_pos.x - _player_pos.x) + absi(level_pos.y - _player_pos.y)
-	var adjacent: bool = dist == 1
+	# A 基线收束 MVP：触发距离从硬编码 1 改为参数化 _forced_battle_range（默认 3）
+	# 范围内即触发，给玩家更早的"被压迫"信号；具体值在 battle_config.csv 配置
+	var in_force_range: bool = dist <= _forced_battle_range
 
 	# M4: 敌方单位停留后，若该格有持久 slot 则尝试占据（对称玩家逻辑）
 	# 顺序：先占据 → 再判断是否触发强制战斗；即便后续敌方在强制战斗中被击败，
@@ -407,8 +416,8 @@ func _on_move_finished() -> void:
 	_moving_level = null
 	redraw_requested.emit()
 
-	if adjacent:
-		# 到达玩家相邻格，触发强制战斗
+	if in_force_range:
+		# 进入玩家强制战斗范围（曼哈顿距离 ≤ _forced_battle_range），触发战斗
 		var level: LevelSlot = null
 		if _level_slots.has(level_pos):
 			level = _level_slots[level_pos] as LevelSlot

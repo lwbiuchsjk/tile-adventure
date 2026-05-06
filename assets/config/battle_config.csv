@@ -9,3 +9,4 @@ repel_cooldown_turns,3
 enemy_movement_enabled,1
 enemy_movement_points,6
 enemy_target_switch_range,10
+forced_battle_range,3
