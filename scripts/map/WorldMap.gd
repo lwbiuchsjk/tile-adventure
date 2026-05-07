@@ -50,6 +50,9 @@ const CONFIG_SCORE: String = "res://assets/config/score_config.csv"
 const CONFIG_RESOURCE_SLOT: String = "res://assets/config/resource_slot_config.csv"
 const CONFIG_BUILD: String = "res://assets/config/build_config.csv"
 const CONFIG_TOWN_TROOP_POOL: String = "res://assets/config/town_troop_pool.csv"
+## B 重生周期 MVP：英雄池 + 整局周期参数
+const CONFIG_HERO_POOL: String = "res://assets/config/hero_pool.csv"
+const CONFIG_RUN: String = "res://assets/config/run_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -390,6 +393,23 @@ var _turn_reward_count: int = 1
 var _label_font: Font = null
 
 # ─────────────────────────────────────────
+# B 重生周期 MVP — 整局态字段
+# ─────────────────────────────────────────
+
+## 当前队长显示名（来自 RunState.draw_new_leader 的 hero_pool 行 name 字段）
+## 用于昏迷文字 / 重生介绍占位文案；HUD 显示也读这里
+var _leader_display_name: String = ""
+
+## 昏迷态守门：true 期间锁所有输入，等 SceneTreeTimer 走完后 reload 场景
+var _is_in_coma: bool = false
+
+## 队长昏迷阈值（current_hp / max_hp ≤ 该值触发昏迷）；run_config.csv 注入
+var _coma_hp_threshold_ratio: float = 0.2
+
+## 昏迷遮罩 / 文字停留秒数；run_config.csv 注入
+var _coma_duration_sec: float = 1.5
+
+# ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
 
@@ -442,6 +462,18 @@ func _ready() -> void:
 
 	# 加载敌人强度配置（generator 初始化后再注入，见下方）
 	var enemy_tier_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_TIER)
+
+	# B 重生周期 MVP：英雄池 + 整局周期参数
+	# RunState.ensure_initialized 幂等：首次进入写入；重生场景 reload 时
+	# _initialized=true，沿用上一周期累积的 _cycle_index / _used_hero_ids 等
+	var hero_pool_rows: Array = ConfigLoader.load_csv(CONFIG_HERO_POOL)
+	var run_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_RUN)
+	var max_cycles_v: int = int(run_cfg.get("max_cycles", "3"))
+	_coma_duration_sec = float(run_cfg.get("coma_duration_sec", "1.5"))
+	_coma_hp_threshold_ratio = float(run_cfg.get("coma_hp_threshold_ratio", "0.2"))
+	# rng 传 null：RunState 内部 randomize 一个独立 RNG，不被地图 PCG seed 干扰
+	# （重生抽队长应与地图 PCG 解耦，否则同 seed 重开会抽到同一队长序列）
+	RunState.ensure_initialized(max_cycles_v, hero_pool_rows, null)
 
 	# 加载评分配置
 	_score_config = ConfigLoader.load_csv_kv(CONFIG_SCORE)
@@ -638,6 +670,9 @@ func _exit_tree() -> void:
 	VictoryJudge.clear_sink()
 	# D MVP：清理昼夜监听 + sink，避免跨场景残留 connect / 悬空 Callable
 	DayNightState.clear_sinks()
+	# B 重生周期 MVP：清理周期推进 sink；不清整局态（_cycle_index / _used_hero_ids 跨场景持久）
+	# 整局态 reset 由 _on_restart_pressed 显式触发
+	RunState.clear_sinks()
 
 
 ## 初始化子系统（敌方移动、战斗 UI、管理 UI）
@@ -718,14 +753,19 @@ func _init_subsystems() -> void:
 	# （否则要等 EnemyMovement 第一次 redraw_requested 才更新视觉）
 	DayNightState.register_phase_changed_sink(_on_day_night_phase_changed)
 
+	# C MVP：扎营里程碑入队 sink 注册——RunState 命中里程碑时回调 _on_recruit_triggered
+	# 解绑由 RunState.clear_sinks 在 _exit_tree 处理，与其他 sink 同生命周期
+	RunState.register_recruit_sink(_on_recruit_triggered)
+
 # ─────────────────────────────────────────
 # 输入处理
 # ─────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	# 动画播放中、战斗确认中、敌方移动中、管理 / 建造 / 事件面板打开中、扎营中或流程结束时锁定所有输入
+	# 动画播放中、战斗确认中、敌方移动中、管理 / 建造 / 事件面板打开中、扎营中、昏迷过渡中或流程结束时锁定所有输入
 	# 事件面板（F MVP）：玩家未确认事件前禁止地图点击 / 空格扎营，避免叠加触发
-	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open:
+	# 昏迷过渡（B MVP）：_is_in_coma=true 期间 reload 场景已排队，不允许任何操作
+	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open or _is_in_coma:
 		return
 
 	# 鼠标左键点击：移动单位（需要补给 > 0）
@@ -800,18 +840,25 @@ func _update_hud() -> void:
 		_hud_keys.text = "[空格]扎营  [B]建造  [M]管理  [Q]放弃"
 
 ## 获取所有角色部队的显示文本
+## B 重生周期 MVP：首角色（队长）前加 _leader_display_name 前缀，对齐 §7 场景 1
+## 验收（HUD 显示当前重生周期的队长名 = hero_pool.csv 中某个英雄）
 func _get_all_troops_display() -> String:
 	var parts: Array[String] = []
 	for i in range(_characters.size()):
 		var ch: CharacterData = _characters[i]
+		# 队长（[0]）拼名字前缀；其他队员保持原格式（C MVP 入队后再扩展）
+		var prefix: String = ""
+		if i == 0 and not _leader_display_name.is_empty():
+			prefix = "%s · " % _leader_display_name
 		if ch.has_troop():
-			parts.append("%s %d/%d" % [
+			parts.append("%s%s %d/%d" % [
+				prefix,
 				ch.troop.get_display_text(),
 				ch.troop.current_hp,
 				ch.troop.max_hp
 			])
 		else:
-			parts.append("角色%d:空" % (i + 1))
+			parts.append("%s角色%d:空" % [prefix, i + 1])
 	return " | ".join(parts)
 
 ## 获取评分摘要文本
@@ -1119,7 +1166,7 @@ func _on_build_tick(faction: int) -> void:
 ## A 基线收束 MVP：_build_upgrade_enabled 守卫在玩家手动升级入口前置；
 ## 默认 false 即"按 [B] 不弹板"，给一行 notice 说明，避免玩家不知道键失效。
 func _open_build_panel() -> void:
-	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open or _is_in_coma:
 		return
 	if not _build_upgrade_enabled:
 		_show_notice("当前阶段不可手动升级")
@@ -1174,10 +1221,13 @@ func _get_player_persistent_slots() -> Array[PersistentSlot]:
 
 ## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
 func _start_camp() -> void:
-	if _game_finished or _is_moving or _battle_ui.is_pending or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open:
+	if _game_finished or _is_moving or _battle_ui.is_pending or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open or _is_in_coma:
 		return
 	_is_camping = true
 	_camp_count += 1
+	# B 重生周期 MVP：累计本周期扎营次数（C MVP 入队判定的输入）
+	# 放在 _camp_count += 1 紧后；advance_cycle 时 RunState 会把这个值 push 入 milestones
+	RunState.record_camp()
 
 	# D MVP：扎营按下瞬间进入夜晚（用户跑测 2026-05-06 反馈）
 	# 不等到 ENEMY_1 回合切换才生效——玩家心智上扎营即入夜
@@ -1194,8 +1244,14 @@ func _start_camp() -> void:
 		))
 
 	# M6: 持久 slot 扎营结算（玩家侧）
-	# 流程：camp_pos 查 C 作用域覆盖 → 逐 slot 按类型 × 等级产出 → 落地到石料 / 补给 / 背包
+	# 流程：camp_pos 查 C 作用域覆盖 → 逐 slot 按类型 × 作用域覆盖 → 落地到石料 / 补给 / 背包
 	_settle_persistent_camp_production()
+
+	# C 重生周期 MVP：扎营产出事件 push 完后再做里程碑检查
+	# 顺序意图：玩家心智上"扎营整顿 → 物资产出 → 新人加入"，叙事节奏自然
+	# RunState.check_recruit_milestone 内部命中时调 _on_recruit_triggered → push_event
+	# 入队事件因此排在扎营产出事件之后，由 EventPanelUI FIFO 依次弹出
+	RunState.check_recruit_milestone(_get_team_hero_ids())
 
 	_update_hud()
 
@@ -1415,7 +1471,11 @@ func _on_victory_decided(winner_faction: int) -> void:
 ## 重开按钮回调（VictoryUI.restart_pressed）
 ## MVP 策略：直接重载当前场景 —— 最干净的 reset，
 ## TickRegistry / BuildSystem / VictoryJudge 的静态态由 _exit_tree + 新 _ready 的 load_config 覆盖
+##
+## B 重生周期 MVP：reload 前先调 RunState.reset() 清整局态（_cycle_index / _used_hero_ids / _camp_milestones）；
+## 否则重开会沿用上一局的周期编号和已用英雄列表，违反"主动重开 = 整局重置"语义
 func _on_restart_pressed() -> void:
+	RunState.reset()
 	get_tree().reload_current_scene()
 
 
@@ -1453,8 +1513,15 @@ func _get_player_core_pos() -> Vector2i:
 ## start_faction_turn(PLAYER) 内部会跑 PLAYER tick，然后 emit signal → _on_faction_turn_started 继续玩家侧
 ##
 ## 防御（P2 审查）：仅在 current_faction == ENEMY_1 时切换；若被误调在玩家回合中，直接返回避免错误双 start
+##
+## B 重生周期 MVP：昏迷过渡期间（_is_in_coma=true）也直接 return——
+## 强制战斗触发昏迷时 _post_battle_settlement 会调 _enemy_movement.finish_phase()
+## 让 phase_finished 信号发出，但本回调若切回 PLAYER 回合会跑额外 tick / HUD 刷新，
+## 1.5s 后 reload 时这些状态被覆盖，但中间存在时序风险（如 tick 触发新增建造）
 func _on_enemy_phase_finished() -> void:
 	if _game_finished:
+		return
+	if _is_in_coma:
 		return
 	if _turn_manager.current_faction != Faction.ENEMY_1:
 		push_warning("WorldMap._on_enemy_phase_finished: current_faction != ENEMY_1，忽略该次回调")
@@ -1576,12 +1643,12 @@ func _on_round_started(round_index: int) -> void:
 
 	queue_redraw()
 
-## 所有轮次通关回调：流程胜利
+## 所有轮次通关回调
+## B 重生周期 MVP：原"流程胜利"语义降级——单轮配置下"所有关卡通关"只是周期内里程碑，
+## 不再触发整局胜利。整局胜利仅由 VictoryJudge（攻占敌方核心）触发。
+## 这里只显示一条"本周期关卡全部清完"提示，不切 _game_finished、不弹遮罩。
 func _on_all_rounds_cleared() -> void:
-	_game_finished = true
-	_reachable_tiles = {}
-	_show_victory_text()
-	queue_redraw()
+	_show_notice("本周期关卡全部清完")
 
 ## 显示轮次过渡提示（短暂显示后自动隐藏）
 func _show_round_hint() -> void:
@@ -1622,8 +1689,12 @@ func _on_battle_repel_chosen() -> void:
 	# 保存敌方部队快照（扣血前），用于抽取部队奖励
 	var troop_snapshot: Array[TroopData] = level.troops.duplicate()
 
-	# 我方扣血
-	_apply_player_damages(result)
+	# 我方扣血；命中昏迷 / 失败时立即中断，避免在过渡期间发战斗胜利事件 / 推奖励
+	# 强制战斗路径需要主动结束敌方阶段；非强制场景直接 return 等场景 reload
+	if _apply_player_damages(result):
+		if was_forced:
+			_enemy_movement.finish_phase()
+		return
 
 	# 敌方扣血
 	level.apply_enemy_damages(result.enemy_damages)
@@ -1664,8 +1735,11 @@ func _on_battle_defeat_chosen() -> void:
 	# 保存敌方部队快照（扣血前），用于抽取部队奖励
 	var troop_snapshot: Array[TroopData] = level.troops.duplicate()
 
-	# 我方扣血
-	_apply_player_damages(result)
+	# 我方扣血；命中昏迷 / 失败时立即中断（同 _on_battle_repel_chosen 处理）
+	if _apply_player_damages(result):
+		if was_forced:
+			_enemy_movement.finish_phase()
+		return
 
 	# 敌方扣血
 	level.apply_enemy_damages(result.enemy_damages)
@@ -1689,7 +1763,13 @@ func _on_battle_cancelled() -> void:
 	_refresh_reachable()
 
 ## 为我方部队应用伤害（从 BattleResult 中提取 damages），同时追踪累计损兵
-func _apply_player_damages(result: BattleResolver.BattleResult) -> void:
+##
+## B 重生周期 MVP：返回 _evaluate_party_state() 的结果
+##   - true → 已触发昏迷过渡 / 末周期失败遮罩；调用方应立即中断奖励发放 / 事件推送 / 后处理
+##   - false → 战斗流程继续
+##
+## 战斗 / 强制战斗均经过本函数，是玩家方 hp 变化的最主要入口
+func _apply_player_damages(result: BattleResolver.BattleResult) -> bool:
 	var troop_index: int = 0
 	for ch in _characters:
 		if ch.has_troop():
@@ -1701,6 +1781,7 @@ func _apply_player_damages(result: BattleResolver.BattleResult) -> void:
 				if ch.troop.is_defeated():
 					ch.clear_troop()
 			troop_index += 1
+	return _evaluate_party_state()
 
 ## 从敌方部队快照中随机抽取 1 支，转为 TROOP 道具加入背包
 ## 背包已满时直接丢弃
@@ -1740,7 +1821,13 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 	_update_hud()
 	queue_redraw()
 
-	# 判定失败条件：所有部队被击败即为游戏结束
+	# B 重生周期 MVP：先评估队伍状态（队员阵亡移除 / 队长昏迷阈值）
+	# 返回 true 表示已进入昏迷过渡或失败遮罩，中断后续流程；强制战斗时通知敌方阶段收场
+	if _evaluate_party_state():
+		if was_forced:
+			_enemy_movement.finish_phase()
+		return
+	# 兜底：极端态下队伍数组完全空（理论已被 _evaluate_party_state 接管）
 	if _check_defeat():
 		if was_forced:
 			_enemy_movement.finish_phase()
@@ -1795,7 +1882,7 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 
 ## 打开装配管理面板（非扎营模式，仅允许替换）
 func _open_manage_panel() -> void:
-	if _game_finished or _battle_ui.is_pending or _is_moving or _is_camping or _event_panel.is_open:
+	if _game_finished or _battle_ui.is_pending or _is_moving or _is_camping or _event_panel.is_open or _is_in_coma:
 		return
 	_manage_ui.open(_characters, _inventory, false)
 
@@ -1839,6 +1926,8 @@ func _on_equip_troop(character: CharacterData, item: ItemData) -> void:
 	_inventory.remove_item(item)
 	# 刷新面板
 	_manage_ui.refresh()
+	# B 重生周期 MVP：装配换部队后队长 max_hp / current_hp 比例可能跌到阈值（如把高 hp 旧部队换成低 hp 新部队）
+	_evaluate_party_state()
 
 ## 使用道具操作回调（经验道具、兵力恢复道具）
 func _on_use_item(character: CharacterData, item: ItemData) -> void:
@@ -1855,6 +1944,9 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	_inventory.remove_item(item, 1)
 	# 刷新面板
 	_manage_ui.refresh()
+	# B 重生周期 MVP：道具使用后队长状态可能改变（HP_RESTORE 仅会脱离阈值，不会触发昏迷；
+	# 但 EXP 升级品质后 max_hp 会刷新，理论上有跨阈值可能。统一调用以保持入口对齐）
+	_evaluate_party_state()
 
 # ─────────────────────────────────────────
 # 击退冷却管理
@@ -1877,35 +1969,165 @@ func _tick_repelled_cooldowns(faction: int) -> void:
 # 玩家初始化
 # ─────────────────────────────────────────
 
-## 从 player_config 初始化多角色和部队
-## 每个角色自动装配一支随机兵种、配置品质的部队
-## 后续扩展接口：支持从角色池抽取、手动装配
+## 从 RunState 抽队长 + 装配初始部队（B 重生周期 MVP）
 ##
-## 配置字段 `initial_character_count`：
-##   A 基线收束 MVP 起统一使用该名字（旧 `character_count` 兼容回退一段时间，方便老存档/分支拉新）。
-##   重生周期 MVP（B）会引入"英雄池 + 入队"流程，届时该字段语义为"开局已入队角色数"。
+## A MVP 起 `_characters` 只构造一个角色（队长）；后续队员由 [[C_扎营里程碑入队_MVP]] 追加。
+## B MVP 起兵种 / 品质来源切换：从 player_config 的 initial_troop_quality 改为 hero_pool.csv 行字段。
+##   - troop_type / troop_quality 字段名按 TroopData.TroopType / Quality 枚举名（"SWORD"/"R" 等）
+##   - 兵种枚举不在 hero_pool 中预设时回退到 SWORD，品质回退到 R
+##
+## 重生事件占位：函数末尾消费 RunState._pending_respawn_intro
+##   - true → _play_respawn_intro_anim() + 文字 "新指挥官 X 接过指挥权……"
+##   - false → 跳过（首次进入不显示介绍）
+##
+## 参数 player_cfg 暂保留：留作未来 hero_pool 缺省时的兜底字段来源；本期不再读 character_count
 func _init_player(player_cfg: Dictionary) -> void:
-	# 优先读新字段；缺省时回退到旧字段；都没有则按 A MVP 默认 1（单英雄启动）
-	var char_count: int = int(player_cfg.get("initial_character_count",
-		player_cfg.get("character_count", "1")))
-	var init_quality: int = int(player_cfg.get("initial_troop_quality", "0"))
+	# 默认品质：hero_pool 行未填或解析失败时回退
+	var default_quality: int = int(player_cfg.get("initial_troop_quality", "0"))
 
 	_characters = []
 	_total_max_hp = 0
-	# A 基线收束 MVP：仅第一个角色装配初始部队，其余留空槽（A MVP 期 char_count==1，
-	# 永远只构造一个角色；旧 `character_count` fallback 到 >1 时也保持"单英雄起步 + 后续入队"语义，
-	# 与 [[C_扎营里程碑入队_MVP]] 入队流程对齐）
-	for i in range(char_count):
-		var ch: CharacterData = CharacterData.new()
-		ch.id = i + 1
-		if i == 0:
-			# 随机抽取兵种（0~4，可重复）
-			var troop: TroopData = TroopData.new()
-			troop.troop_type = randi_range(0, 4) as TroopData.TroopType
-			troop.quality = init_quality as TroopData.Quality
-			ch.troop = troop
-			_total_max_hp += troop.max_hp
-		_characters.append(ch)
+
+	# 从 RunState 抽未使用的英雄；返回的 leader_row 浅拷贝
+	# RunState.ensure_initialized 已在 _ready 早期调用过；此处直接 draw
+	var leader_row: Dictionary = RunState.draw_new_leader()
+	_leader_display_name = String(leader_row.get("name", "队长"))
+
+	# 单角色：队长占据 _characters[0]，其余空位由 C MVP 入队事件追加
+	var ch: CharacterData = CharacterData.new()
+	ch.id = 1
+	# C MVP：写入 hero_id，让 draw_recruit 能正确排除当前在队英雄
+	ch.hero_id = int(leader_row.get("id", "-1"))
+	var troop: TroopData = TroopData.new()
+	troop.troop_type = _parse_troop_type(String(leader_row.get("troop_type", "SWORD")))
+	troop.quality = _parse_troop_quality(String(leader_row.get("troop_quality", "")), default_quality)
+	# 重新按品质设置 max_hp（TroopData 默认构造未走品质表，这里保守按 R 兜底；
+	#   若未来 TroopData 引入按品质 max_hp 表，删除这段即可）
+	ch.troop = troop
+	_total_max_hp += troop.max_hp
+	_characters.append(ch)
+
+	# 重生事件占位（B MVP）
+	# RunState.advance_cycle 时置 _pending_respawn_intro=true；
+	# 新场景 _ready → _init_player 末尾消费一次后清零
+	if RunState.consume_pending_respawn_intro():
+		_play_respawn_intro_anim()
+		_show_notice("新指挥官 %s 接过指挥权……" % _leader_display_name)
+
+
+## 兵种枚举字符串 → TroopData.TroopType
+## 解析失败回退到 SWORD（hero_pool.csv 写错字段时不至于崩）
+func _parse_troop_type(name: String) -> TroopData.TroopType:
+	match name.to_upper():
+		"SWORD":   return TroopData.TroopType.SWORD
+		"BOW":     return TroopData.TroopType.BOW
+		"SPEAR":   return TroopData.TroopType.SPEAR
+		"CAVALRY": return TroopData.TroopType.CAVALRY
+		"SHIELD":  return TroopData.TroopType.SHIELD
+		_:
+			push_warning("WorldMap._parse_troop_type: 未知兵种 '%s'，回退 SWORD" % name)
+			return TroopData.TroopType.SWORD
+
+
+## 品质字符串 → TroopData.Quality；空字符串走 default
+func _parse_troop_quality(name: String, default_quality: int) -> TroopData.Quality:
+	if name.is_empty():
+		return default_quality as TroopData.Quality
+	match name.to_upper():
+		"R":   return TroopData.Quality.R
+		"SR":  return TroopData.Quality.SR
+		"SSR": return TroopData.Quality.SSR
+		_:
+			push_warning("WorldMap._parse_troop_quality: 未知品质 '%s'，回退 R" % name)
+			return TroopData.Quality.R
+
+
+## 重生介绍美术接口（B MVP §2 占位 / P1 待跟踪扩展挂点）
+## MVP 阶段空实现；完整版升级为 [[F_事件面板基础_MVP]] 的 respawn 事件类型 + 立绘 + 过场动画
+func _play_respawn_intro_anim() -> void:
+	pass
+
+
+## 昏迷态美术接口（B MVP §2 占位 / P1 待跟踪扩展挂点）
+## MVP 阶段空实现；完整版升级为独立面板 + 立绘 + 过场动画
+func _play_coma_anim() -> void:
+	pass
+
+
+# ─────────────────────────────────────────
+# C MVP — 扎营里程碑入队
+# ─────────────────────────────────────────
+
+## 收集当前队伍中所有有 hero_id 的成员 ID（用于 RunState.draw_recruit 排除）
+## hero_id == -1 的角色（老路径 / 测试构造）跳过——不会影响"未在队伍中"判定
+func _get_team_hero_ids() -> Array[int]:
+	var ids: Array[int] = []
+	for ch in _characters:
+		if ch == null:
+			continue
+		if ch.hero_id >= 0:
+			ids.append(ch.hero_id)
+	return ids
+
+
+## RunState.check_recruit_milestone 命中时回调
+## hero_dict 来自 hero_pool 行；milestone 是触发的扎营次数
+##
+## 构造 recruit 事件 payload，把 hero_id 通过 payload 传给确认回调
+## EventPanelUI 已支持 result_callback；玩家点确认 → 调 _on_recruit_confirmed 装配新队员
+func _on_recruit_triggered(hero_dict: Dictionary, milestone: int) -> void:
+	if _event_panel == null:
+		push_warning("WorldMap._on_recruit_triggered: EventPanelUI 未就绪，事件丢弃")
+		return
+	var hero_name: String = String(hero_dict.get("name", "新成员"))
+	var event: Dictionary = {
+		"type": "recruit",
+		"title": "新成员加入",
+		"narrative": "扎营第 %d 次时，%s 闻讯前来加入队伍。" % [milestone, hero_name],
+		"actions": [{"label": "确认", "result": "confirm"}],
+		# payload 里塞整个 hero_dict —— 确认时不依赖闭包，避免重新查 hero_pool
+		"payload": hero_dict,
+		"result_callback": Callable(self, "_on_recruit_confirmed"),
+	}
+	_event_panel.push_event(event)
+
+
+## 玩家点确认入队事件后回调
+## payload 即 hero_dict（_on_recruit_triggered 中塞入）
+##
+## 流程：构造 CharacterData + 装配初始部队（troop_type / troop_quality）→ append → HUD
+## 不去重：MVP 不检查兵种重复——_get_team_hero_ids 已保证不抽到当前在队成员
+func _on_recruit_confirmed(_action_result: String, payload: Dictionary) -> void:
+	if payload.is_empty():
+		push_warning("WorldMap._on_recruit_confirmed: payload 为空，入队跳过")
+		return
+	var hero_id: int = int(payload.get("id", "-1"))
+	if hero_id < 0:
+		push_warning("WorldMap._on_recruit_confirmed: hero_id 非法，入队跳过")
+		return
+	# 防御：极端时序下 _on_recruit_confirmed 触发时该英雄已被其他途径加入
+	for ch_existing in _characters:
+		if ch_existing != null and ch_existing.hero_id == hero_id:
+			push_warning("WorldMap._on_recruit_confirmed: hero_id=%d 已在队，跳过重复入队" % hero_id)
+			return
+	# 构造 CharacterData
+	var member: CharacterData = CharacterData.new()
+	# id 在队伍中按 size+1 递增；与队长保持简单序号语义
+	member.id = _characters.size() + 1
+	member.hero_id = hero_id
+	var troop: TroopData = TroopData.new()
+	troop.troop_type = _parse_troop_type(String(payload.get("troop_type", "SWORD")))
+	# 入队队员品质：hero_pool 行未填时回退 R（队员相对队长更平均）
+	troop.quality = _parse_troop_quality(String(payload.get("troop_quality", "")), TroopData.Quality.R)
+	member.troop = troop
+	_total_max_hp += troop.max_hp
+	_characters.append(member)
+	_update_hud()
+	# C MVP P1 修复：扎营流程在 push 入队事件后立刻 _manage_ui.open(...)，确认入队事件时
+	# 装配面板已打开且按旧 _characters 渲染过 refresh；这里补一次 refresh 让新队员
+	# 在本次扎营内立即可见 / 可装配（设计文档 §6 数据驱动语义 + §7 场景 2 验收）
+	if _manage_ui != null and _manage_ui.is_open:
+		_manage_ui.refresh()
 
 
 # ─────────────────────────────────────────
@@ -1919,13 +2141,100 @@ func _has_any_troop() -> bool:
 			return true
 	return false
 
-## 全灭检查：所有部队被击败时触发失败结算
-## MVP 阶段强制收束，后续可扩展支持中途装配恢复
-## 返回 true 表示已触发失败，调用方应中断后续流程
+## B 重生周期 MVP：评估队伍状态（队员阵亡移除 + 队长昏迷阈值判定）
+##
+## 流程：
+##   1. 倒序遍历 _characters[1..]：troop == null 或 current_hp <= 0 → 移除（队员阵亡不复活）
+##   2. 检查 _characters[0] 队长：troop == null 或 current_hp / max_hp ≤ _coma_hp_threshold_ratio
+##      → 调 _trigger_coma_or_lose
+##
+## 返回 true 表示已触发昏迷态或失败遮罩，调用方应中断后续流程。
+##
+## 触发挂点：_apply_player_damages / _post_battle_settlement / _on_use_item / _on_equip_troop 末尾。
+## 守卫：_is_in_coma / _game_finished 时直接返回 true，避免重入。
+func _evaluate_party_state() -> bool:
+	if _game_finished or _is_in_coma:
+		return true
+	# 1. 队员阵亡 → 从队伍移除（倒序避免索引漂移）
+	for i in range(_characters.size() - 1, 0, -1):
+		var ch_member: CharacterData = _characters[i]
+		if ch_member == null:
+			_characters.remove_at(i)
+			continue
+		if not ch_member.has_troop():
+			_characters.remove_at(i)
+			continue
+		if ch_member.troop.current_hp <= 0:
+			_characters.remove_at(i)
+	# 2. 队长检查
+	if _characters.is_empty():
+		# 极端态：连队长都没了 → 走兜底重生 / 失败分支
+		_trigger_coma_or_lose()
+		return true
+	var leader: CharacterData = _characters[0]
+	if leader == null or not leader.has_troop():
+		_trigger_coma_or_lose()
+		return true
+	var troop: TroopData = leader.troop
+	if troop.max_hp <= 0:
+		# 数据异常；不强制触发昏迷以免误判，写日志
+		push_warning("WorldMap._evaluate_party_state: 队长 max_hp <= 0，跳过阈值判定")
+		return false
+	var ratio: float = float(troop.current_hp) / float(troop.max_hp)
+	if ratio <= _coma_hp_threshold_ratio:
+		_trigger_coma_or_lose()
+		return true
+	return false
+
+
+## B 重生周期 MVP：队长昏迷或末周期失败分支
+##
+## 路径：
+##   - RunState.respawns_left() > 0 → 进入昏迷态：锁输入 + 文字占位 + 美术接口（空实现）
+##                                    → SceneTreeTimer 走完后 advance_cycle + reload_current_scene
+##   - 否则                          → 末周期失败 → _on_victory_decided(ENEMY_1) 走 VictoryUI 失败遮罩
+##
+## 幂等：_is_in_coma / _game_finished 守卫，重复调用不重复触发
+func _trigger_coma_or_lose() -> void:
+	if _is_in_coma or _game_finished:
+		return
+	if RunState.respawns_left() > 0:
+		_is_in_coma = true
+		_reachable_tiles = {}
+		# 重生事件占位（B MVP §2 / §8）
+		# 文字 _show_notice + 美术接口 _play_coma_anim（空实现）；P1 完整版升级为 F MVP respawn 事件
+		_show_notice("队长 %s 倒下了……" % _leader_display_name, _coma_duration_sec)
+		_play_coma_anim()
+		queue_redraw()
+		# 计时结束 → 推进周期 + reload；新场景 _ready 走 ensure_initialized 时
+		# _initialized=true 直接 return，沿用 _used_hero_ids / _cycle_index
+		var coma_timer: SceneTreeTimer = get_tree().create_timer(_coma_duration_sec)
+		coma_timer.timeout.connect(_on_coma_timer_finished)
+	else:
+		# 末周期无保护 → 整局失败（沿用现有 VictoryUI 失败遮罩）
+		_on_victory_decided(Faction.ENEMY_1)
+
+
+## 昏迷计时结束回调：推进 RunState + reload 场景
+## reload 前再校验一次 _game_finished，避免极端时序下的重入（如 reload 期间被外部触发）
+func _on_coma_timer_finished() -> void:
+	if _game_finished:
+		return
+	RunState.advance_cycle()
+	get_tree().reload_current_scene()
+
+
+## 全灭兜底（B MVP 退化）：仅在 _characters 为空时触发；正常昏迷 / 失败路径已被 _evaluate_party_state 接管
+##
+## 仍保留是因为：极端时序（外部代码清空 _characters）或老调用点未迁到 _evaluate_party_state 时
+## 不至于"无人则永久卡死"。返回 true 表示游戏已结束，调用方应中断后续流程。
 func _check_defeat() -> bool:
 	if _game_finished:
 		return true
-	if not _has_any_troop():
+	if _is_in_coma:
+		# 已进入昏迷过渡，等 timer 走完即可
+		return true
+	if _characters.is_empty():
 		_game_finished = true
 		_reachable_tiles = {}
 		_show_defeat_text()
@@ -1976,7 +2285,8 @@ func _format_rewards_text(rewards: Array[ItemData]) -> String:
 
 ## 放弃流程：直接结束，记为失败（无二次确认）
 func _on_abandon() -> void:
-	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:
+	# B 重生周期 MVP：昏迷过渡期间锁 Q 键放弃，否则会让 _on_coma_timer_finished 提前 return 截断重生流程
+	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open or _is_in_coma:
 		return
 	_game_finished = true
 	_reachable_tiles = {}
@@ -1994,6 +2304,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	# F MVP：事件面板打开时锁定 M / B / Q 等快捷键，避免绕过事件面板的"阻塞玩家操作"语义
 	if _event_panel != null and _event_panel.is_open:
+		return
+	# B MVP：昏迷过渡期间锁所有快捷键，等 reload_current_scene 走完
+	if _is_in_coma:
 		return
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey

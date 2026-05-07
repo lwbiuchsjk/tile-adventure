@@ -1,0 +1,4 @@
+key,value
+max_cycles,3
+coma_duration_sec,1.5
+coma_hp_threshold_ratio,0.2
