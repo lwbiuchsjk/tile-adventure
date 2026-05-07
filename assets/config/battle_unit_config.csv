@@ -1,0 +1,6 @@
+troop_type,move_range,attack_range
+SWORD,3,1
+BOW,2,2
+SPEAR,3,1
+CAVALRY,4,1
+SHIELD,2,1

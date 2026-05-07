@@ -247,3 +247,47 @@ static func would_wipe_enemies(enemy_troops: Array[TroopData], enemy_damages: Ar
 		if enemy_troops[i].current_hp > enemy_damages[i]:
 			return false
 	return true
+
+
+## 单次攻击伤害计算（E 战斗就地展开 MVP §2.5）
+##
+## 用于 BattleSession 战斗内单次攻击：一个 attacker 攻击一个 target，
+## 应用克制 / 品质 / 兵力 / 地形高度差四个修正后返回伤害值。
+##
+## 参数：
+##   attacker_troop / target_troop —— 战斗双方的 TroopData（hp / 兵种 / 品质）
+##   altitude_diff   —— attacker 地形高度 - target 地形高度（设计 §2.5）
+##   altitude_step   —— battle_config.terrain_altitude_step（默认 0.10）
+##   config          —— battle_config（base_damage / quality_k / quality_min_factor）
+##   difficulty      —— 关卡难度值（轮次索引），默认 0
+##   damage_increment—— 每轮难度增加的伤害值，默认 0
+##
+## 返回伤害（int）；不修改任何原始数据。地形修正最大约 ±30%（高度差 ±3 × 0.10）。
+## 与 resolve() 区别：resolve 是"群战 N 回合一次性结算"，本函数是"单单位单次攻击"
+static func calculate_single_attack(
+	attacker_troop: TroopData,
+	target_troop: TroopData,
+	altitude_diff: int,
+	altitude_step: float,
+	config: Dictionary,
+	difficulty: int = 0,
+	damage_increment: float = 0.0
+) -> int:
+	var base_damage: float = float(config.get("base_damage", "50"))
+	var quality_k: float = float(config.get("quality_k", "0.2"))
+	var quality_min: float = float(config.get("quality_min_factor", "0.5"))
+	var effective_base: float = get_effective_base_damage(base_damage, difficulty, damage_increment)
+	# 克制
+	var counter: float = get_counter_factor(
+		attacker_troop.troop_type as int, target_troop.troop_type as int
+	)
+	# 品质修正：攻击方品质 - 防御方品质 → 倍率 = max(quality_min, 1 + quality_k * diff)
+	var quality_diff: float = float(attacker_troop.quality as int - target_troop.quality as int)
+	var quality_factor: float = maxf(quality_min, 1.0 + quality_k * quality_diff)
+	# 兵力系数：攻击方当前兵力比例影响输出
+	var attacker_hp_ratio: float = float(attacker_troop.current_hp) / maxf(float(attacker_troop.max_hp), 1.0)
+	var hp_factor: float = get_hp_ratio_factor(attacker_hp_ratio)
+	# 地形高度修正：max(0, 1 + altitude_diff * step)；钳到 ≥ 0 防极端 step 下负伤害
+	var altitude_factor: float = maxf(0.0, 1.0 + float(altitude_diff) * altitude_step)
+	var final_damage: float = effective_base * counter * quality_factor * hp_factor * altitude_factor
+	return int(final_damage)

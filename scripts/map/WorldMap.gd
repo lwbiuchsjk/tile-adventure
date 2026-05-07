@@ -53,6 +53,8 @@ const CONFIG_TOWN_TROOP_POOL: String = "res://assets/config/town_troop_pool.csv"
 ## B 重生周期 MVP：英雄池 + 整局周期参数
 const CONFIG_HERO_POOL: String = "res://assets/config/hero_pool.csv"
 const CONFIG_RUN: String = "res://assets/config/run_config.csv"
+## E 战斗就地展开 MVP：兵种战斗参数（移动 / 攻击范围）
+const CONFIG_BATTLE_UNIT: String = "res://assets/config/battle_unit_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -360,7 +362,22 @@ var _build_upgrade_enabled: bool = false
 
 ## 敌方部队进入玩家曼哈顿距离 ≤ 该值时触发强制战斗（A 基线收束 MVP）
 ## 默认 3；从 battle_config.forced_battle_range 读
+##
+## E MVP 起新增 `_battle_trigger_range`（同义不同名，便于语义清晰过渡）；
+## E3 实装时把强制战斗触发路径切到 BattleSession，本字段可与 _battle_trigger_range 合并
 var _forced_battle_range: int = 3
+
+## E 战斗就地展开 MVP：触发距离 / 战场范围 / 地形修正 / 补给消耗
+## 设计原文 §4.2：tile-advanture-design/探索体验实装/E_战斗就地展开_MVP.md
+var _battle_trigger_range: int = 3              ## 主动 / 被动战斗触发 + 玩家保护区半径
+var _battle_arena_range: int = 6                ## 战场半径（玩家中心 ±N）
+var _terrain_altitude_step: float = 0.10        ## 地形高度差伤害修正系数
+var _active_battle_supply_cost: int = 1         ## 主动战斗消耗补给
+var _passive_battle_supply_cost: int = 1        ## 被动战斗消耗补给（钳到 ≥ 0）
+
+## 兵种战斗参数缓存：{ TroopType_int : {"move_range": int, "attack_range": int} }
+## 由 battle_unit_config.csv 加载；E3 实装战斗触发时传给 BattleSession.start
+var _battle_unit_config: Dictionary = {}
 
 ## 敌方 AI 目标切换半径（曼哈顿距离）—— M8 扩展
 ## dist(pack, player) <= 该值 + d_player < d_core → pack 追玩家；否则推核心
@@ -513,6 +530,45 @@ func _ready() -> void:
 		_forced_battle_range = 3
 	else:
 		_forced_battle_range = raw_force_range
+
+	# E 战斗就地展开 MVP 配置（E1 仅加载到字段，E3 实装时由 BattleSession 消费）
+	# battle_trigger_range 缺失时回退到 forced_battle_range（兼容 A MVP 跑测路径）
+	var raw_trigger: int = int(_battle_config.get("battle_trigger_range", str(_forced_battle_range)))
+	_battle_trigger_range = maxi(1, raw_trigger)
+	var raw_arena: int = int(_battle_config.get("battle_arena_range", "6"))
+	_battle_arena_range = maxi(_battle_trigger_range, raw_arena)  # 战场至少不小于触发距离
+	_terrain_altitude_step = float(_battle_config.get("terrain_altitude_step", "0.10"))
+	_active_battle_supply_cost = maxi(0, int(_battle_config.get("active_battle_supply_cost", "1")))
+	_passive_battle_supply_cost = maxi(0, int(_battle_config.get("passive_battle_supply_cost", "1")))
+
+	# E MVP：兵种战斗参数（移动 / 攻击范围）解析为 { TroopType_int : Dictionary }
+	# 兵种名 → ID 复用 BattleResolver.TROOP_NAME_TO_ID
+	# 配置下限：move_range >= 1（移动力不能为 0，否则单位被卡住）
+	#         attack_range >= 1（攻击范围不能为 0，否则单位无法攻击）
+	# 非法值回退到 SWORD 默认（3/1）+ push_warning
+	var battle_unit_rows: Array = ConfigLoader.load_csv(CONFIG_BATTLE_UNIT)
+	_battle_unit_config = {}
+	for entry in battle_unit_rows:
+		var row: Dictionary = entry as Dictionary
+		var name: String = String(row.get("troop_type", ""))
+		if not BattleResolver.TROOP_NAME_TO_ID.has(name):
+			push_warning("WorldMap: battle_unit_config 未知兵种 '%s'，跳过" % name)
+			continue
+		var key: int = int(BattleResolver.TROOP_NAME_TO_ID[name])
+		var raw_move: int = int(row.get("move_range", "3"))
+		var raw_attack: int = int(row.get("attack_range", "1"))
+		var move_v: int = raw_move
+		var attack_v: int = raw_attack
+		if raw_move < 1:
+			push_warning("WorldMap: battle_unit_config[%s].move_range 非法值 %d，回退到 3" % [name, raw_move])
+			move_v = 3
+		if raw_attack < 1:
+			push_warning("WorldMap: battle_unit_config[%s].attack_range 非法值 %d，回退到 1" % [name, raw_attack])
+			attack_v = 1
+		_battle_unit_config[key] = {
+			"move_range": move_v,
+			"attack_range": attack_v,
+		}
 
 	# 初始化奖励生成器
 	_reward_generator = RewardGenerator.new()

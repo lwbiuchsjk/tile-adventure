@@ -10,3 +10,8 @@ enemy_movement_enabled,1
 enemy_movement_points,6
 enemy_target_switch_range,10
 forced_battle_range,3
+battle_trigger_range,3
+battle_arena_range,6
+terrain_altitude_step,0.10
+active_battle_supply_cost,1
+passive_battle_supply_cost,1

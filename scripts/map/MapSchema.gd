@@ -41,6 +41,18 @@ var slot_grid: Array = []
 ## 格式：{ TerrainType(int) : float }，INF 表示不可通行
 var terrain_costs: Dictionary = {}
 
+## 地形高度（E 战斗就地展开 MVP §2.1）
+## 用于 BattleResolver 战斗内攻击的地形伤害修正：高地形对低地形伤害有优势
+## 排序意图：高山 > 高地 > 平地 > 洼地；高度差 × terrain_altitude_step 作为伤害倍率修正
+##
+## 设计文档：tile-advanture-design/探索体验实装/E_战斗就地展开_MVP.md §2.5
+const TERRAIN_ALTITUDE: Dictionary = {
+	TerrainType.MOUNTAIN: 3,
+	TerrainType.HIGHLAND: 2,
+	TerrainType.FLATLAND: 1,
+	TerrainType.LOWLAND:  0,
+}
+
 ## 各插槽类型允许放置的地形列表（从 slot_config.csv 加载）
 ## 格式：{ SlotType(int) : Array[TerrainType(int)] }
 var slot_allowed_terrains: Dictionary = {}
@@ -131,6 +143,16 @@ func get_terrain_cost(x: int, y: int, unit_cost_override: Dictionary = {}) -> fl
 ## 判断坐标是否可通行（使用默认移动力规则）
 func is_passable(x: int, y: int) -> bool:
 	return get_terrain_cost(x, y) < INF
+
+
+## 查询指定坐标地形高度（E MVP 战斗地形伤害修正用）
+## 越界返回 0（视作 LOWLAND，与 get_terrain 越界返回 MOUNTAIN 不同——
+## 高度查询主要服务战斗场景，越界本就不会发生；返回 0 是保守兜底，避免影响伤害计算）
+func get_terrain_altitude(x: int, y: int) -> int:
+	if not is_in_bounds(x, y):
+		return 0
+	var terrain: TerrainType = terrain_grid[y][x] as TerrainType
+	return TERRAIN_ALTITUDE.get(terrain, 1) as int
 
 # ─────────────────────────────────────────
 # Slot 配置查询
