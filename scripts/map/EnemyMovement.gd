@@ -67,7 +67,18 @@ var _target_switch_range: int = 10
 ## A 基线收束 MVP：强制战斗触发距离（曼哈顿）
 ## pack 移动后到玩家距离 ≤ 该值 时触发战斗
 ## 默认 3（与 battle_config.forced_battle_range 同值）；start_phase 注入实际值
+##
+## E4 旧路径退化：旧 forced_battle_triggered.emit 路径已被保护区机制取代——
+## 保护区把 dist < trigger_range 的格全部 blocked，pack 永远停在 dist ≥ range 处；
+## 即使停在 dist == range 边缘也不再 emit forced_battle（被动战斗在敌方阶段末尾统一扫描）
+## 字段保留供 push_warning 兜底参考，E5 跑测稳定后可删
 var _forced_battle_range: int = 3
+
+## E 战斗就地展开 MVP §2.3：玩家保护区半径（曼哈顿）
+## 保护区内（dist < _protected_zone_range）格 cost = INF（不可经过 / 不可停留）
+## 保护区边缘（dist == _protected_zone_range）格 cost = 1（可停留）
+## 保护区外格按地形 cost；start_phase 注入；0 = 关闭保护区（向后兼容 / 调试）
+var _protected_zone_range: int = 0
 
 # ─────────────────────────────────────
 # 公开接口
@@ -93,15 +104,18 @@ func get_moving_level() -> LevelSlot:
 ##
 ## 参数：
 ##   target_pos —— 战略目标（玩家核心 slot 位置）；寻路目的地的一个候选
-##   player_pos —— 玩家单位位置；用于强制战斗触发 + 动态目标的另一候选
+##   player_pos —— 玩家单位位置；用于强制战斗触发 + 动态目标的另一候选 + 保护区中心
 ##   target_switch_range —— 追玩家阈值（默认 10）；pack 到玩家 ≤ 该值才可能追玩家
 ##     传 -1 或 0 时退化为"永远推核心"（测试 / 调试用）
-##   forced_battle_range —— 强制战斗触发距离（默认 3）；pack 到玩家 ≤ 该值时触发战斗
+##   forced_battle_range —— 强制战斗触发距离（默认 3）；E4 后已不再 emit，保留参数兼容
+##   protected_zone_range —— E MVP 玩家保护区半径（曼哈顿）；保护区内格 cost = INF
+##     默认 0 = 关闭保护区（向后兼容 / 调试）；正常路径下 WorldMap 注入 _battle_trigger_range
 func start_phase(schema: MapSchema, level_slots: Dictionary,
 		player_pos: Vector2i, target_pos: Vector2i, movement_points: int,
 		original_slot_types: Dictionary, game_over: bool,
 		target_switch_range: int = 10,
-		forced_battle_range: int = 3) -> void:
+		forced_battle_range: int = 3,
+		protected_zone_range: int = 0) -> void:
 	_schema = schema
 	_level_slots = level_slots
 	_player_pos = player_pos
@@ -111,6 +125,7 @@ func start_phase(schema: MapSchema, level_slots: Dictionary,
 	_game_over = game_over
 	_target_switch_range = target_switch_range
 	_forced_battle_range = forced_battle_range
+	_protected_zone_range = protected_zone_range
 
 	_is_moving = true
 	_move_queue = _get_sorted_movable_levels()
@@ -243,16 +258,24 @@ func _process_next_move() -> void:
 	if pack_target != _player_pos:
 		blocked[_player_pos] = true
 
-	# 早退路径 1（target == 玩家 且 pack 已在玩家相邻格）：
-	#   Pathfinder 返回 [self, player_pos]，trim 后仅 [self]，后续 size<2 分支会跳过
-	#   → pack 原地不动、forced_battle 不触发；相邻状态被错过。
-	#   直接 emit forced_battle 让战斗流程接手（resume_after_battle 会处理下一个 pack）
-	if pack_target == _player_pos:
-		var d: int = absi(level.position.x - _player_pos.x) + absi(level.position.y - _player_pos.y)
-		if d == 1:
-			_moving_level = null
-			forced_battle_triggered.emit(level)
-			return
+	# E4 旧早退路径 1 已废弃：保护区把 dist < _battle_trigger_range（默认 3）的格全部 blocked，
+	# pack 不可能停在 dist == 1 的玩家相邻格；即使 pack 起始就在相邻格（极端时序，玩家上轮才出现）
+	# 也由保护区 blocked 让寻路自然把 pack 推到边缘。emit forced_battle 路径在 E4 整体废弃，
+	# 被动战斗在 _on_enemy_phase_finished 末尾统一扫描
+
+	# E4 保护区追玩家纠正：pack_target == _player_pos 时 _player_pos 已被保护区 blocked，
+	# Pathfinder 终点不可达直接返回空路径 → pack 原地不动。
+	# 改 target 为保护区**边缘**最近可达格，让 pack 自然停在边缘准备触发被动战斗。
+	# 边缘全部不可达 → 退化为推核心，与原非追玩家分支一致。
+	if pack_target == _player_pos and _protected_zone_range > 0:
+		var edge_target: Vector2i = _find_protected_zone_edge_target(level.position, blocked)
+		if edge_target == level.position:
+			# 边缘全部不可达：退化为推核心；同时把 _player_pos 重新加进 blocked
+			pack_target = _target_pos
+			if _target_pos != _player_pos:
+				blocked[_player_pos] = true
+		else:
+			pack_target = edge_target
 
 	var path_result: Pathfinder.PathResult = Pathfinder.find_path(
 		_schema, level.position, pack_target, {}, blocked
@@ -295,6 +318,15 @@ func _process_next_move() -> void:
 
 
 ## 获取敌方移动阻挡位置（排除自身，包含所有其他关卡）
+##
+## E4 玩家保护区扩展：把 dist < _protected_zone_range 的格全部加进 blocked
+## 保护区**边缘**（dist == _protected_zone_range）格不加，让 pack 可停在边缘
+## 保护区中心（玩家位置）也在 dist=0 < range 内，自然被加进 blocked，无需额外特判
+##
+## 设计意图（§2.3）：
+##   - 寻路结果：敌方包尝试停在保护区边缘最近的可达格
+##   - 边缘全部不可达 / 被占据 → 敌方索性不进入保护区，停在外部最近可达格（push_warning）
+##     当前 Pathfinder 的"目的地不可达时取最近可达格"行为由 _process_next_move 后续 trim 处理
 func _get_blocked_positions(exclude_level: LevelSlot) -> Dictionary:
 	var blocked: Dictionary = {}
 	for pos in _level_slots:
@@ -304,7 +336,50 @@ func _get_blocked_positions(exclude_level: LevelSlot) -> Dictionary:
 			continue
 		if lv.state == LevelSlot.State.UNCHALLENGED or lv.is_repelled():
 			blocked[p] = true
+	# E4 保护区：玩家曼哈顿距离 < range 的格全部 blocked（dist == range 边缘格不加）
+	if _protected_zone_range > 0:
+		for dy in range(-_protected_zone_range + 1, _protected_zone_range):
+			for dx in range(-_protected_zone_range + 1, _protected_zone_range):
+				if absi(dx) + absi(dy) >= _protected_zone_range:
+					continue
+				blocked[_player_pos + Vector2i(dx, dy)] = true
 	return blocked
+
+
+## 在玩家保护区**边缘**（曼哈顿 dist == _protected_zone_range）找最接近 pack_pos 的可达格
+##
+## 设计意图（§2.3）：pack 追玩家时把目标改为边缘格，让 Pathfinder 能正常寻路；
+## 战斗将在敌方阶段末尾的保护区扫描中由 _on_enemy_phase_finished 触发
+##
+## 候选过滤：
+##   - 在地图内
+##   - 地形可通行（cost < INF）
+##   - 不在 blocked 字典（其它 LevelSlot 占据等）
+##
+## 选最近的（曼哈顿距离 pack_pos 最小）；找不到返回 pack_pos（表示原地不动 / 退化推核心）
+func _find_protected_zone_edge_target(pack_pos: Vector2i, blocked: Dictionary) -> Vector2i:
+	if _protected_zone_range <= 0 or _schema == null:
+		return pack_pos
+	var best: Vector2i = pack_pos
+	var best_dist: int = -1
+	# 边缘格枚举：所有 |dx| + |dy| == _protected_zone_range 的偏移
+	for dy in range(-_protected_zone_range, _protected_zone_range + 1):
+		var dx_abs: int = _protected_zone_range - absi(dy)
+		# 每个 dy 对应两个 dx：±dx_abs；当 dx_abs == 0 时只有 dx = 0 一格
+		var dx_candidates: Array[int] = [dx_abs] if dx_abs == 0 else [dx_abs, -dx_abs]
+		for dx in dx_candidates:
+			var pos: Vector2i = _player_pos + Vector2i(dx, dy)
+			if not _schema.is_in_bounds(pos.x, pos.y):
+				continue
+			if _schema.get_terrain_cost(pos.x, pos.y) >= INF:
+				continue
+			if blocked.has(pos):
+				continue
+			var d: int = absi(pos.x - pack_pos.x) + absi(pos.y - pack_pos.y)
+			if best_dist < 0 or d < best_dist:
+				best_dist = d
+				best = pos
+	return best
 
 
 ## 按移动力和地形消耗截断路径
@@ -397,33 +472,24 @@ func _is_path_entirely_off_screen(path: Array[Vector2i], rect: Rect2) -> bool:
 
 
 ## 移动动画完成回调
+##
+## E4 旧 forced_battle_triggered emit 路径已删除：
+##   - pack 不可能停在保护区内（dist < _battle_trigger_range），保护区机制保证
+##   - dist == _battle_trigger_range（边缘）也不再 emit；由 _on_enemy_phase_finished 末尾
+##     统一扫描保护区内有敌方包 → 触发被动战斗（设计 §3.2）
+##   - forced_battle_triggered 信号本身保留供 push_warning 兜底（理论不应再触发）
 func _on_move_finished() -> void:
 	if _moving_level == null:
 		_process_next_move()
 		return
 
 	var level_pos: Vector2i = _moving_level.position
-	var dist: int = absi(level_pos.x - _player_pos.x) + absi(level_pos.y - _player_pos.y)
-	# A 基线收束 MVP：触发距离从硬编码 1 改为参数化 _forced_battle_range（默认 3）
-	# 范围内即触发，给玩家更早的"被压迫"信号；具体值在 battle_config.csv 配置
-	var in_force_range: bool = dist <= _forced_battle_range
 
 	# M4: 敌方单位停留后，若该格有持久 slot 则尝试占据（对称玩家逻辑）
-	# 顺序：先占据 → 再判断是否触发强制战斗；即便后续敌方在强制战斗中被击败，
-	# 占据已发生，slot 归属保持 ENEMY_1 直到玩家走过去翻转
 	_try_enemy_occupy_at(level_pos)
 
 	_moving_level = null
 	redraw_requested.emit()
-
-	if in_force_range:
-		# 进入玩家强制战斗范围（曼哈顿距离 ≤ _forced_battle_range），触发战斗
-		var level: LevelSlot = null
-		if _level_slots.has(level_pos):
-			level = _level_slots[level_pos] as LevelSlot
-		if level != null and level.state == LevelSlot.State.UNCHALLENGED:
-			forced_battle_triggered.emit(level)
-			return
 
 	_process_next_move()
 
