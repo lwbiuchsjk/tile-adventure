@@ -1718,13 +1718,17 @@ func _on_enemy_phase_finished() -> void:
 		push_warning("WorldMap._on_enemy_phase_finished: current_faction != ENEMY_1，忽略该次回调")
 		return
 
-	# E4 被动战斗：扫描玩家保护区内（dist ≤ _battle_trigger_range）有敌方包
-	# 命中 → 触发被动战斗（_supply -= passive_cost 钳到 ≥0；不阻止战斗触发）
-	# 战斗结束后由 sink 在 current_faction == ENEMY_1 收尾分支切回 PLAYER 回合
+	# E4 被动战斗（用户拍板 2026-05-08 与主动战斗语义统一）：
+	#   触发判断 = 玩家保护区内（dist ≤ _battle_trigger_range）有敌方包 → 才触发被动战斗
+	#   入战范围 = 战场范围（dist ≤ _battle_arena_range）内全部敌方包入战
+	#   早前只收集 trigger_range 内会让 dist 4-6 的包游离在战场视觉但不参战
 	if not _is_in_battle() and _unit != null:
-		var packs_in_zone: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
-		if not packs_in_zone.is_empty():
-			_start_passive_battle(packs_in_zone)
+		var trigger_zone: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
+		if not trigger_zone.is_empty():
+			var packs_in_arena: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_arena_range)
+			if packs_in_arena.is_empty():
+				packs_in_arena = trigger_zone
+			_start_passive_battle(packs_in_arena)
 			return
 
 	_turn_manager.end_faction_turn()
@@ -1862,6 +1866,7 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 		_battle_hud.show_hud(_battle_session)
 	_update_hud()
 	queue_redraw()
+	_debug_report_battle_start("主动", packs)
 
 
 ## E4 被动战斗启动入口
@@ -1899,6 +1904,31 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		_battle_hud.show_hud(_battle_session)
 	_update_hud()
 	queue_redraw()
+	_debug_report_battle_start("被动", packs)
+
+
+## 临时诊断：战斗启动时输出参战包数 / 展开 enemy_units 数 / 位置信息
+## 跑测验证主动战斗参战范围扩到 _battle_arena_range 后是否真的卷入多个包
+## 定位问题后会被清理（commit 历史可追溯）
+func _debug_report_battle_start(kind: String, packs: Array[LevelSlot]) -> void:
+	if _battle_session == null:
+		return
+	var pack_positions: Array[String] = []
+	for pack in packs:
+		if pack != null:
+			var d: int = absi(pack.position.x - _unit.position.x) + absi(pack.position.y - _unit.position.y)
+			pack_positions.append("%s(d=%d,t=%d)" % [pack.position, d, pack.troops.size()])
+	var enemy_count: int = _battle_session.enemy_units.size()
+	var inactive_count: int = 0
+	for arr in _battle_session.inactive_enemy_troops.values():
+		inactive_count += (arr as Array).size()
+	var msg: String = "[DEBUG][%s战斗] 玩家=%s | 参战包 %d %s | 上场敌方单位 %d | 未上场 %d" % [
+		kind, _unit.position, packs.size(),
+		"[" + ", ".join(pack_positions) + "]",
+		enemy_count, inactive_count
+	]
+	push_warning(msg)
+	_show_notice(msg, 6.0)
 
 
 ## 玩家按 [F] 主动战斗触发入口
