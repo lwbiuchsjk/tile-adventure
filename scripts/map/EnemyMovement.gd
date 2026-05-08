@@ -363,10 +363,16 @@ func _find_protected_zone_edge_target(pack_pos: Vector2i, blocked: Dictionary) -
 	var best: Vector2i = pack_pos
 	var best_dist: int = -1
 	# 边缘格枚举：所有 |dx| + |dy| == _protected_zone_range 的偏移
+	# 三元表达式返回无类型 Array 不能直接赋给 Array[int]（GDScript 4 类型化检查）
+	# 改用 if/else 分支显式构造
 	for dy in range(-_protected_zone_range, _protected_zone_range + 1):
 		var dx_abs: int = _protected_zone_range - absi(dy)
-		# 每个 dy 对应两个 dx：±dx_abs；当 dx_abs == 0 时只有 dx = 0 一格
-		var dx_candidates: Array[int] = [dx_abs] if dx_abs == 0 else [dx_abs, -dx_abs]
+		var dx_candidates: Array[int] = []
+		if dx_abs == 0:
+			dx_candidates.append(0)
+		else:
+			dx_candidates.append(dx_abs)
+			dx_candidates.append(-dx_abs)
 		for dx in dx_candidates:
 			var pos: Vector2i = _player_pos + Vector2i(dx, dy)
 			if not _schema.is_in_bounds(pos.x, pos.y):

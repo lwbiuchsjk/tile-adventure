@@ -718,7 +718,8 @@ func _calc_attack_damage(attacker: BattleUnit, target: BattleUnit) -> int:
 	return BattleResolver.calculate_single_attack(
 		attacker.troop, target.troop,
 		altitude_diff, terrain_altitude_step,
-		battle_config, difficulty, damage_increment
+		battle_config, difficulty, damage_increment,
+		attacker.owner_faction
 	)
 
 

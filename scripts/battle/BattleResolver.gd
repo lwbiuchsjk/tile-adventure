@@ -271,7 +271,8 @@ static func calculate_single_attack(
 	altitude_step: float,
 	config: Dictionary,
 	difficulty: int = 0,
-	damage_increment: float = 0.0
+	damage_increment: float = 0.0,
+	attacker_faction: int = -1
 ) -> int:
 	var base_damage: float = float(config.get("base_damage", "50"))
 	var quality_k: float = float(config.get("quality_k", "0.2"))
@@ -289,5 +290,14 @@ static func calculate_single_attack(
 	var hp_factor: float = get_hp_ratio_factor(attacker_hp_ratio)
 	# 地形高度修正：max(0, 1 + altitude_diff * step)；钳到 ≥ 0 防极端 step 下负伤害
 	var altitude_factor: float = maxf(0.0, 1.0 + float(altitude_diff) * altitude_step)
-	var final_damage: float = effective_base * counter * quality_factor * hp_factor * altitude_factor
+	# 阵营双向缩放：按攻击方阵营套用对应乘子（默认 1.0 不影响平衡，可在 csv 调参）
+	# 设计意图：让"我方对敌方 / 敌方对我方"两个独立倍率可在战斗外做平衡调试，
+	# 不污染基础公式 effective_base × counter × quality × hp × altitude 的可解释性
+	# attacker_faction == -1（默认）= 不应用阵营乘子，兼容旧调用
+	var faction_factor: float = 1.0
+	if attacker_faction == Faction.PLAYER:
+		faction_factor = float(config.get("battle_player_dmg_factor", "1.0"))
+	elif attacker_faction == Faction.ENEMY_1:
+		faction_factor = float(config.get("battle_enemy_dmg_factor", "1.0"))
+	var final_damage: float = effective_base * counter * quality_factor * hp_factor * altitude_factor * faction_factor
 	return int(final_damage)
