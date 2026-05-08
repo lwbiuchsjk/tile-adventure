@@ -108,10 +108,11 @@ Godot 4.6，GDScript，Git 版本控制
 
 ## 活跃（≤10 条硬上限）
 
-- [探索体验_重生周期](tile-advanture-design/进度/探索体验_重生周期_推进进度.md) — A 已落地（待整体验收），B/C/D/F 待启动（D/F 可并行）
+（暂无活跃推进线）
 
 ## 已归档
 
+- [探索体验_重生周期](tile-advanture-design/进度/探索体验_重生周期_推进进度.md) — A-F + E1-E5 全部 MVP 跑测验收通过（2026-05-08）；后续设计议题归档至 [设计候选库](tile-advanture-design/设计候选库.md)
 - [城建锚_持久slot](tile-advanture-design/进度/城建锚_持久slot_推进进度.md) — M1-M7 代码作"探索体验"底座沉淀；M8 验证因方案换轨冻结
 
 ## 进度维护规则
