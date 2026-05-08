@@ -389,6 +389,12 @@ var _battle_session: BattleSession = null
 ## 通过 _battle_session.on_redraw_requested 接收 redraw 请求并刷新 HUD 内容
 var _battle_hud: BattleHUD = null
 
+## E 战斗就地展开 MVP：探索态【攻击】按钮
+## 仅在玩家回合 + 触发距离内有可交互敌方包 + 非战斗态时显示
+## 点击 = _try_trigger_active_battle（与 [F] 键同语义）
+## 避免玩家忽略 [F] 键提示，给"可发起攻击"一个醒目的视觉信号
+var _explore_attack_btn: Button = null
+
 ## 敌方 AI 目标切换半径（曼哈顿距离）—— M8 扩展
 ## dist(pack, player) <= 该值 + d_player < d_core → pack 追玩家；否则推核心
 ## 默认 10（约为 enemy_movement_points*1.6，给 1-2 回合反应冗余）
@@ -816,6 +822,45 @@ func _init_subsystems() -> void:
 	_battle_hud.skip_pressed.connect(_on_battle_hud_skip_pressed)
 	_battle_hud.exit_pressed.connect(_on_battle_hud_exit_pressed)
 
+	# E MVP 探索态【攻击】按钮：玩家回合且触发距离内有敌方包时显示，醒目红色
+	# 屏幕中央偏下浮动；与 BattleHUD 行动栏不会同时显示（战斗态时本按钮隐藏）
+	_explore_attack_btn = Button.new()
+	_explore_attack_btn.name = "ExploreAttackBtn"
+	_explore_attack_btn.text = "⚔ 攻击 [F]"
+	_explore_attack_btn.visible = false
+	_explore_attack_btn.custom_minimum_size = Vector2(160, 44)
+	_explore_attack_btn.add_theme_font_size_override("font_size", 18)
+	_explore_attack_btn.add_theme_color_override("font_color", Color(1.0, 0.95, 0.85, 1.0))
+	# 醒目红色背景 + 金边
+	var btn_normal: StyleBoxFlat = StyleBoxFlat.new()
+	btn_normal.bg_color = Color(0.78, 0.18, 0.20, 0.95)
+	btn_normal.border_width_left = 2
+	btn_normal.border_width_right = 2
+	btn_normal.border_width_top = 2
+	btn_normal.border_width_bottom = 2
+	btn_normal.border_color = Color(1.0, 0.84, 0.0, 1.0)
+	btn_normal.content_margin_left = 16
+	btn_normal.content_margin_right = 16
+	btn_normal.content_margin_top = 8
+	btn_normal.content_margin_bottom = 8
+	_explore_attack_btn.add_theme_stylebox_override("normal", btn_normal)
+	var btn_hover: StyleBoxFlat = btn_normal.duplicate() as StyleBoxFlat
+	btn_hover.bg_color = Color(0.92, 0.25, 0.27, 0.98)
+	_explore_attack_btn.add_theme_stylebox_override("hover", btn_hover)
+	var btn_pressed: StyleBoxFlat = btn_normal.duplicate() as StyleBoxFlat
+	btn_pressed.bg_color = Color(0.62, 0.12, 0.14, 1.0)
+	_explore_attack_btn.add_theme_stylebox_override("pressed", btn_pressed)
+	# 屏幕底部偏上居中（避免遮挡 HudBar 顶部 + 与 BattleHUD 错位）
+	_explore_attack_btn.anchor_left = 0.5
+	_explore_attack_btn.anchor_right = 0.5
+	_explore_attack_btn.anchor_top = 1.0
+	_explore_attack_btn.anchor_bottom = 1.0
+	_explore_attack_btn.offset_bottom = -64
+	_explore_attack_btn.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_explore_attack_btn.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	ui_layer.add_child(_explore_attack_btn)
+	_explore_attack_btn.pressed.connect(_on_explore_attack_pressed)
+
 	# 胜负遮罩 UI（M8）
 	# 挂载顺序放在所有 UI 面板之后，保证遮罩渲染在最上层（吸收点击）
 	_victory_ui = VictoryUI.new()
@@ -921,6 +966,10 @@ func _update_hud() -> void:
 	# 右区：快捷键提示
 	if _hud_keys != null:
 		_hud_keys.text = "[空格]扎营  [B]建造  [M]管理  [Q]放弃"
+
+	# E MVP：探索态【攻击】按钮的可见性紧跟 HUD 刷新
+	# 玩家位置 / faction / 各面板状态变化都会调 _update_hud，集中刷新避免遗漏
+	_update_explore_action_button()
 
 ## 获取所有角色部队的显示文本
 ## B 重生周期 MVP：首角色（队长）前加 _leader_display_name 前缀，对齐 §7 场景 1
@@ -1156,6 +1205,8 @@ func _refresh_reachable() -> void:
 		)
 	else:
 		_reachable_tiles = {}
+	# E MVP：玩家移动后位置变化 → 触发距离内的候选可能变化 → 刷攻击按钮可见性
+	_update_explore_action_button()
 	queue_redraw()
 
 ## 获取所有阻挡位置（击退状态的关卡格）
@@ -1527,6 +1578,9 @@ func _on_turn_end_settlement() -> void:
 	_turn_manager.end_faction_turn()
 	_turn_manager.current_faction = Faction.ENEMY_1
 	_turn_manager.start_faction_turn(Faction.ENEMY_1)
+	# E MVP：切到敌方回合时显式隐藏【攻击】按钮
+	# _on_faction_turn_started 仅在 PLAYER 回合刷 _update_hud，敌方阶段不会自动触发刷新
+	_update_explore_action_button()
 
 
 # ─────────────────────────────────────────
@@ -1848,25 +1902,23 @@ func _try_trigger_active_battle() -> void:
 	if _characters.is_empty() or _characters[0] == null or not _characters[0].has_troop():
 		_evaluate_party_state()
 		return
-	var candidates: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
-	if candidates.is_empty():
+	# 触发判断：dist ≤ _battle_trigger_range 内有候选 → 才能按 [F]
+	var trigger_candidates: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
+	if trigger_candidates.is_empty():
 		return
-	# 补给检查对照 _active_battle_supply_cost（可配置）；写死 <= 0 在配置改成 2 时会让 _supply==1 误入战
+	# 补给检查对照 _active_battle_supply_cost（可配置）；当前默认 0 = 不消耗，分支不会拦截
 	if _supply < _active_battle_supply_cost:
 		_show_notice("补给不足，无法主动进入战斗")
 		return
-	# 多包：MVP 选最近的；候选 > 1 时给 push_warning 标记 P1 待跟踪（UI 退化为目标选择）
-	var picked: LevelSlot = candidates[0]
-	if candidates.size() > 1:
-		var best_dist: int = absi(picked.position.x - _unit.position.x) + absi(picked.position.y - _unit.position.y)
-		for i in range(1, candidates.size()):
-			var c: LevelSlot = candidates[i]
-			var d: int = absi(c.position.x - _unit.position.x) + absi(c.position.y - _unit.position.y)
-			if d < best_dist:
-				best_dist = d
-				picked = c
-		push_warning("WorldMap._try_trigger_active_battle: 候选包 > 1 暂选最近，P1 待加目标选择面板")
-	_start_battle_session([picked] as Array[LevelSlot])
+	# 入战范围（用户拍板 2026-05-08）：所有 dist ≤ _battle_arena_range（=6）战场范围内的敌方包都参战
+	# 替代原 §3.1 "仅选定包入战" 设计——避免战斗中战场内还有敌方但没参战的尴尬
+	# 触发判断仍用 _battle_trigger_range（=3），玩家必须靠近才能触发
+	var packs_in_arena: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_arena_range)
+	if packs_in_arena.is_empty():
+		# 边缘情况：触发判断通过但 arena 范围扫描却空（理论不可能，trigger_range ≤ arena_range）
+		# 兜底走 trigger_candidates 不至于触发后无人参战
+		packs_in_arena = trigger_candidates
+	_start_battle_session(packs_in_arena)
 
 
 ## BattleSession 状态变化 sink：刷新战场叠加 + HUD
@@ -2888,6 +2940,57 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			# Q 键：放弃流程
 			elif key.keycode == KEY_Q:
 				_on_abandon()
+
+
+## 探索态【攻击】按钮点击 sink：等价于按 [F]
+## 同样守卫由 _handle_f_key 内部处理（保持单一入口避免守卫漂移）
+func _on_explore_attack_pressed() -> void:
+	_handle_f_key()
+
+
+## 刷新探索态【攻击】按钮可见性
+##
+## 显示条件（全部满足）：
+##   - 不在战斗中
+##   - 不在游戏结束 / 移动动画 / 昏迷过渡 / 各面板打开
+##   - 当前是 PLAYER 回合
+##   - 敌方移动阶段未在执行
+##   - 玩家位置 dist ≤ _battle_trigger_range 内有可交互敌方包
+##
+## 调用时机：_update_hud / _refresh_reachable / sink 末尾 / faction 切换 / 战斗结束
+## 这些点覆盖了所有可能让条件变化的场景
+func _update_explore_action_button() -> void:
+	if _explore_attack_btn == null:
+		return
+	var should_show: bool = _can_show_explore_attack()
+	_explore_attack_btn.visible = should_show
+
+
+## 探索态【攻击】按钮可见性条件评估
+## 抽出独立函数避免在 _update_explore_action_button 里堆守卫表达式
+func _can_show_explore_attack() -> bool:
+	if _is_in_battle():
+		return false
+	if _game_finished or _is_moving or _is_in_coma or _is_camping:
+		return false
+	if _battle_ui != null and _battle_ui.is_pending:
+		return false
+	if _manage_ui != null and _manage_ui.is_open:
+		return false
+	if _build_panel_ui != null and _build_panel_ui.is_open:
+		return false
+	if _event_panel != null and _event_panel.is_open:
+		return false
+	if _enemy_movement != null and _enemy_movement.is_moving():
+		return false
+	if _turn_manager == null or _turn_manager.current_faction != Faction.PLAYER:
+		return false
+	if _unit == null:
+		return false
+	if _characters.is_empty() or _characters[0] == null or not _characters[0].has_troop():
+		return false
+	var candidates: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
+	return not candidates.is_empty()
 
 
 ## E MVP [F] 键 sink：探索态触发主动战斗 / 战斗态尝试手动退出
