@@ -1793,6 +1793,23 @@ func _get_packs_in_range(origin: Vector2i, search_range: int) -> Array[LevelSlot
 	return result
 
 
+## 检查指定格上是否有正在参战的敌方 LevelSlot
+##
+## 战斗中两个独立视觉层（探索态 LevelSlot 红菱形 + BattleUnit 红圆形）会重叠在 LevelSlot 原格，
+## 看起来像"敌方分身"。此 helper 让 _draw_tile 在战斗中跳过参战 LevelSlot 的渲染，
+## 让战场内视觉只剩 BattleUnit 圆形 + HP 条
+##
+## 战斗结束 sink 调 _level_slots.erase + 清空 _battle_session 后，本函数自然返回 false，
+## _draw_tile 恢复正常渲染
+func _is_pack_in_battle(pos: Vector2i) -> bool:
+	if _battle_session == null:
+		return false
+	for pack in _battle_session.participating_packs:
+		if pack != null and pack.position == pos:
+			return true
+	return false
+
+
 ## 在战场上（含玩家方 / 敌方）查找指定格上的存活单位
 ## _handle_click 战斗态分流用：点击格 → 是否敌方单位 → 攻击；否则当作移动目标
 func _get_battle_unit_at_pos(pos: Vector2i) -> BattleUnit:
@@ -3242,6 +3259,11 @@ func _draw_tile(x: int, y: int) -> void:
 		if level != null:
 			# 正在移动的关卡跳过静态渲染（由 _draw_enemy_move_marker 负责）
 			if level == _enemy_movement.get_moving_level():
+				return
+			# E MVP 战斗态：参战 LevelSlot 跳过敌方关卡视觉，让 BattleUnit 圆形独占视觉
+			# 避免 LevelSlot 红菱形 + BattleUnit 红圆形重叠"敌方分身"观感
+			# 战斗结束 sink 清理 _level_slots 后本格自然不再走入这个分支
+			if _is_pack_in_battle(pos):
 				return
 			is_enemy = true
 			slot_color = ENEMY_SLOT_COLOR
