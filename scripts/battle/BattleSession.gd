@@ -90,7 +90,32 @@ var damage_increment: float = 0.0
 var on_battle_ended: Callable = Callable()
 
 ## 状态变化时回调（HUD redraw 触发）；无参数
+## 保留作"无明确事件的状态刷新"通道（可达 / 可攻击格变化等）
 var on_redraw_requested: Callable = Callable()
+
+# ─────────────────────────────────────
+# 行动事件回调（入口 1.2 信号粒度扩展）
+# 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §5 改动 1
+# 视觉层（WorldMap）据此调度 Tween / 飘字；BattleSession 数据层不感知动画
+# ─────────────────────────────────────
+
+## 单位移动；签名 func(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector2i) -> void
+var on_unit_moved: Callable = Callable()
+
+## 单位攻击；签名 func(actor, target: BattleUnit, damage: int, counter_factor: float, altitude_diff: int) -> void
+var on_unit_attacked: Callable = Callable()
+
+## 单位跳过；签名 func(actor: BattleUnit) -> void
+var on_unit_skipped: Callable = Callable()
+
+## 新一轮玩家回合开启；签名 func(battle_round: int) -> void
+var on_round_started: Callable = Callable()
+
+## 阶段切换；签名 func(new_phase: int) -> void（取值见 Phase 枚举）
+var on_phase_changed: Callable = Callable()
+
+## 单位死亡（hp 跌至 0）；签名 func(unit: BattleUnit) -> void
+var on_unit_died: Callable = Callable()
 
 
 # ─────────────────────────────────────
@@ -246,8 +271,10 @@ func try_player_move(target_pos: Vector2i) -> bool:
 	if not reachable.has(target_pos):
 		return false
 	# 更新位置；occupied 字典在每帧重新由 BattleSession 维护无需手动同步（_bfs_reachable 实时查 enemy/player_units）
+	var from_pos: Vector2i = actor.battle_position
 	actor.battle_position = target_pos
 	actor.has_moved = true
+	_emit_unit_moved(actor, from_pos, target_pos)
 	_request_redraw()
 	return true
 
@@ -278,6 +305,10 @@ func try_player_attack(target: BattleUnit) -> Dictionary:
 	var damage: int = _calc_attack_damage(actor, target)
 	target.troop.take_damage(damage)
 	actor.has_attacked = true
+	# 入口 1.2：先 emit 攻击事件，再 emit 死亡事件（顺序保证视觉层先播伤害飘字、后播死亡渐隐）
+	_emit_unit_attacked(actor, target, damage)
+	if not target.is_alive():
+		_emit_unit_died(target)
 	_request_redraw()
 	# 胜利 / 昏迷自动结束判定
 	_check_battle_end_after_action()
@@ -291,6 +322,7 @@ func skip_current_unit() -> void:
 		return
 	actor.has_moved = true
 	actor.has_attacked = true
+	_emit_unit_skipped(actor)
 
 
 ## 推进到下一个玩家单位；当前玩家全员行动完 → 切到敌方回合
@@ -307,6 +339,25 @@ func advance_to_next_player_unit() -> void:
 		_start_enemy_turn()
 	else:
 		_request_redraw()
+
+
+## 入口 1.2 补充需求 1：尝试切换当前玩家方 actor 到指定单位
+##
+## 仅在玩家回合 + 战斗未结束 + 目标是我方未行动单位（is_active && is_alive && !has_attacked）时切换
+## 用于战斗内多单位互切（点击未行动队员重选当前 actor）
+##
+## 返回 true = 成功切换；false = 拒绝（条件不满足）
+func try_select_player_unit(unit: BattleUnit) -> bool:
+	if not is_player_turn() or is_ended():
+		return false
+	if unit == null or not unit.is_active or not unit.is_alive() or unit.has_attacked:
+		return false
+	var idx: int = player_units.find(unit)
+	if idx < 0:
+		return false
+	current_actor_index = idx
+	_request_redraw()
+	return true
 
 
 ## 玩家按 [F] 尝试退出战斗（§2.7 手动退出）
@@ -334,6 +385,7 @@ func _start_enemy_turn() -> void:
 		unit.reset_turn_flags()
 	# 寻找第一个可行动的敌方单位
 	current_actor_index = _find_next_actor_index(enemy_units, 0)
+	_emit_phase_changed(Phase.ENEMY_TURN)
 	_request_redraw()
 
 
@@ -359,23 +411,33 @@ func step_enemy_turn() -> bool:
 	var action: int = int(decision.get("action", BattleAI.Action.SKIP))
 	match action:
 		BattleAI.Action.MOVE:
-			actor.battle_position = decision["move_to"] as Vector2i
+			# 入口 1.2：emit on_unit_moved（视觉层据此 Tween）
+			var move_to: Vector2i = decision["move_to"] as Vector2i
+			var from_pos: Vector2i = actor.battle_position
+			actor.battle_position = move_to
 			actor.has_moved = true
 			actor.has_attacked = true  # 仅移动 = 本回合行动结束
+			_emit_unit_moved(actor, from_pos, move_to)
 		BattleAI.Action.ATTACK:
 			# 先移动到指定格（可能与原位相同）
 			var move_to: Vector2i = decision["move_to"] as Vector2i
 			if move_to != actor.battle_position:
+				var from_pos: Vector2i = actor.battle_position
 				actor.battle_position = move_to
 				actor.has_moved = true
+				_emit_unit_moved(actor, from_pos, move_to)
 			# 攻击
 			var target: BattleUnit = decision["target"] as BattleUnit
 			if target != null and target.is_active and target.is_alive():
 				var damage: int = _calc_attack_damage(actor, target)
 				target.troop.take_damage(damage)
+				_emit_unit_attacked(actor, target, damage)
+				if not target.is_alive():
+					_emit_unit_died(target)
 			actor.has_attacked = true
 		BattleAI.Action.SKIP:
 			actor.has_attacked = true
+			_emit_unit_skipped(actor)
 
 	# 胜利 / 昏迷判定（敌方攻击后队长可能跌阈值）
 	_check_battle_end_after_action()
@@ -399,6 +461,9 @@ func _start_player_turn() -> void:
 		unit.reset_turn_flags()
 	current_actor_index = _find_next_actor_index(player_units, 0)
 	battle_round += 1
+	# 入口 1.2：emit on_phase_changed + on_round_started（顺序：先阶段切换、再轮次）
+	_emit_phase_changed(Phase.PLAYER_TURN)
+	_emit_round_started(battle_round)
 	_request_redraw()
 
 
@@ -739,6 +804,54 @@ func _find_next_actor_index(units: Array[BattleUnit], start_index: int) -> int:
 func _request_redraw() -> void:
 	if on_redraw_requested.is_valid():
 		on_redraw_requested.call()
+
+
+## ─────────────────────────────────────
+## 行动事件 emit helper（入口 1.2）
+## 集中封装：is_valid 检查 + 衍生参数（counter_factor / altitude_diff）计算
+## ─────────────────────────────────────
+
+func _emit_unit_moved(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector2i) -> void:
+	if on_unit_moved.is_valid():
+		on_unit_moved.call(actor, from_pos, to_pos)
+
+
+## emit 攻击事件；衍生 counter_factor + altitude_diff（与 _calc_attack_damage 内部口径一致）
+## 视觉层据 counter_factor 编码飘字颜色、据 altitude_diff 显示副标题
+func _emit_unit_attacked(actor: BattleUnit, target: BattleUnit, damage: int) -> void:
+	if not on_unit_attacked.is_valid():
+		return
+	var counter_factor: float = BattleResolver.get_counter_factor(
+		actor.troop.troop_type, target.troop.troop_type
+	)
+	var actor_alt: int = schema.get_terrain_altitude(
+		actor.battle_position.x, actor.battle_position.y
+	)
+	var target_alt: int = schema.get_terrain_altitude(
+		target.battle_position.x, target.battle_position.y
+	)
+	var altitude_diff: int = actor_alt - target_alt
+	on_unit_attacked.call(actor, target, damage, counter_factor, altitude_diff)
+
+
+func _emit_unit_skipped(actor: BattleUnit) -> void:
+	if on_unit_skipped.is_valid():
+		on_unit_skipped.call(actor)
+
+
+func _emit_unit_died(unit: BattleUnit) -> void:
+	if on_unit_died.is_valid():
+		on_unit_died.call(unit)
+
+
+func _emit_phase_changed(new_phase: int) -> void:
+	if on_phase_changed.is_valid():
+		on_phase_changed.call(new_phase)
+
+
+func _emit_round_started(round_num: int) -> void:
+	if on_round_started.is_valid():
+		on_round_started.call(round_num)
 
 
 ## 曼哈顿距离

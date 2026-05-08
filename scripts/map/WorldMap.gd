@@ -389,6 +389,29 @@ var _battle_session: BattleSession = null
 ## 通过 _battle_session.on_redraw_requested 接收 redraw 请求并刷新 HUD 内容
 var _battle_hud: BattleHUD = null
 
+## 入口 1.2 战斗动画状态：BattleUnit → 像素偏移（叠加在 battle_position*TILE_SIZE 之上）
+## 用于移动 Tween / 攻击推冲 / 颤抖；动画完成后 erase 自动恢复原位
+var _battle_unit_visual_offsets: Dictionary = {}
+
+## 入口 1.2 战斗动画状态：BattleUnit → alpha（0.0~1.0）
+## 死亡渐隐过程中的单位；_draw_battle_overlay 末尾单独画半透明圆，0.3s 后字典移除
+var _battle_dying_units: Dictionary = {}
+
+## 入口 1.2 动画并发计数：> 0 时 BattleHUD 锁输入，回到 0 时解锁
+## 同一 anim runner 内启动的多个 Tween（推冲 + 颤抖 + 飘字 + HP）各 begin/end 一次
+## 注：飘字 BattleFloatText 是独立异步生命周期，**不计入 anim_count**
+var _battle_anim_count: int = 0
+
+## 入口 1.2 P1-1/1-2 修复：动画串行化队列
+## sink 不立即启动 Tween 而是入队；前一个 anim runner 全部 _end 后 _drain 出下一个
+## 解决：① 敌方 step 间动画重叠 ② 同一 actor move + attack 偏移互覆盖
+var _battle_anim_queue: Array[Callable] = []
+
+## 入口 1.2 P1-5 修复：BattleUnit → 显示中的 HP（float 便于补间）
+## 攻击 sink 启动 Tween 从旧值平滑过渡到新值；_draw_battle_hp_bar 优先读此字典
+## 不在字典时（无补间中）直接读 troop.current_hp，保持现状逻辑兼容
+var _battle_displayed_hps: Dictionary = {}
+
 ## E 战斗就地展开 MVP：探索态【攻击】按钮
 ## 仅在玩家回合 + 触发距离内有可交互敌方包 + 非战斗态时显示
 ## 点击 = _try_trigger_active_battle（与 [F] 键同语义）
@@ -1103,6 +1126,10 @@ func _handle_click(screen_pos: Vector2) -> void:
 ##   - has_attacked = true → advance_to_next_player_unit
 ##   - 否则保留当前 actor 让玩家继续操作（先移动后攻击）
 func _handle_battle_click(grid_pos: Vector2i) -> void:
+	# 入口 1.2 P1-3 修复：动画期间锁玩家点击（HUD 按钮已锁，但玩家可能直接点地图触发行动）
+	# 等所有 anim Tween 完成后再放行；防止时序错乱（移动 Tween 中又触发新移动 / 攻击）
+	if _battle_anim_count > 0 or not _battle_anim_queue.is_empty():
+		return
 	if _battle_session == null or _battle_session.is_ended():
 		return
 	if not _battle_session.is_player_turn():
@@ -1111,8 +1138,21 @@ func _handle_battle_click(grid_pos: Vector2i) -> void:
 	if actor == null:
 		return
 
-	# 优先级 1：点击敌方单位且在攻击范围内 → 攻击
 	var hit_unit: BattleUnit = _get_battle_unit_at_pos(grid_pos)
+
+	# 入口 1.2 补充需求 1：优先级 0 —— 点击我方未行动单位 → 切换为当前 actor
+	# 条件：同阵营 + 非自身 + 未行动；切换后 HUD 刷新让按钮可用性 / 状态文本同步
+	if hit_unit != null \
+			and hit_unit.owner_faction == actor.owner_faction \
+			and hit_unit != actor \
+			and not hit_unit.has_attacked:
+		if _battle_session.try_select_player_unit(hit_unit):
+			queue_redraw()
+			if _battle_hud != null:
+				_battle_hud.refresh(_battle_session)
+		return
+
+	# 优先级 1：点击敌方单位且在攻击范围内 → 攻击
 	if hit_unit != null and hit_unit.owner_faction != actor.owner_faction:
 		var targets: Array[BattleUnit] = _battle_session.get_attackable_targets()
 		if targets.has(hit_unit):
@@ -1838,8 +1878,7 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 	# 钳位防御 _active_battle_supply_cost > _supply 时不进入负数（被动战斗 E4 路径同样适用）
 	_supply = maxi(0, _supply - _active_battle_supply_cost)
 	_battle_session = BattleSession.new()
-	_battle_session.on_battle_ended = _on_battle_session_ended
-	_battle_session.on_redraw_requested = _on_battle_redraw_requested
+	_bind_battle_session_sinks()
 	_battle_session.start(
 		_characters,
 		_unit.position,
@@ -1877,8 +1916,7 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		return
 	_supply = maxi(0, _supply - _passive_battle_supply_cost)
 	_battle_session = BattleSession.new()
-	_battle_session.on_battle_ended = _on_battle_session_ended
-	_battle_session.on_redraw_requested = _on_battle_redraw_requested
+	_bind_battle_session_sinks()
 	_battle_session.start(
 		_characters,
 		_unit.position,
@@ -1944,6 +1982,336 @@ func _on_battle_redraw_requested() -> void:
 		_battle_hud.refresh(_battle_session)
 
 
+## 注入 BattleSession 所有 sink（入口 1.2 信号粒度扩展后集中管理）
+## 主动战斗 / 被动战斗两路径都通过本 helper 绑定，避免重复维护两份字段赋值
+func _bind_battle_session_sinks() -> void:
+	if _battle_session == null:
+		return
+	_battle_session.on_battle_ended = _on_battle_session_ended
+	_battle_session.on_redraw_requested = _on_battle_redraw_requested
+	# 入口 1.2 信号粒度扩展（设计 §5 改动 1）
+	_battle_session.on_unit_moved = _on_battle_unit_moved
+	_battle_session.on_unit_attacked = _on_battle_unit_attacked
+	_battle_session.on_unit_skipped = _on_battle_unit_skipped
+	_battle_session.on_unit_died = _on_battle_unit_died
+	_battle_session.on_phase_changed = _on_battle_phase_changed
+	_battle_session.on_round_started = _on_battle_round_started
+
+
+## ─────────────────────────────────────
+## 入口 1.2 战斗动画并发控制 + 串行队列（设计 §5 改动 6 / 行动间序列化）
+##
+## 设计意图：
+##   - 同一 anim runner 内的多个 Tween（推冲 + 颤抖 + HP 补间）并行播放，整体作为一个 anim
+##   - 不同行动的 anim 通过 queue 串行：避免敌方"先移动后攻击"两个事件 emit 时偏移互覆盖
+##   - HUD 锁输入由 anim_count 决定（>0 锁，归零解锁）
+##
+## 飘字（BattleFloatText）单独走异步生命周期，不计入 anim_count、不入 queue
+## （设计 §3 飘字"1.0s 不阻塞下一行动"）
+## ─────────────────────────────────────
+
+func _begin_battle_anim() -> void:
+	_battle_anim_count += 1
+	if _battle_anim_count == 1 and _battle_hud != null:
+		_battle_hud.set_actions_enabled(false)
+
+
+func _end_battle_anim() -> void:
+	_battle_anim_count = maxi(0, _battle_anim_count - 1)
+	if _battle_anim_count == 0:
+		if _battle_hud != null:
+			_battle_hud.set_actions_enabled(true)
+		# 优先排队中的下一个动画；queue 空且仍敌方回合 → 推下一个 step
+		if not _battle_anim_queue.is_empty():
+			_drain_battle_anim_queue()
+		else:
+			_try_schedule_next_enemy_step()
+
+
+## 入队一个 anim runner 并尝试启动；runner 必须自身负责 _begin_battle_anim / _end_battle_anim 配对
+func _enqueue_battle_anim(runner: Callable) -> void:
+	_battle_anim_queue.append(runner)
+	# 当前空闲 → 立即出队执行；否则等 _end_battle_anim 触发 drain
+	if _battle_anim_count == 0:
+		_drain_battle_anim_queue()
+
+
+## 出队一个 anim runner 并执行；调用前应保证 _battle_anim_count == 0
+func _drain_battle_anim_queue() -> void:
+	if _battle_anim_count > 0:
+		return
+	if _battle_anim_queue.is_empty():
+		return
+	var runner: Callable = _battle_anim_queue.pop_front()
+	runner.call()
+
+
+## 调度下一个敌方 step：仅在 anim 完成 + queue 空 + 仍敌方回合时启动 0.18s 间隔 timer
+## 由 _end_battle_anim 在 anim_count 归零后调用，或 _run_enemy_turn_async 在 step 无 anim 时兜底
+func _try_schedule_next_enemy_step() -> void:
+	if _battle_session == null or _battle_session.is_ended():
+		return
+	if not _battle_session.is_enemy_turn():
+		return
+	if _battle_anim_count > 0 or not _battle_anim_queue.is_empty():
+		return
+	var t: SceneTreeTimer = get_tree().create_timer(BATTLE_ENEMY_STEP_GAP)
+	t.timeout.connect(_run_enemy_turn_async)
+
+
+## ─────────────────────────────────────
+## 入口 1.2 行动事件 sink（接 BattleSession 信号 → 入队 anim runner）
+## 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §5 改动 2
+##
+## 共同模式：sink 仅做参数捕获 + 入队；实际 Tween 启动在 _run_xxx_anim 内
+## 入队 + 串行化保证：同一 actor 的连续行动（敌方 ATTACK 含 move + attack）不会偏移互覆盖
+## ─────────────────────────────────────
+
+## 入队"立即占位"原则（修跑测发现的视觉跳点）：
+## sink 触发时 BattleSession 已更新数据（actor.battle_position / troop.current_hp / hp ≤ 0），
+## 但 anim runner 因前一个动画还在跑而排队。在 runner 出队前的窗口期，_draw 会用最新数据
+## 渲染（actor 闪现 to_pos / HP 条跳新值 / 单位直接消失）。
+##
+## 修复：sink 入队时立即设视觉状态字典（offset / displayed_hp / dying_alpha），
+##       runner 出队后只负责启动 Tween。
+
+func _on_battle_unit_moved(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector2i) -> void:
+	if actor == null or from_pos == to_pos:
+		queue_redraw()
+		return
+	# 立即占位：把视觉偏移设为 (from - to)，让 _draw 显示在 from_pos
+	# 否则若前一个 anim 还在跑，actor 会先闪现在 to_pos 一段时间才回到 from_pos 开始 Tween
+	var initial_offset: Vector2 = Vector2(
+		float((from_pos.x - to_pos.x) * TILE_SIZE),
+		float((from_pos.y - to_pos.y) * TILE_SIZE)
+	)
+	_battle_unit_visual_offsets[actor] = initial_offset
+	queue_redraw()
+	var runner: Callable = func() -> void: _run_move_anim(actor, from_pos, to_pos)
+	_enqueue_battle_anim(runner)
+
+
+func _on_battle_unit_attacked(
+	actor: BattleUnit, target: BattleUnit,
+	damage: int, counter_factor: float, altitude_diff: int
+) -> void:
+	if actor == null or target == null:
+		queue_redraw()
+		return
+	# HP 补间起点：补间未完成时取字典中的"显示中 HP"，否则取攻击前的 hp（current_hp + damage）
+	var hp_before: float = float(_battle_displayed_hps.get(target, target.troop.current_hp + damage))
+	var hp_after: float = float(target.troop.current_hp)
+	# 立即占位：HP 条锁在旧值，runner 启动时再 Tween 到新值
+	# 否则若前一个 anim 还在跑，HP 条会先跳到新值再回到旧值补间，体感"双跳"
+	_battle_displayed_hps[target] = hp_before
+	queue_redraw()
+	var runner: Callable = func() -> void:
+		_run_attack_anim(actor, target, damage, counter_factor, altitude_diff, hp_before, hp_after)
+	_enqueue_battle_anim(runner)
+
+
+func _on_battle_unit_skipped(actor: BattleUnit) -> void:
+	if actor == null:
+		queue_redraw()
+		return
+	# 跳过 actor 的 battle_position 不变，无需占位
+	var runner: Callable = func() -> void: _run_skip_anim(actor)
+	_enqueue_battle_anim(runner)
+
+
+func _on_battle_unit_died(unit: BattleUnit) -> void:
+	if unit == null:
+		queue_redraw()
+		return
+	# 立即占位：unit hp 已 ≤ 0，is_alive() 为 false，_draw_battle_unit 早期 return
+	# 不占位则 runner 出队前单位"消失"；占位后渲染走 _draw_battle_dying_unit 半透明圆
+	_battle_dying_units[unit] = 1.0
+	queue_redraw()
+	var runner: Callable = func() -> void: _run_die_anim(unit)
+	_enqueue_battle_anim(runner)
+
+
+## 阶段切换 sink（MVP 暂 noop；接口留给未来阶段切换横幅 / 提示音等扩展）
+func _on_battle_phase_changed(_new_phase: int) -> void:
+	queue_redraw()
+
+
+## 新一轮玩家回合 sink（MVP 暂 noop；接口留给未来轮次飘字 / HUD 提示）
+func _on_battle_round_started(_round_num: int) -> void:
+	queue_redraw()
+
+
+## ─────────────────────────────────────
+## 入口 1.2 anim runner 实现
+## 每个 runner 调用 _begin_battle_anim 一次（每个 Tween）+ 完成回调 _end_battle_anim
+## ─────────────────────────────────────
+
+## 移动 runner：sink 已占位 offset = (from - to)*TILE_SIZE；runner 内 Tween 该值 → Vector2.ZERO
+## 兜底：未占位时（直接调用场景）再设一次
+func _run_move_anim(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector2i) -> void:
+	var initial_offset: Vector2 = Vector2(
+		float((from_pos.x - to_pos.x) * TILE_SIZE),
+		float((from_pos.y - to_pos.y) * TILE_SIZE)
+	)
+	if not _battle_unit_visual_offsets.has(actor):
+		_battle_unit_visual_offsets[actor] = initial_offset
+	_begin_battle_anim()
+	queue_redraw()
+	var tween: Tween = create_tween()
+	tween.tween_method(
+		func(progress: float) -> void:
+			_battle_unit_visual_offsets[actor] = initial_offset.lerp(Vector2.ZERO, progress)
+			queue_redraw(),
+		0.0, 1.0, BATTLE_MOVE_TWEEN_DURATION
+	)
+	tween.tween_callback(func() -> void:
+		_battle_unit_visual_offsets.erase(actor)
+		_end_battle_anim()
+		queue_redraw()
+	)
+
+
+## 攻击 runner：actor 推冲 + 回弹（串行）；target 颤抖（并行）；飘字 + HP 补间
+func _run_attack_anim(
+	actor: BattleUnit, target: BattleUnit,
+	damage: int, counter_factor: float, altitude_diff: int,
+	hp_before: float, hp_after: float
+) -> void:
+	# 推冲方向：单位差 / 曼哈顿距离（远程兵种斜攻时按斜向单位向量推冲）
+	var diff: Vector2i = target.battle_position - actor.battle_position
+	var dir: Vector2 = Vector2.ZERO
+	var manhattan_d: int = absi(diff.x) + absi(diff.y)
+	if manhattan_d > 0:
+		dir = Vector2(float(diff.x), float(diff.y)) / float(manhattan_d)
+	var thrust_offset: Vector2 = dir * float(TILE_SIZE) * BATTLE_THRUST_DISTANCE_RATIO
+
+	# actor 推冲 + 回弹
+	_begin_battle_anim()
+	var actor_set_offset: Callable = func(off: Vector2) -> void:
+		_battle_unit_visual_offsets[actor] = off
+		queue_redraw()
+	var actor_tween: Tween = create_tween()
+	actor_tween.tween_method(
+		func(p: float) -> void: actor_set_offset.call(thrust_offset * p),
+		0.0, 1.0, BATTLE_THRUST_DURATION
+	)
+	actor_tween.tween_method(
+		func(p: float) -> void: actor_set_offset.call(thrust_offset * (1.0 - p)),
+		0.0, 1.0, BATTLE_THRUST_DURATION
+	)
+	actor_tween.tween_callback(func() -> void:
+		_battle_unit_visual_offsets.erase(actor)
+		_end_battle_anim()
+		queue_redraw()
+	)
+
+	# target 颤抖（与推冲并行）
+	_begin_battle_anim()
+	var shake_tween: Tween = create_tween()
+	shake_tween.tween_method(
+		func(p: float) -> void:
+			_battle_unit_visual_offsets[target] = Vector2(
+				BATTLE_SHAKE_AMPLITUDE * sin(p * TAU * BATTLE_SHAKE_OSCILLATIONS),
+				0.0
+			)
+			queue_redraw(),
+		0.0, 1.0, BATTLE_SHAKE_DURATION
+	)
+	shake_tween.tween_callback(func() -> void:
+		_battle_unit_visual_offsets.erase(target)
+		_end_battle_anim()
+		queue_redraw()
+	)
+
+	# HP 平滑过渡（P1-5 修复）
+	_begin_battle_anim()
+	_battle_displayed_hps[target] = hp_before
+	var hp_tween: Tween = create_tween()
+	hp_tween.tween_method(
+		func(v: float) -> void:
+			_battle_displayed_hps[target] = v
+			queue_redraw(),
+		hp_before, hp_after, BATTLE_HP_TWEEN_DURATION
+	)
+	hp_tween.tween_callback(func() -> void:
+		_battle_displayed_hps.erase(target)
+		_end_battle_anim()
+		queue_redraw()
+	)
+
+	# 飘字（异步独立生命周期，不入 anim_count）
+	var float_pos: Vector2 = Vector2(
+		float(target.battle_position.x * TILE_SIZE) + float(TILE_SIZE) * 0.5,
+		float(target.battle_position.y * TILE_SIZE) - 4.0
+	)
+	BattleFloatText.spawn_damage(
+		self, float_pos, str(damage),
+		_altitude_subtitle(altitude_diff),
+		_attack_float_color(counter_factor),
+		BATTLE_FLOAT_DAMAGE_DURATION
+	)
+
+
+## 跳过 runner：actor 头顶飘字 "跳过" + 锁 HUD 0.6s 等飘字播完
+func _run_skip_anim(actor: BattleUnit) -> void:
+	var float_pos: Vector2 = Vector2(
+		float(actor.battle_position.x * TILE_SIZE) + float(TILE_SIZE) * 0.5,
+		float(actor.battle_position.y * TILE_SIZE) - 4.0
+	)
+	BattleFloatText.spawn_text(
+		self, float_pos, "跳过", BATTLE_FLOAT_COLOR_SKIP,
+		BATTLE_FLOAT_SKIP_DURATION
+	)
+	_begin_battle_anim()
+	var skip_tween: Tween = create_tween()
+	skip_tween.tween_interval(BATTLE_FLOAT_SKIP_DURATION)
+	skip_tween.tween_callback(func() -> void:
+		_end_battle_anim()
+		queue_redraw()
+	)
+
+
+## 死亡 runner：alpha 1 → 0 渐隐 0.3s 后从 _battle_dying_units 字典移除
+## sink 已占位 alpha=1.0，runner 内仅启动 Tween（兜底再赋一次防御直接调用场景）
+func _run_die_anim(unit: BattleUnit) -> void:
+	if not _battle_dying_units.has(unit):
+		_battle_dying_units[unit] = 1.0
+	_begin_battle_anim()
+	queue_redraw()
+	var fade_tween: Tween = create_tween()
+	fade_tween.tween_method(
+		func(a: float) -> void:
+			_battle_dying_units[unit] = a
+			queue_redraw(),
+		1.0, 0.0, BATTLE_DIE_DURATION
+	)
+	fade_tween.tween_callback(func() -> void:
+		_battle_dying_units.erase(unit)
+		_end_battle_anim()
+		queue_redraw()
+	)
+
+
+## counter_factor → 飘字主行颜色（设计 §8 飘字色板）
+func _attack_float_color(counter_factor: float) -> Color:
+	if counter_factor > 1.0 + BATTLE_COUNTER_FACTOR_EPS:
+		return BATTLE_FLOAT_COLOR_ADV
+	if counter_factor < 1.0 - BATTLE_COUNTER_FACTOR_EPS:
+		return BATTLE_FLOAT_COLOR_DIS
+	return BATTLE_FLOAT_COLOR_NEUTRAL
+
+
+## altitude_diff → 飘字副行字符串（"+X% 高度" / "-X% 高度" / 空）
+##   X = |altitude_diff| * terrain_altitude_step * 100，与 BattleResolver 伤害修正口径一致
+func _altitude_subtitle(altitude_diff: int) -> String:
+	if altitude_diff == 0:
+		return ""
+	var pct: int = int(round(absf(float(altitude_diff)) * _terrain_altitude_step * 100.0))
+	if altitude_diff > 0:
+		return "+%d%% 高度" % pct
+	return "-%d%% 高度" % pct
+
+
 ## 战斗结束时把战斗内队长位置同步回探索态（设计 §2.8 / §3.4 "玩家位置保持队长当前格"）
 ##
 ## 玩家可能在战斗中移动队长几格；战斗结束后探索态单位应停在队长当前 battle_position
@@ -1976,6 +2344,14 @@ func _sync_world_unit_from_battle_leader() -> void:
 ##
 ## 收尾通用：清空 _battle_session / 隐藏 HUD / 重置移动力 / 刷新可达
 func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
+	# 入口 1.2 P1-4 修复：清理所有动画状态字典 / 计数 / 队列
+	# Tween 完成回调可能在战斗结束后异步触发，但回调内的 erase / count -= 都对清空后的字典安全
+	# 不主动 kill Tween：让 Tween 自然跑完，回调即 noop（字典已空 + count 已 0）
+	_battle_unit_visual_offsets.clear()
+	_battle_dying_units.clear()
+	_battle_displayed_hps.clear()
+	_battle_anim_count = 0
+	_battle_anim_queue.clear()
 	# 隐藏 HUD（提前；防止 sink 中 push_event / notice 时 HUD 仍可见干扰）
 	if _battle_hud != null:
 		_battle_hud.hide_hud()
@@ -2020,29 +2396,18 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 				_schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
 				_original_slot_types.erase(lvpos)
 
-		# 3. 轮次推进：每消灭一个包调一次 on_level_cleared
-		# advance_round 失败（全部轮次通关）时跳出循环，让下方通用收尾仍然走
-		# 旧版直接 return 会绕过"切回 PLAYER 回合"，被动战斗清完末轮时 current_faction
-		# 卡在 ENEMY_1（_on_all_rounds_cleared 已弱化为提示，不再 _game_finished = true）
+		# 3. 轮次计数累加（仅 HUD"已清 X/Y"展示用）
+		# P0 第一阶段重设计后（2026-05-09 跑测发现）：
+		#   - 整局胜负锚点 = 队长命数 + 攻占敌方 CORE_TOWN（VictoryJudge）
+		#   - 轮次完成的弹板 / 奖励 / 提示（_grant_round_rewards / _show_round_hint / advance_round）已废弃
+		#     这些是 B MVP 时代的"消灭关卡数 = 轮次推进 = 整局进度"逻辑，与 P0 新设计冲突
+		#   - 仅保留 on_level_cleared 累加，让 HUD 计数同步；不再触发任何弹板 / 奖励 / 推进
+		#   - 轮次系统未来重设计 / 完全拆除入待跟踪 P3
 		if _round_manager != null:
-			var rounds_finished: bool = false
 			for pack_v in defeated_packs:
-				var pack: LevelSlot = pack_v as LevelSlot
-				if pack == null:
+				if pack_v as LevelSlot == null:
 					continue
-				# pack.is_defeated() 由前面 mark_defeated() 保证 true；BattleSession 数据自洽
-				var round_cleared: bool = _round_manager.on_level_cleared()
-				if round_cleared:
-					_grant_round_rewards()
-					if not _round_manager.advance_round():
-						# 全部轮次通关；不再走 advance_round / round_hint，但仍走通用收尾
-						rounds_finished = true
-						break
-					_show_round_hint()
-			if rounds_finished:
-				# 全部轮次通关 → _on_all_rounds_cleared 已 push notice；流程不需要 _game_finished
-				# 通用收尾继续执行，保证 current_faction 正确切回 PLAYER
-				pass
+				_round_manager.on_level_cleared()
 
 	# MANUAL_EXIT：不发奖励，敌方残余保留；走通用收尾
 
@@ -2088,10 +2453,13 @@ func _post_player_action_check() -> void:
 			_run_enemy_turn_async()
 
 
-## 敌方回合串行驱动（异步推进 + 帧间插入避免一次性吞行动）
+## 敌方回合串行驱动（异步推进 + 等动画完成才推下一个）
 ##
-## 用 SceneTreeTimer 短暂间隔（0.18s/单位）让玩家能看清每个敌方单位的行动
-## 间隔内 BattleSession.on_redraw_requested 触发 HUD / 战场叠加刷新
+## 入口 1.2 P1-1 修复：
+##   - 不再 step 后立即用固定 0.18s timer 推下一个 step（会与 0.35s 移动 / 0.30s 攻击 Tween 重叠）
+##   - 改为：本次 step 触发 emit → sink 入队 anim runner → runner 完成时 _end_battle_anim 触发
+##     _try_schedule_next_enemy_step（带 BATTLE_ENEMY_STEP_GAP=0.18s 间隔）
+##   - 兜底：若本次 step 没产生任何 anim（BattleAI 极端短路），_battle_anim_count == 0，主动调度
 ##
 ## 战斗结束（_check_battle_end_after_action 命中胜利 / 昏迷）时 step_enemy_turn 返回 false
 ## sink 已在 BattleSession.end 中触发；这里只需停止串行
@@ -2103,10 +2471,11 @@ func _run_enemy_turn_async() -> void:
 	var has_more: bool = _battle_session.step_enemy_turn()
 	if _battle_session == null or _battle_session.is_ended():
 		return
-	if has_more:
-		var t: SceneTreeTimer = get_tree().create_timer(0.18)
-		t.timeout.connect(_run_enemy_turn_async)
-	# has_more = false 时 step_enemy_turn 内部已切回玩家回合，HUD 自动通过 redraw_requested 刷新
+	if not has_more:
+		return
+	# 推下一个 step：若本次 step 启动了 anim（队列非空 / count > 0），等 _end_battle_anim 触发；
+	# 否则（极端：step 无 emit）兜底立即调度
+	_try_schedule_next_enemy_step()
 
 
 # ─── BattleHUD 按钮 sink ───
@@ -2465,20 +2834,13 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 			var orig_type: int = _original_slot_types.get(lvpos, MapSchema.SlotType.NONE) as int
 			_schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
 			_original_slot_types.erase(lvpos)
+	# P0 重设计后：轮次完成弹板 / 奖励 / 提示已废弃，仅保留 on_level_cleared 计数同步
+	# 详见 _on_battle_session_ended VICTORY 分支同样简化处的注释
+	# 注：本函数（_post_battle_settlement）走旧 BattleUI 击退/击败路径，E5 重构后已不被调用
+	#     保留代码与 _on_battle_session_ended 一致，避免 BattleUI 路径未来复活时漏改
 	if defeated and _round_manager != null:
-		var round_cleared: bool = _round_manager.on_level_cleared()
+		_round_manager.on_level_cleared()
 		_update_hud()
-		if round_cleared:
-			_grant_round_rewards()
-			if not _round_manager.advance_round():
-				# 全部轮次通关，即使在敌方移动阶段也直接结束
-				if was_forced:
-					_enemy_movement.finish_phase()
-				return
-			_show_round_hint()
-			if was_forced:
-				_enemy_movement.resume_after_battle()
-			return
 
 	# 敌方移动阶段中，继续处理下一个关卡
 	if was_forced:
@@ -3155,6 +3517,13 @@ func _draw() -> void:
 	# 第 1.7 层：持久 slot 影响范围覆盖层（M4；半透明势力色）
 	_draw_persistent_influence_ranges()
 
+	# 第 1.75 层：敌方威胁圈（入口 1.1；半透明红色叠层，曼哈顿圆 ≤ _battle_trigger_range）
+	# 设计依据：tile-advanture-design/战斗信息传达_探索阶段_MVP.md §5 改动 1
+	# 渲染顺序在持久 slot 影响范围之后、持久 slot 本体之前，确保后续玩家移动范围
+	# （REACHABLE_COLOR 白 alpha 0.18）压在威胁圈（红 alpha 0.20）之上时自然叠加为粉色，
+	# 保留"既能去又危险"的可识别性
+	_draw_enemy_threat_zones()
+
 	# 第 1.8 层：持久 slot 本体标记（M4；外框色块 + 核心城镇金边 + 类型等级文字）
 	_draw_persistent_slots()
 
@@ -3517,6 +3886,55 @@ func _draw_persistent_influence_ranges() -> void:
 						border, M4_INFLUENCE_BORDER_WIDTH)
 
 
+## 绘制敌方威胁圈（入口 1.1 战斗信息传达 探索阶段）
+##
+## 设计依据：tile-advanture-design/战斗信息传达_探索阶段_MVP.md §5 改动 1 / §8 视觉规格基准
+##
+## 行为：
+##   - 遍历 _level_slots，筛选 faction != PLAYER 且 is_interactable() 的候选
+##     （注：LevelSlot 的归属字段是 `faction`，与 PersistentSlot 的 `owner_faction` 名不同；见 Faction.gd 头注）
+##     （is_interactable() 自动排除 REPELLED / DEFEATED 等不可触发战斗的状态）
+##   - 对每个候选，枚举曼哈顿距离 ≤ _battle_trigger_range 的格集合，每格画半透明红
+##   - 多个敌方威胁圈重叠时按调用顺序自然叠加（深红），无特殊合成
+##
+## 视觉规格：
+##   - 颜色 Color(1, 0, 0, 0.20)（红 alpha 0.20）—— 与战斗内攻击范围（红 alpha 0.28）共享色调
+##   - 单格 Rect2(p.x*TILE_SIZE+2, p.y*TILE_SIZE+2, TILE_SIZE-4, TILE_SIZE-4) —— 与玩家移动范围风格一致
+##
+## 战斗态：探索阶段专属信息层，战斗中不画（避免与战场视觉混淆）
+func _draw_enemy_threat_zones() -> void:
+	if _schema == null:
+		return
+	# 战斗态不画：探索阶段专属
+	if _is_in_battle():
+		return
+	const THREAT_COLOR: Color = Color(1, 0, 0, 0.20)
+	for pos in _level_slots:
+		var lv: LevelSlot = _level_slots[pos] as LevelSlot
+		if lv == null:
+			continue
+		if lv.faction == Faction.PLAYER:
+			continue
+		if not lv.is_interactable():
+			continue
+		var origin: Vector2i = pos as Vector2i
+		# 曼哈顿圆枚举：|dx| + |dy| ≤ R
+		for dx in range(-_battle_trigger_range, _battle_trigger_range + 1):
+			var remain: int = _battle_trigger_range - absi(dx)
+			for dy in range(-remain, remain + 1):
+				var p: Vector2i = Vector2i(origin.x + dx, origin.y + dy)
+				# 边界裁剪：超出地图范围不画
+				if p.x < 0 or p.y < 0 or p.x >= _schema.width or p.y >= _schema.height:
+					continue
+				var rect: Rect2 = Rect2(
+					float(p.x * TILE_SIZE + 2),
+					float(p.y * TILE_SIZE + 2),
+					float(TILE_SIZE - 4),
+					float(TILE_SIZE - 4)
+				)
+				draw_rect(rect, THREAT_COLOR)
+
+
 ## 绘制所有持久 slot 的本体标记
 ## UI 重构步骤 1：双层结构 —— 外环势力色 + 内底中性米白 + 核心城镇金边 + 中心徽记
 ##
@@ -3811,6 +4229,10 @@ const BATTLE_ARENA_BORDER_COLOR: Color = Color(1.0, 0.85, 0.0, 0.65)
 const BATTLE_ARENA_BORDER_WIDTH: float = 2.0
 const BATTLE_REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.16)
 const BATTLE_ATTACKABLE_COLOR: Color = Color(1.0, 0.20, 0.20, 0.28)
+## 入口 1.2 跑测补充（2026-05-09）：移动范围加白描边后攻击范围对应加黄描边
+## 选黄色（与 BATTLE_ARENA_BORDER 同色调）避免与敌方阵营红家族 + 红填充叠加导致边界模糊
+const BATTLE_ATTACKABLE_BORDER_COLOR: Color = Color(1.0, 0.85, 0.0, 0.85)
+const BATTLE_ATTACKABLE_BORDER_WIDTH: float = 3.5
 const BATTLE_CURRENT_ACTOR_RING: Color = Color(1.0, 1.0, 1.0, 1.0)
 const BATTLE_CURRENT_ACTOR_RING_WIDTH: float = 3.0
 const BATTLE_HP_BAR_WIDTH: int = 24
@@ -3819,6 +4241,43 @@ const BATTLE_HP_COLOR_FULL: Color = Color(0.20, 0.85, 0.30, 1.0)
 const BATTLE_HP_COLOR_MID: Color = Color(0.95, 0.85, 0.20, 1.0)
 const BATTLE_HP_COLOR_LOW: Color = Color(0.90, 0.25, 0.25, 1.0)
 const BATTLE_HP_BAR_BG: Color = Color(0.0, 0.0, 0.0, 0.55)
+
+# ─────────────────────────────────────
+# 入口 1.2 战斗内反馈（队长银三角 / 兵种字符 / 克制图标）
+# 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §8 视觉规格基准
+# ─────────────────────────────────────
+const BATTLE_LEADER_TRIANGLE_COLOR: Color = Color(0.95, 0.95, 1.0)  ## 队长银三角色（银白）
+const BATTLE_LEADER_TRIANGLE_SIZE: float = 6.0                      ## 三角边长（px）
+const BATTLE_TROOP_LABEL_COLOR: Color = Color(1, 1, 1)              ## 兵种字符白色（高对比）
+const BATTLE_COUNTER_ICON_SIZE: float = 6.0                         ## 克制图标尺寸
+const BATTLE_COUNTER_ICON_GAP: float = 6.0                          ## 左右图标中心水平间距
+const BATTLE_COUNTER_ICON_ADV: Color = Color(0.3, 0.85, 0.3)        ## ▲ 优势绿
+const BATTLE_COUNTER_ICON_DIS: Color = Color(1.0, 0.55, 0.1)        ## ▼ 劣势警示橙
+const BATTLE_COUNTER_ICON_NEUTRAL: Color = Color(0.95, 0.95, 0.95)  ## ● 中性亮白
+const BATTLE_COUNTER_FACTOR_EPS: float = 0.001                      ## counter_factor 浮点比较误差容忍
+const BATTLE_HEAD_OFFSET: float = 8.0                               ## 单位头顶图标距 radius 上方偏移
+## 入口 1.2 补充需求 2：玩家方已行动单位的填充色（灰色），与阵营色形成"已 / 未行动"区分
+## 玩家回合开始时 BattleSession._start_player_turn 调 reset_turn_flags() 全部恢复未行动 → 自动恢复阵营色
+const BATTLE_PLAYER_ACTED_COLOR: Color = Color(0.55, 0.55, 0.55)
+
+# 入口 1.2 战斗动画时长 / 偏移规格（设计文档 §8 时长表）
+const BATTLE_MOVE_TWEEN_DURATION: float = 0.35      ## 移动 Tween 0.35s 直线
+const BATTLE_THRUST_DURATION: float = 0.15          ## 攻击推冲 / 回弹 单段时长
+const BATTLE_SHAKE_DURATION: float = 0.20           ## 目标颤抖时长（与推冲并行）
+const BATTLE_DIE_DURATION: float = 0.30             ## 单位死亡渐隐时长
+const BATTLE_FLOAT_DAMAGE_DURATION: float = 1.0     ## 伤害飘字上飘渐隐时长
+const BATTLE_FLOAT_SKIP_DURATION: float = 0.6       ## 跳过飘字时长
+const BATTLE_HP_TWEEN_DURATION: float = 0.30        ## P1-5：HP 条平滑过渡时长（与攻击推冲完成同节奏）
+const BATTLE_ENEMY_STEP_GAP: float = 0.18           ## 敌方两次 step 之间的最小间隔（让玩家看清 actor 切换）
+const BATTLE_THRUST_DISTANCE_RATIO: float = 0.5     ## 推冲距离 = TILE_SIZE * 该比例（半格）
+const BATTLE_SHAKE_AMPLITUDE: float = 2.0           ## 颤抖振幅（±px）
+const BATTLE_SHAKE_OSCILLATIONS: float = 3.0        ## 颤抖在 shake_duration 内完成的正弦周期数
+
+# 飘字色板（与克制图标色板呼应；设计 §8）
+const BATTLE_FLOAT_COLOR_ADV: Color = Color(0.3, 0.9, 0.3)         ## > 1.0 克制 → 绿
+const BATTLE_FLOAT_COLOR_DIS: Color = Color(1.0, 0.55, 0.1)        ## < 1.0 受克 → 橙
+const BATTLE_FLOAT_COLOR_NEUTRAL: Color = Color(0.9, 0.3, 0.3)     ## = 1.0 中性 → 默认红
+const BATTLE_FLOAT_COLOR_SKIP: Color = Color(0.65, 0.65, 0.65)     ## 跳过飘字 → 灰
 
 
 ## 战场叠加主入口：按层渲染战斗内的所有视觉元素
@@ -3838,16 +4297,41 @@ func _draw_battle_overlay() -> void:
 
 	# 2/3. 当前玩家单位的可达 / 可攻击高亮（仅玩家回合）
 	if _battle_session.is_player_turn():
-		# 可达格（白色 alpha 0.16）
+		# 可达格（白色 alpha 0.16 填充 + 4 邻外边界白描边，复用探索阶段双通道风格）
+		# 修跑测反馈：单层填充 0.16 alpha 在战场背景下不够醒目；加描边强化边界识别
 		var reachable: Array[Vector2i] = _battle_session.get_reachable_for_current()
+		# 转 Dictionary 便于 has() 查邻居（探索阶段同套手法，见第 3514 行 _reachable_tiles）
+		var reach_set: Dictionary = {}
+		for pos in reachable:
+			reach_set[pos] = true
 		for pos in reachable:
 			var rect: Rect2 = Rect2(
 				pos.x * TILE_SIZE + 2, pos.y * TILE_SIZE + 2,
 				TILE_SIZE - 4, TILE_SIZE - 4
 			)
 			draw_rect(rect, BATTLE_REACHABLE_COLOR)
-		# 可攻击目标格（红色 alpha 0.28）
+			# 4 邻外边界描边：邻居不在集合内 → 该侧画线
+			var px: float = float(pos.x * TILE_SIZE)
+			var py: float = float(pos.y * TILE_SIZE)
+			var pw: float = float(TILE_SIZE)
+			if not reach_set.has(Vector2i(pos.x, pos.y - 1)):
+				draw_line(Vector2(px, py), Vector2(px + pw, py),
+					REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+			if not reach_set.has(Vector2i(pos.x, pos.y + 1)):
+				draw_line(Vector2(px, py + pw), Vector2(px + pw, py + pw),
+					REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+			if not reach_set.has(Vector2i(pos.x - 1, pos.y)):
+				draw_line(Vector2(px, py), Vector2(px, py + pw),
+					REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+			if not reach_set.has(Vector2i(pos.x + 1, pos.y)):
+				draw_line(Vector2(px + pw, py), Vector2(px + pw, py + pw),
+					REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+		# 可攻击目标格（红 alpha 0.28 填充 + 4 邻外边界黄描边）
+		# 与移动范围白描边对称的双通道风格；黄描边避免与敌方阵营红 + 红填充叠加导致边界模糊
 		var targets: Array[BattleUnit] = _battle_session.get_attackable_targets()
+		var attack_set: Dictionary = {}
+		for tgt in targets:
+			attack_set[tgt.battle_position] = true
 		for tgt in targets:
 			var p: Vector2i = tgt.battle_position
 			var rect: Rect2 = Rect2(
@@ -3855,6 +4339,22 @@ func _draw_battle_overlay() -> void:
 				TILE_SIZE - 4, TILE_SIZE - 4
 			)
 			draw_rect(rect, BATTLE_ATTACKABLE_COLOR)
+			# 4 邻外边界黄描边（与移动范围同套手法）
+			var ax: float = float(p.x * TILE_SIZE)
+			var ay: float = float(p.y * TILE_SIZE)
+			var aw: float = float(TILE_SIZE)
+			if not attack_set.has(Vector2i(p.x, p.y - 1)):
+				draw_line(Vector2(ax, ay), Vector2(ax + aw, ay),
+					BATTLE_ATTACKABLE_BORDER_COLOR, BATTLE_ATTACKABLE_BORDER_WIDTH)
+			if not attack_set.has(Vector2i(p.x, p.y + 1)):
+				draw_line(Vector2(ax, ay + aw), Vector2(ax + aw, ay + aw),
+					BATTLE_ATTACKABLE_BORDER_COLOR, BATTLE_ATTACKABLE_BORDER_WIDTH)
+			if not attack_set.has(Vector2i(p.x - 1, p.y)):
+				draw_line(Vector2(ax, ay), Vector2(ax, ay + aw),
+					BATTLE_ATTACKABLE_BORDER_COLOR, BATTLE_ATTACKABLE_BORDER_WIDTH)
+			if not attack_set.has(Vector2i(p.x + 1, p.y)):
+				draw_line(Vector2(ax + aw, ay), Vector2(ax + aw, ay + aw),
+					BATTLE_ATTACKABLE_BORDER_COLOR, BATTLE_ATTACKABLE_BORDER_WIDTH)
 
 	# 4/5. 单位渲染 + HP 条（玩家方 → 敌方顺序，确保当前 actor 高亮在最上）
 	var current_actor: BattleUnit = _battle_session.current_actor()
@@ -3863,11 +4363,21 @@ func _draw_battle_overlay() -> void:
 	for u in _battle_session.enemy_units:
 		_draw_battle_unit(u, current_actor)
 
+	# 6. 死亡渐隐单位（入口 1.2；独立渲染层，不经 _draw_battle_unit 早期 return）
+	# _battle_dying_units 内的 BattleUnit hp 已 ≤ 0、is_alive() 为 false，本层用 alpha 渐隐替代消失
+	# P2-2：迭代时复制 keys 防御 Tween 同步 erase 字典的脆弱依赖
+	for dying_unit in _battle_dying_units.keys():
+		if not _battle_dying_units.has(dying_unit):
+			continue
+		_draw_battle_dying_unit(dying_unit as BattleUnit, _battle_dying_units[dying_unit] as float)
+
 
 ## 渲染单个战场单位：圆形阵营色 + 当前 actor 白环 + HP 条
 ##
 ## 未上场（is_active = false）/ 已死（is_alive = false）单位不渲染
 ## 当前 actor（is current）加粗白外环 3px，提示玩家"轮到此单位"
+##
+## 入口 1.2：center 叠加 _battle_unit_visual_offsets[u] 视觉偏移（移动 Tween / 推冲 / 颤抖）
 func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 	if u == null or not u.is_active or not u.is_alive():
 		return
@@ -3875,11 +4385,17 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 		u.battle_position.x * TILE_SIZE + TILE_SIZE * 0.5,
 		u.battle_position.y * TILE_SIZE + TILE_SIZE * 0.5
 	)
+	if _battle_unit_visual_offsets.has(u):
+		center += _battle_unit_visual_offsets[u] as Vector2
 	var radius: float = float(TILE_SIZE - UNIT_MARGIN * 2) * 0.5
 	# 投影
 	draw_circle(center + Vector2(2, 2), radius, UNIT_SHADOW_COLOR)
 	# 阵营色填充
+	# 入口 1.2 补充需求 2：玩家方已行动单位用 BATTLE_PLAYER_ACTED_COLOR（灰）代替阵营色
+	# 玩家回合开始 reset_turn_flags 后 has_attacked = false → 自动恢复阵营色
 	var fill: Color = M4_FACTION_COLORS.get(u.owner_faction, Color.MAGENTA) as Color
+	if u.owner_faction == Faction.PLAYER and u.has_attacked:
+		fill = BATTLE_PLAYER_ACTED_COLOR
 	draw_circle(center, radius, fill)
 	# 当前 actor 加粗白环
 	if u == current_actor and not _battle_session.is_ended():
@@ -3888,16 +4404,165 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 			0.0, TAU,
 			32, BATTLE_CURRENT_ACTOR_RING, BATTLE_CURRENT_ACTOR_RING_WIDTH
 		)
-	# HP 条（单位下方）
-	_draw_battle_hp_bar(center, radius, u.troop)
+	# HP 条（单位下方）—— 入口 1.2 P1-5：传 unit 而非 troop，让函数内部决定是否补间
+	_draw_battle_hp_bar(center, radius, u)
+	# 入口 1.2 视觉层：兵种字符 + 队长银三角 + 克制图标（详见 §8 视觉规格基准）
+	_draw_battle_troop_glyph(center, u.troop)
+	# 队长银三角：仅玩家方 player_units[0] 对应的 BattleUnit 才画（与白环独立轨道，可同时显示）
+	if u.owner_faction == Faction.PLAYER \
+			and not _battle_session.player_units.is_empty() \
+			and u == _battle_session.player_units[0]:
+		_draw_leader_triangle(center, radius)
+	# 克制图标 2 个：仅在敌方单位 + 玩家回合 + 战斗未结束 + 当前 actor 为玩家方时画
+	if u.owner_faction != Faction.PLAYER \
+			and _battle_session.is_player_turn() \
+			and not _battle_session.is_ended() \
+			and current_actor != null \
+			and current_actor.owner_faction == Faction.PLAYER:
+		_draw_counter_icons(center, radius, current_actor, u)
+
+
+## 死亡渐隐单位渲染（入口 1.2 §5 改动 2 配套）
+##
+## 简化策略：渐隐期间仅画半透明阵营色圆 + 兵种字符（不画 HP 条 / 队长三角 / 克制图标 / 白环）
+## - 这些细节随死亡消失即可，避免在死亡 0.3s 内仍出现"克制图标 / 白环"等暗示"还可交互"的元素
+## - alpha 直接乘填充色 / 字色，与字典中维护的 0.0-1.0 渐变值同步
+func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
+	if u == null:
+		return
+	var center: Vector2 = Vector2(
+		u.battle_position.x * TILE_SIZE + TILE_SIZE * 0.5,
+		u.battle_position.y * TILE_SIZE + TILE_SIZE * 0.5
+	)
+	if _battle_unit_visual_offsets.has(u):
+		center += _battle_unit_visual_offsets[u] as Vector2
+	var radius: float = float(TILE_SIZE - UNIT_MARGIN * 2) * 0.5
+	var fill: Color = M4_FACTION_COLORS.get(u.owner_faction, Color.MAGENTA) as Color
+	fill.a *= alpha
+	draw_circle(center, radius, fill)
+	# 兵种字符同步渐隐
+	if _label_font != null and u.troop != null:
+		var full_name: String = TroopData.TROOP_TYPE_NAMES.get(u.troop.troop_type, "?") as String
+		var glyph: String = full_name.substr(0, 1) if full_name.length() > 0 else "?"
+		var label_color: Color = BATTLE_TROOP_LABEL_COLOR
+		label_color.a *= alpha
+		_draw_slot_label(center, glyph, label_color)
+
+
+## 兵种字符：单位中心绘制 "剑/弓/枪/骑/盾" 单字（取自 TroopData.TROOP_TYPE_NAMES 首字）
+## 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §8 视觉规格基准
+##   - 字号 LABEL_FONT_SIZE=12（落在设计要求 12-14 区间）
+##   - 颜色白 Color(1,1,1) 与单位阵营色填充对比
+##   - 玩家方 / 敌方均显示
+func _draw_battle_troop_glyph(center: Vector2, troop: TroopData) -> void:
+	if troop == null or _label_font == null:
+		return
+	var full_name: String = TroopData.TROOP_TYPE_NAMES.get(troop.troop_type, "?") as String
+	# TROOP_TYPE_NAMES 形如 "剑兵" / "弓兵"，取首字以紧凑显示在单位中心
+	var glyph: String = full_name.substr(0, 1) if full_name.length() > 0 else "?"
+	_draw_slot_label(center, glyph, BATTLE_TROOP_LABEL_COLOR)
+
+
+## 队长银三角：单位顶部 6×6 三角（顶点向下）
+## 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §8
+##   - 锚点 center.y - radius - BATTLE_HEAD_OFFSET（与克制图标共用头顶轨道）
+##   - 与当前 actor 白环不冲突：白环画在外圈，三角画在头顶上方
+func _draw_leader_triangle(center: Vector2, radius: float) -> void:
+	var anchor_y: float = center.y - radius - BATTLE_HEAD_OFFSET
+	var half: float = BATTLE_LEADER_TRIANGLE_SIZE * 0.5
+	# 顶点向下：左上 / 右上 / 下顶
+	var p_top_left: Vector2 = Vector2(center.x - half, anchor_y - half)
+	var p_top_right: Vector2 = Vector2(center.x + half, anchor_y - half)
+	var p_bottom: Vector2 = Vector2(center.x, anchor_y + half)
+	draw_polygon(
+		PackedVector2Array([p_top_left, p_top_right, p_bottom]),
+		PackedColorArray([BATTLE_LEADER_TRIANGLE_COLOR])
+	)
+
+
+## 克制图标 2 个：左 = 兵种克制，右 = 地形克制
+## 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §3 / §8
+##   - 兵种克制：BattleResolver.get_counter_factor(actor, target) > / = / < 1.0
+##   - 地形克制：actor 高度 - target 高度 > / = / < 0
+##   - 形状：▲ 优势绿 / ▼ 劣势橙 / ● 中性白
+##   - 锚点 center.y - radius - BATTLE_HEAD_OFFSET（与队长银三角共用轨道，但仅敌方画）
+func _draw_counter_icons(center: Vector2, radius: float, actor: BattleUnit, target: BattleUnit) -> void:
+	if actor == null or actor.troop == null or target == null or target.troop == null:
+		return
+	if _battle_session == null or _battle_session.schema == null:
+		return
+	var anchor_y: float = center.y - radius - BATTLE_HEAD_OFFSET
+	# 兵种克制（左）
+	var counter_factor: float = BattleResolver.get_counter_factor(
+		actor.troop.troop_type, target.troop.troop_type
+	)
+	var left_center: Vector2 = Vector2(center.x - BATTLE_COUNTER_ICON_GAP * 0.5, anchor_y)
+	_draw_counter_glyph(left_center, BATTLE_COUNTER_ICON_SIZE, _factor_to_dir(counter_factor))
+	# 地形克制（右）
+	var schema_ref: MapSchema = _battle_session.schema
+	var actor_alt: int = schema_ref.get_terrain_altitude(
+		actor.battle_position.x, actor.battle_position.y
+	)
+	var target_alt: int = schema_ref.get_terrain_altitude(
+		target.battle_position.x, target.battle_position.y
+	)
+	var altitude_diff: int = actor_alt - target_alt
+	var alt_dir: int = 0
+	if altitude_diff > 0:
+		alt_dir = 1
+	elif altitude_diff < 0:
+		alt_dir = -1
+	var right_center: Vector2 = Vector2(center.x + BATTLE_COUNTER_ICON_GAP * 0.5, anchor_y)
+	_draw_counter_glyph(right_center, BATTLE_COUNTER_ICON_SIZE, alt_dir)
+
+
+## counter_factor → 方向枚举
+##   返回 1 = 优势（>1.0），-1 = 劣势（<1.0），0 = 中性（=1.0 内 EPS 容差）
+func _factor_to_dir(factor: float) -> int:
+	if factor > 1.0 + BATTLE_COUNTER_FACTOR_EPS:
+		return 1
+	if factor < 1.0 - BATTLE_COUNTER_FACTOR_EPS:
+		return -1
+	return 0
+
+
+## 绘制单个克制图标：dir=1 ▲ 绿；dir=-1 ▼ 橙；dir=0 ● 白
+func _draw_counter_glyph(center: Vector2, size: float, dir: int) -> void:
+	var half: float = size * 0.5
+	if dir == 0:
+		# ● 中性：实心圆
+		draw_circle(center, half, BATTLE_COUNTER_ICON_NEUTRAL)
+	elif dir > 0:
+		# ▲ 优势：底在下、顶在上的三角
+		var p_left: Vector2 = Vector2(center.x - half, center.y + half)
+		var p_right: Vector2 = Vector2(center.x + half, center.y + half)
+		var p_top: Vector2 = Vector2(center.x, center.y - half)
+		draw_polygon(
+			PackedVector2Array([p_left, p_right, p_top]),
+			PackedColorArray([BATTLE_COUNTER_ICON_ADV])
+		)
+	else:
+		# ▼ 劣势：底在上、顶在下的三角
+		var p_left: Vector2 = Vector2(center.x - half, center.y - half)
+		var p_right: Vector2 = Vector2(center.x + half, center.y - half)
+		var p_bottom: Vector2 = Vector2(center.x, center.y + half)
+		draw_polygon(
+			PackedVector2Array([p_left, p_right, p_bottom]),
+			PackedColorArray([BATTLE_COUNTER_ICON_DIS])
+		)
 
 
 ## HP 条：背景黑底 + 前景按 hp_ratio 三段配色
 ##   ≥ 0.66 绿；0.33 ~ 0.66 黄；< 0.33 红
-func _draw_battle_hp_bar(center: Vector2, radius: float, troop: TroopData) -> void:
-	if troop == null or troop.max_hp <= 0:
+##
+## 入口 1.2 P1-5 修复：被攻击者补间期间从 _battle_displayed_hps 字典读 hp（float），
+## 平滑过渡到 troop.current_hp；不在字典时直接读 troop.current_hp，与原行为一致
+func _draw_battle_hp_bar(center: Vector2, radius: float, unit: BattleUnit) -> void:
+	if unit == null or unit.troop == null or unit.troop.max_hp <= 0:
 		return
-	var ratio: float = clampf(float(troop.current_hp) / float(troop.max_hp), 0.0, 1.0)
+	var troop: TroopData = unit.troop
+	var displayed_hp: float = _battle_displayed_hps.get(unit, float(troop.current_hp)) as float
+	var ratio: float = clampf(displayed_hp / float(troop.max_hp), 0.0, 1.0)
 	var bar_w: float = float(BATTLE_HP_BAR_WIDTH)
 	var bar_h: float = float(BATTLE_HP_BAR_HEIGHT)
 	var bar_x: float = center.x - bar_w * 0.5

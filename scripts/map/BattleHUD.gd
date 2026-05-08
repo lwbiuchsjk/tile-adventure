@@ -58,6 +58,13 @@ var _attack_btn: Button = null
 var _skip_btn: Button = null
 var _exit_btn: Button = null
 
+## 入口 1.2：战斗动画期间锁输入（设计 §5 改动 6）
+## true 时所有行动按钮强制 disabled，覆盖 refresh 中按 session 状态算出的可用性
+var _actions_locked: bool = false
+
+## 入口 1.2：缓存最近一次 refresh 的 session 引用，set_actions_enabled 解锁时主动 refresh 用
+var _session_ref: BattleSession = null
+
 
 # ─────────────────────────────────────
 # 初始化
@@ -169,6 +176,8 @@ func show_hud(session: BattleSession) -> void:
 		return
 	_root.visible = true
 	is_open = true
+	# 战斗启动时清除残留锁定（防止上一场战斗结束时仍在锁动画状态）
+	_actions_locked = false
 	refresh(session)
 
 
@@ -177,6 +186,26 @@ func hide_hud() -> void:
 	if _root != null:
 		_root.visible = false
 	is_open = false
+	_actions_locked = false
+	_session_ref = null
+
+
+## 入口 1.2：动画期间锁输入（设计 §5 改动 6）
+##   enabled=false → 所有行动按钮强制 disabled，覆盖 session 状态算出的可用性
+##   enabled=true  → 解锁后主动 refresh，让按钮按当前 session 状态恢复
+##                   （动画完成后玩家应能立即操作，无需等下一次 redraw）
+func set_actions_enabled(enabled: bool) -> void:
+	_actions_locked = not enabled
+	if _session_ref != null:
+		refresh(_session_ref)
+	elif _actions_locked:
+		# 兜底：若 session 未缓存（show_hud 之前），仍主动设 disabled
+		if _attack_btn != null:
+			_attack_btn.disabled = true
+		if _skip_btn != null:
+			_skip_btn.disabled = true
+		if _exit_btn != null:
+			_exit_btn.disabled = true
 
 
 ## 状态变化时拉新：状态栏文字 + 按钮可用性
@@ -188,6 +217,8 @@ func hide_hud() -> void:
 func refresh(session: BattleSession) -> void:
 	if session == null or _status_label == null:
 		return
+	# 入口 1.2：缓存 session 引用供 set_actions_enabled 主动 refresh 用
+	_session_ref = session
 	_status_label.text = _format_status_text(session)
 	# 按钮启用判断
 	var is_player: bool = session.is_player_turn() and not session.is_ended()
@@ -197,16 +228,18 @@ func refresh(session: BattleSession) -> void:
 	var has_target: bool = false
 	if is_player and has_actor:
 		has_target = not session.get_attackable_targets().is_empty()
+	# 入口 1.2：_actions_locked 为 true 时强制 disable 所有按钮（覆盖 session 状态判断）
 	if _attack_btn != null:
-		_attack_btn.disabled = not (is_player and has_actor and has_target)
+		_attack_btn.disabled = _actions_locked or not (is_player and has_actor and has_target)
 	# 跳过按钮：玩家回合 + 当前单位未结束
 	if _skip_btn != null:
-		_skip_btn.disabled = not (is_player and has_actor)
+		_skip_btn.disabled = _actions_locked or not (is_player and has_actor)
 	# 退出战斗按钮：玩家回合 + 战场内无敌方
 	# 战场内有敌方时仍允许点击，BattleSession.try_manual_exit 返回 false → WorldMap 给 _show_notice
 	# 这里不 disable 是为了让玩家有"按了得到反馈"的体验，比 disabled 状态更明确
+	# 但动画锁定期间（_actions_locked）也要 disable 防止时序混乱
 	if _exit_btn != null:
-		_exit_btn.disabled = not is_player
+		_exit_btn.disabled = _actions_locked or not is_player
 
 
 # ─────────────────────────────────────
