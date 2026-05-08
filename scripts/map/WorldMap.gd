@@ -1588,24 +1588,19 @@ func _on_turn_end_settlement() -> void:
 # ─────────────────────────────────────────
 
 ## 启动敌方移动阶段（由 EnemyAI._step_move_phase 调用）
-## 判定是否有可移动的敌方部队 + 玩家核心 target 是否存在
-## 无可移动 / 无 target → 直接触发 phase_finished（走 _on_enemy_phase_finished → 回 PLAYER）
+## P0 X-A 后 target = 玩家初始 spawn 锚（_start_pos）；X-A 前为玩家方 CORE_TOWN（已降级为 TOWN 占位）
+## 无可移动 / target 异常 → 直接触发 phase_finished（走 _on_enemy_phase_finished → 回 PLAYER）
 func start_enemy_move_phase() -> void:
 	if _game_finished or not _enemy_movement_enabled:
 		_on_enemy_phase_finished()
 		return
-	# M7 MVP：target 为玩家核心 persistent slot 位置
-	var target_pos: Vector2i = _get_player_core_pos()
+	# P0 X-A 后：target = 玩家初始 spawn 锚（_start_pos）
+	# X-A 前为玩家方 CORE_TOWN 位置（已降级为 TOWN 占位）
+	var target_pos: Vector2i = _get_enemy_target_pos()
 	if target_pos == Vector2i(-1, -1):
-		# M8 接入：玩家核心已失守 → 触发失败兜底
-		# 正常路径下 VictoryJudge 已在上一个敌方回合占据核心时触发 _on_victory_decided；
-		# 走到这里说明状态异常（VictoryJudge 未注册 / 重开后残留 / 核心初始化失败），
-		# 按失败处理 + 立刻结束 phase，避免敌方继续移动造成错乱
-		#
-		# 审查 P2 修复：用 push_error 而非 push_warning，明确这是异常状态下的降级处理，
-		# 便于从日志识别上游 bug（理论上不应触发）
-		push_error("WorldMap.start_enemy_move_phase: 玩家核心 persistent slot 未找到（异常态，降级判负）；检查 VictoryJudge 注册 / 核心生成流程")
-		_on_victory_decided(Faction.ENEMY_1)
+		# 异常态降级：_start_pos 应由 map_config 注入后必定有效，走到这里说明 schema 未初始化
+		# X-A 后此分支不再触发判负（玩家方区无可"失守"的核心）；改为跳过本回合敌方移动
+		push_warning("WorldMap.start_enemy_move_phase: enemy target 位置无效（schema 未初始化），跳过本回合敌方移动")
 		_on_enemy_phase_finished()
 		return
 	# E4 注入玩家保护区半径（= _battle_trigger_range）：保护区内格 cost = INF
@@ -1681,18 +1676,17 @@ func _on_day_night_phase_changed(_phase: int) -> void:
 # 敌方 AI 协作辅助
 # ─────────────────────────────────────────
 
-## 查找玩家核心 persistent slot 的位置
-## 返回 (-1, -1) 表示未找到（场景初始化未完成或核心已被敌方占据）
-func _get_player_core_pos() -> Vector2i:
+## 敌方 AI 进军 target 位置（P0 X-A 后语义收窄）
+##
+## X-A 前：扫 schema 找 CORE_TOWN owner=PLAYER（玩家方核心位置）
+## X-A 后：玩家方核心已降级为 TOWN 占位，敌方 target 改读 `_start_pos`（玩家初始 spawn 锚）
+##         详见 [[胜负条件重设计_MVP]]
+##
+## 返回 (-1, -1) 表示场景初始化未完成（理论上 _start_pos 由 map_config 注入后必定有效）
+func _get_enemy_target_pos() -> Vector2i:
 	if _schema == null:
 		return Vector2i(-1, -1)
-	for entry in _schema.persistent_slots:
-		var slot: PersistentSlot = entry as PersistentSlot
-		if slot == null:
-			continue
-		if slot.type == PersistentSlot.Type.CORE_TOWN and slot.owner_faction == Faction.PLAYER:
-			return slot.position
-	return Vector2i(-1, -1)
+	return _start_pos
 
 
 # ─────────────────────────────────────────
@@ -3112,8 +3106,9 @@ func _load_pcg(map_cfg: Dictionary, terrain_costs: Dictionary) -> void:
 
 	# M2：从 map_config 加载持久 slot 八阶段参数
 	config.persistent_total_count = int(map_cfg.get("persistent_total_count", "26"))
-	config.persistent_core_count = int(map_cfg.get("persistent_core_count", "2"))
-	config.persistent_town_count = int(map_cfg.get("persistent_town_count", "6"))
+	# P0 X-A 后默认 1 敌方核心 + 7 城镇（含玩家方占位）；CSV 通常会覆盖此处默认
+	config.persistent_core_count = int(map_cfg.get("persistent_core_count", "1"))
+	config.persistent_town_count = int(map_cfg.get("persistent_town_count", "7"))
 	config.persistent_village_count = int(map_cfg.get("persistent_village_count", "18"))
 	config.persistent_min_dist_normal = int(map_cfg.get("persistent_min_dist_normal", "3"))
 	config.persistent_min_dist_core = int(map_cfg.get("persistent_min_dist_core", "5"))

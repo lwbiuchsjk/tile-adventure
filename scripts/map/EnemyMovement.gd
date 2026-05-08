@@ -55,8 +55,10 @@ var _schema: MapSchema = null
 var _level_slots: Dictionary = {}
 ## 玩家单位当前位置（用于强制战斗触发；敌方进入玩家曼哈顿距离 ≤ _forced_battle_range 时触发战斗）
 var _player_pos: Vector2i = Vector2i.ZERO
-## M7 目标位置：敌方部队寻路目的地（玩家核心 persistent slot 位置）
-## 与 _player_pos 分离：target 是战略目标，player_pos 是战术阻挡点
+## 敌方部队寻路目的地战略目标位置
+## P0 X-A 后由 WorldMap._get_enemy_target_pos 返回 _start_pos（玩家初始 spawn 锚）
+## X-A 前为玩家方 CORE_TOWN persistent slot 位置（已降级为 TOWN 占位）
+## 与 _player_pos 分离：target 是战略目标（静态锚点），player_pos 是战术阻挡点（玩家当前位置）
 var _target_pos: Vector2i = Vector2i.ZERO
 var _movement_points: int = 6
 var _original_slot_types: Dictionary = {}
@@ -103,7 +105,7 @@ func get_moving_level() -> LevelSlot:
 ## 收集所有可移动关卡，按距离（到动态 target）排序后逐个处理
 ##
 ## 参数：
-##   target_pos —— 战略目标（玩家核心 slot 位置）；寻路目的地的一个候选
+##   target_pos —— 战略目标（P0 X-A 后 = 玩家 spawn 锚 _start_pos；X-A 前 = 玩家方 CORE_TOWN）；寻路目的地的一个候选
 ##   player_pos —— 玩家单位位置；用于强制战斗触发 + 动态目标的另一候选 + 保护区中心
 ##   target_switch_range —— 追玩家阈值（默认 10）；pack 到玩家 ≤ 该值才可能追玩家
 ##     传 -1 或 0 时退化为"永远推核心"（测试 / 调试用）
@@ -217,9 +219,9 @@ func _min_target_distance(pos: Vector2i) -> int:
 ##   其他情况（玩家远离 / 核心更近或相等）→ target = 核心（战略兜底）
 ##
 ## 设计意图：
-##   - 默认保持"推核心"战略压力，玩家核心仍是 AI 的最终目标
-##   - 玩家出击深入敌方 10 格内 + 比核心更近 → 近处 pack 切换追玩家（响应威胁）
-##   - 玩家贴在自己核心附近 → d_core 反而小，所有 pack 仍集火推核心
+##   - 默认保持"推 spawn 锚"战略压力，玩家初始 spawn 锚（P0 X-A 前为玩家核心）仍是 AI 的最终目标
+##   - 玩家出击深入敌方 10 格内 + 比 spawn 锚更近 → 近处 pack 切换追玩家（响应威胁）
+##   - 玩家贴在自己 spawn 锚附近 → d_target 反而小，所有 pack 仍集火推 spawn 锚
 func _pick_target_for(level: LevelSlot) -> Vector2i:
 	var d_core: int = absi(level.position.x - _target_pos.x) + absi(level.position.y - _target_pos.y)
 	var d_player: int = absi(level.position.x - _player_pos.x) + absi(level.position.y - _player_pos.y)

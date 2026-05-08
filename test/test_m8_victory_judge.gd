@@ -67,17 +67,20 @@ func _test_core_slot_triggers_player_win() -> void:
 	_assert(VictoryJudge.is_finished(),      "_finished 置 true")
 
 
-## 3. 核心城镇翻转到 ENEMY_1 → sink 收到 ENEMY_1
+## 3. P0 X-A 阵营过滤：核心翻转给 ENEMY_1 时 sink 不触发
+##    旧逻辑（X-A 前）：sink 收到 ENEMY_1（玩家失败）
+##    新逻辑（X-A 后）：失败侧由命数耗尽接管；VictoryJudge 仅监听玩家占据敌方核心
 func _test_core_slot_triggers_enemy_win() -> void:
-	print("-- 核心城镇翻转 ENEMY_1 胜")
+	print("-- P0 X-A 核心翻转 ENEMY_1 不触发（阵营过滤）")
 	_reset()
 	var core: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.ENEMY_1)
 	VictoryJudge.check_on_slot_owner_changed(core)
-	_assert(_captured.size() == 1,           "sink 被调用一次")
-	_assert(_captured[0] == Faction.ENEMY_1, "winner 为 ENEMY_1")
+	_assert(_captured.is_empty(),            "sink 不触发（owner != PLAYER 被过滤）")
+	_assert(not VictoryJudge.is_finished(),  "_finished 保持 false")
 
 
 ## 4. _finished gate：同一局内第二次调用不触发
+##    P0 X-A 后 sink 仅由 owner=PLAYER 触发；用两次 PLAYER 翻转验证 gate
 func _test_finished_gate_once_per_game() -> void:
 	print("-- _finished gate 一局一次")
 	_reset()
@@ -85,7 +88,7 @@ func _test_finished_gate_once_per_game() -> void:
 	VictoryJudge.check_on_slot_owner_changed(core1)
 	_assert(_captured.size() == 1, "第一次触发")
 
-	var core2: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.ENEMY_1)
+	var core2: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
 	VictoryJudge.check_on_slot_owner_changed(core2)
 	_assert(_captured.size() == 1, "第二次被 gate 拦截，sink 仍只 1 次")
 
@@ -102,11 +105,12 @@ func _test_clear_sink() -> void:
 	_assert(not VictoryJudge.is_finished(), "clear_sink 后 _finished = false")
 
 	# 重新注册后应能再次触发（模拟重开场景）
+	# P0 X-A 后 sink 仅由 owner=PLAYER 触发；用 PLAYER 核心翻转验证
 	_captured = []
 	VictoryJudge.register_sink(_on_sink)
-	var core2: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.ENEMY_1)
+	var core2: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
 	VictoryJudge.check_on_slot_owner_changed(core2)
-	_assert(_captured.size() == 1 and _captured[0] == Faction.ENEMY_1, "重注册后可再次触发")
+	_assert(_captured.size() == 1 and _captured[0] == Faction.PLAYER, "重注册后可再次触发")
 
 
 ## 6. sink 多次注册以最后一次为准
@@ -142,9 +146,11 @@ func _test_occupation_system_integration_player_flip() -> void:
 		"sink 收到 PLAYER 胜利")
 
 
-## 8. OccupationSystem.try_occupy 翻转核心城镇（ENEMY_1 攻玩家核心）→ sink ENEMY_1
+## 8. P0 X-A：核心翻转给 ENEMY_1 时 sink 不触发（阵营过滤防御）
+##    理论上 X-A 后玩家方不再有 CORE_TOWN（已降级为 TOWN 占位），此场景不会发生；
+##    但若代码 bug 导致玩家方 CORE_TOWN 残留并被翻转，VictoryJudge 也应过滤
 func _test_occupation_system_integration_enemy_flip() -> void:
-	print("-- OccupationSystem 集成：敌方翻玩家核心")
+	print("-- P0 X-A：核心翻转给 ENEMY_1 时 sink 不触发（阵营过滤）")
 	_reset()
 	var core: PersistentSlot = PersistentSlot.new()
 	core.type = PersistentSlot.Type.CORE_TOWN
@@ -156,8 +162,7 @@ func _test_occupation_system_integration_enemy_flip() -> void:
 	var flipped: bool = OccupationSystem.try_occupy(core, Faction.ENEMY_1)
 	_assert(flipped,                             "翻转成功")
 	_assert(core.owner_faction == Faction.ENEMY_1, "核心归属已切到 ENEMY_1")
-	_assert(_captured.size() == 1 and _captured[0] == Faction.ENEMY_1,
-		"sink 收到 ENEMY_1 胜利（玩家失败）")
+	_assert(_captured.is_empty(),                "sink 不触发（owner != PLAYER 被 X-A 阵营过滤）")
 
 
 ## 9. 同阵营"占据"返回 false 且 sink 不触发

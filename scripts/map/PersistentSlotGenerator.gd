@@ -37,10 +37,13 @@ class GenConfig:
 	## 随机种子（与地形 seed 同源，保证同 seed 同地图）
 	var seed: int = 0
 
-	## 数量配比（§3.1）
+	## 数量配比（P0 X-A 后；详见 [[胜负条件重设计_MVP]]）
+	## - core_count：CORE_TOWN type 数量；X-A 后仅敌方 1 个
+	## - town_count：TOWN type 数量；含玩家方占位 TOWN（左上对角块 level=0 owner=PLAYER）
+	## - 总数 = 1 + 7 + 18 = 26 不变
 	var total_count: int = 26
-	var core_count: int = 2
-	var town_count: int = 6
+	var core_count: int = 1
+	var town_count: int = 7
 	var village_count: int = 18
 
 	## 最小间距（§5.4，曼哈顿距离）
@@ -149,26 +152,38 @@ static func _try_generate(
 		schema, config, rng,
 		occupied, min_dist_normal, min_dist_core
 	)
-	if positions.size() < config.town_count + config.village_count:
+	# X-A 后玩家方占位 TOWN 来自 cores[PLAYER]，不来自 _sample_positions；
+	# 普通采样需求 = (town_count - 1) + village_count
+	if positions.size() < (config.town_count - 1) + config.village_count:
 		var empty_short: Array[PersistentSlot] = []
 		return empty_short
 
-	# 阶段 4：类型分配（6 城镇 + 18 村庄按比例分配到位置）
+	# 阶段 4：类型分配
 	# §4.2 末："位置决定后再分类型，避免类型与位置强耦合"
-	# MVP 实现：注入 RNG 洗牌后前 6 当城镇，其余当村庄（不能用 Array.shuffle —— 走全局 RNG 破坏 seed）
+	# P0 X-A：玩家方占位 = TOWN level=0 owner=PLAYER（不再是 CORE_TOWN）；敌方核心仍 CORE_TOWN level=3
+	# town_count 含 1 个玩家方占位（来自 cores[PLAYER]）+ (town_count - 1) 个中立城镇（来自 positions）
 	_shuffle_with_rng(positions, rng)
 	var slots: Array[PersistentSlot] = []
-	# 核心 2 个
-	for fid in cores:
-		var core_slot: PersistentSlot = _build_slot(
-			cores[fid] as Vector2i,
-			PersistentSlot.Type.CORE_TOWN,
-			3,                   # 核心 MVP 初始 L3（升级建造 §6.3）
-			fid as int           # 核心已定归属
-		)
-		slots.append(core_slot)
-	# 城镇 6 个
-	for i in range(config.town_count):
+	# 敌方核心 = CORE_TOWN level=3
+	var enemy_core: PersistentSlot = _build_slot(
+		cores[Faction.ENEMY_1] as Vector2i,
+		PersistentSlot.Type.CORE_TOWN,
+		3,                   # 核心 MVP 初始 L3（升级建造 §6.3）
+		Faction.ENEMY_1
+	)
+	slots.append(enemy_core)
+	# 玩家方占位 = TOWN level=0 owner=PLAYER（P0 X-A 功能层降级；详见 [[胜负条件重设计_MVP]]）
+	# 仍占用左上对角块位置作为 EnemyAI / 视觉锚点；但功能层完全等同普通 TOWN（无核心特权）
+	var player_anchor: PersistentSlot = _build_slot(
+		cores[Faction.PLAYER] as Vector2i,
+		PersistentSlot.Type.TOWN,
+		0,
+		Faction.PLAYER
+	)
+	slots.append(player_anchor)
+	# 中立城镇（town_count - 1）个，来自 positions
+	var neutral_town_count: int = config.town_count - 1
+	for i in range(neutral_town_count):
 		var town_slot: PersistentSlot = _build_slot(
 			positions[i],
 			PersistentSlot.Type.TOWN,
@@ -179,7 +194,7 @@ static func _try_generate(
 	# 村庄 18 个
 	for i in range(config.village_count):
 		var village_slot: PersistentSlot = _build_slot(
-			positions[config.town_count + i],
+			positions[neutral_town_count + i],
 			PersistentSlot.Type.VILLAGE,
 			0,
 			Faction.NONE
@@ -201,7 +216,7 @@ static func _try_generate(
 
 ## 按 (类型, 位置) 确定性排序，全局唯一分配人类可读 ID
 ## 规则（M8 v2：全局唯一）：
-##   CORE_TOWN：恒为"核心"（MVP 只有 2 个，靠势力色区分，核心不翻转无歧义）
+##   CORE_TOWN：恒为"核心"（P0 X-A 后仅敌方 1 个，玩家方原核心已降级为 TOWN 占位）
 ##   VILLAGE / TOWN：按 position (y→x) 排序后全地图从 1 递增
 ##                   示例：18 个村庄全局 "村庄1..村庄18"；玩家 / 敌方 / 中立**共享**这个序列
 ##
@@ -238,11 +253,14 @@ static func _assign_display_ids(slots: Array[PersistentSlot]) -> void:
 
 
 # ─────────────────────────────────────────
-# 阶段 2：核心城镇对角落点
+# 阶段 2：双方初始锚点对角落点
 # ─────────────────────────────────────────
 
-## 在地图对角 1/8 ~ 1/4 区域内为双方核心采样落点
+## 在地图对角 1/8 ~ 1/4 区域内为双方采样初始锚点位置
 ## 返回 { Faction.PLAYER: pos, Faction.ENEMY_1: pos }
+## P0 X-A 后语义：
+##   - 玩家方位置：用于阶段 4 创建 TOWN level=0 占位 slot（功能层降级）
+##   - 敌方位置：用于阶段 4 创建 CORE_TOWN level=3
 ## 任一方区域全不可通行 → 扩大区域后重试；仍失败返回空字典
 static func _place_core_towns(
 	schema: MapSchema,
@@ -314,7 +332,9 @@ static func _sample_in_box(
 # 阶段 3：泊松盘风格位置采样
 # ─────────────────────────────────────────
 
-## 在地图上采样剩余 (town_count + village_count) 个位置
+## 在地图上采样剩余 (town_count - 1 + village_count) 个位置
+## X-A 后玩家方占位 TOWN 来自 cores[PLAYER]，不来自 _sample_positions；
+## 故 target_count = (town_count - 1) + village_count
 ## 满足：避开核心 / 不可通行 / 与已采样点保持最小间距
 ## 失败返回小于目标数量的部分结果，由调用方判定是否重试
 static func _sample_positions(
@@ -325,7 +345,7 @@ static func _sample_positions(
 	min_dist_normal: int,
 	min_dist_core: int
 ) -> Array[Vector2i]:
-	var target_count: int = config.town_count + config.village_count
+	var target_count: int = (config.town_count - 1) + config.village_count
 	var result: Array[Vector2i] = []
 	var cores_local: Array[Vector2i] = occupied.duplicate()
 
@@ -393,12 +413,21 @@ static func _paint_minimum(
 	var town_quota_per_faction: int = config.faction_town_quota
 	var village_quota_per_faction: int = config.faction_village_quota
 	# 势力 → {TOWN: 已染数, VILLAGE: 已染数}
+	# P0 X-A：painted 初始化扫描已染色的 slot（玩家方占位 TOWN 已 owner=PLAYER）
+	# 这样玩家方 quota=1 时占位 TOWN 已计入，不会被 _paint_minimum 重复染色超额
 	var painted: Dictionary = {}
 	for fid in faction_order:
 		painted[fid] = {
 			PersistentSlot.Type.TOWN: 0,
 			PersistentSlot.Type.VILLAGE: 0,
 		}
+	for s in slots:
+		if not painted.has(s.owner_faction):
+			continue
+		var per_type: Dictionary = painted[s.owner_faction] as Dictionary
+		if not per_type.has(s.type):
+			continue
+		per_type[s.type] = int(per_type[s.type]) + 1
 
 	# 轮询直到全势力全类型达标 or 候选耗尽
 	var any_progress: bool = true
@@ -543,35 +572,39 @@ static func _validate(
 	if town_actual != config.town_count: return false
 	if village_actual != config.village_count: return false
 
-	# 核心 / 普通 slot 初始状态校验（P2#6）
-	# 核心：level=3 + 归属已定；双方各 1
+	# 核心 / 玩家方占位 / 普通 slot 初始状态校验（P0 X-A 后）
+	# 敌方核心：CORE_TOWN level=3 owner=ENEMY_1，落在右下对角块
+	# 玩家方占位：TOWN level=0 owner=PLAYER，落在左上对角块（功能层完全等同普通 TOWN）
 	# 普通：level=0
-	var player_core_count: int = 0
 	var enemy_core_count: int = 0
-	var player_core_pos: Vector2i = Vector2i(-1, -1)
 	var enemy_core_pos: Vector2i = Vector2i(-1, -1)
 	for s in slots:
 		if s.type == PersistentSlot.Type.CORE_TOWN:
 			if s.level != 3: return false
-			if s.owner_faction == Faction.PLAYER:
-				player_core_count += 1
-				player_core_pos = s.position
-			elif s.owner_faction == Faction.ENEMY_1:
-				enemy_core_count += 1
-				enemy_core_pos = s.position
-			else:
-				# 核心必须有归属（非中立）
+			# X-A 后 CORE_TOWN 仅敌方所有
+			if s.owner_faction != Faction.ENEMY_1:
 				return false
+			enemy_core_count += 1
+			enemy_core_pos = s.position
 		else:
+			# TOWN / VILLAGE 初始 level=0
 			if s.level != 0: return false
-	if player_core_count != 1 or enemy_core_count != 1:
+	if enemy_core_count != 1:
 		return false
-	# 核心对角落区校验：玩家在左上 1/4 内，敌方在右下 1/4 内
+	# 玩家方占位 TOWN 校验：至少有 1 个 owner=PLAYER 的 TOWN 落在左上对角块
+	# 注：阶段 5 染色后玩家方可能拥有多个 TOWN（quota 染色），但占位 TOWN 必在左上 1/4 区
 	# 阈值放宽到 1/4 边长（容许采样区 zone_max 边界）；防御性检查
 	var quarter_w: int = config.width / 4
 	var quarter_h: int = config.height / 4
-	if player_core_pos.x > quarter_w or player_core_pos.y > quarter_h:
+	var anchor_in_zone: bool = false
+	for s in slots:
+		if s.type == PersistentSlot.Type.TOWN and s.owner_faction == Faction.PLAYER:
+			if s.position.x <= quarter_w and s.position.y <= quarter_h:
+				anchor_in_zone = true
+				break
+	if not anchor_in_zone:
 		return false
+	# 敌方核心落在右下对角块
 	if enemy_core_pos.x < (config.width - 1 - quarter_w) or enemy_core_pos.y < (config.height - 1 - quarter_h):
 		return false
 
@@ -644,10 +677,12 @@ static func _validate_config(config: GenConfig) -> String:
 		]
 
 	# 3. 容量约束（双方下限 * 2 ≤ 各类型总数）
-	# 核心：MVP 两方对峙写死要求 core_count == 2（每方 1 个）
-	if config.core_count != 2:
-		return "核心数 core_count=%d；MVP 两方对峙仅支持 core_count=2（map_config: persistent_core_count）；扩展 N 方需同步改 _place_core_towns" % config.core_count
-	# 城镇下限
+	# 核心：P0 X-A 后写死要求 core_count == 1（仅敌方 CORE_TOWN）
+	# 玩家方原核心已降级为 TOWN level=0 占位（计入 town_count）
+	if config.core_count != 1:
+		return "核心数 core_count=%d；P0 X-A 后仅支持 core_count=1（仅敌方核心；map_config: persistent_core_count）" % config.core_count
+	# 城镇下限：玩家方占位 TOWN 已计入 PLAYER quota（X-A）
+	# 总最小 = 玩家 quota + 敌方 quota = quota * 2（含玩家方占位）
 	var min_required_towns: int = config.faction_town_quota * 2
 	if min_required_towns > config.town_count:
 		return "城镇下限超出总量：双方各 %d = %d > town_count(%d)；改小 persistent_faction_town_quota 或加大 persistent_town_count" % [

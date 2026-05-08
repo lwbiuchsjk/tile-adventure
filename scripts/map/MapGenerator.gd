@@ -41,9 +41,10 @@ class GenerateConfig:
 	## 是否启用持久 slot 生成；MVP 默认开
 	var generate_persistent_slots: bool = true
 	## 与 PersistentSlotGenerator.GenConfig 字段一一对应
+	## P0 X-A 后默认值：1 敌方核心 + 7 城镇（含玩家方占位）+ 18 村庄 = 26
 	var persistent_total_count: int = 26
-	var persistent_core_count: int = 2
-	var persistent_town_count: int = 6
+	var persistent_core_count: int = 1
+	var persistent_town_count: int = 7
 	var persistent_village_count: int = 18
 	var persistent_min_dist_normal: int = 3
 	var persistent_min_dist_core: int = 5

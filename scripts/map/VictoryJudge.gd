@@ -1,14 +1,16 @@
 class_name VictoryJudge
 extends RefCounted
-## 胜负判定系统（M8）
+## 胜负判定系统（M8 + P0 X-A 阵营过滤）
 ##
 ## 设计原文：
-##   tile-advanture-design/城建锚实装/M8_胜负与最小验证.md
-##   tile-advanture-design/持久slot基础功能设计.md §七 核心城镇
+##   tile-advanture-design/胜负条件重设计_MVP.md（P0 第一阶段，2026-05-08 定调）
+##   tile-advanture-design/城建锚实装/M8_胜负与最小验证.md（旧）
+##   tile-advanture-design/持久slot基础功能设计.md §七（旧）
 ##
-## 规则（MVP 无缓冲）：
-##   任一核心城镇（CORE_TOWN）归属翻转 → 翻转后归属方胜利
-##   占据即判定，不需"停留 N 回合"
+## 规则（P0 X-A 后）：
+##   玩家攻占敌方核心城镇（CORE_TOWN 且新归属为 PLAYER）→ 玩家胜利
+##   X-A 后玩家方区无 CORE_TOWN（已降级为 TOWN 占位），VictoryJudge 仅会被敌方核心翻转触发
+##   失败侧不再由 VictoryJudge 触发——失败仅由「队长命数耗尽」走 _trigger_coma_or_lose 末周期分支
 ##
 ## 架构选择：
 ##   静态类 + Callable 沉降回调（对齐 TickRegistry 模式）
@@ -18,8 +20,8 @@ extends RefCounted
 ##
 ## 触发链：
 ##   OccupationSystem.try_occupy 翻转成功 → check_on_slot_owner_changed(slot)
-##   → 若 slot 是 CORE_TOWN 且本局未判定 → 调用 _sink(winner_faction)
-##   → WorldMap._on_victory_decided 挂载遮罩 UI
+##   → 若 slot 是 CORE_TOWN + 新归属是 PLAYER + 本局未判定 → 调用 _sink(PLAYER)
+##   → WorldMap._on_victory_decided 挂载胜利遮罩 UI
 
 
 ## 胜负回调 Callable(winner_faction: int) -> void
@@ -58,8 +60,10 @@ static func is_finished() -> bool:
 ## 核心城镇归属变更时调用
 ## 参数 slot.owner_faction 必须为翻转后的新归属（由 OccupationSystem.try_occupy 保证）
 ##
-## 非核心城镇 / 已判定 / 归属为 NONE 时无操作
-## 核心城镇通常不会回到 NONE，NONE 分支为防御
+## P0 X-A 阵营过滤：
+##   非 CORE_TOWN / 新归属非 PLAYER / 已判定 时无操作
+##   X-A 后玩家方区无 CORE_TOWN，仅敌方核心可被监听到；新归属 != PLAYER 直接 return
+##   即使 owner=NONE / ENEMY_1 也都被新过滤拦截
 ##
 ## Sink 有效性检查在 _finished 置位之前（审查 P1 修复）：
 ##   若 sink 无效（未注册 / 目标被 free 后未 clear_sink），旧实现会"先封盘再失败分发"，
@@ -70,13 +74,13 @@ static func check_on_slot_owner_changed(slot: PersistentSlot) -> void:
 		return
 	if slot.type != PersistentSlot.Type.CORE_TOWN:
 		return
+	# P0 X-A 阵营过滤：仅玩家占据敌方核心触发胜利
+	if slot.owner_faction != Faction.PLAYER:
+		return
 	if _finished:
 		return
-	var winner: int = slot.owner_faction
-	if winner == Faction.NONE:
-		return
 	if not _sink.is_valid():
-		push_error("VictoryJudge.check_on_slot_owner_changed: sink 未注册或已失效，胜负事件未分发（winner=%d）" % winner)
+		push_error("VictoryJudge.check_on_slot_owner_changed: sink 未注册或已失效，胜利事件未分发")
 		return
 	_finished = true
-	_sink.call(winner)
+	_sink.call(Faction.PLAYER)

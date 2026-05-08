@@ -12,7 +12,7 @@ extends Node
 ##     步骤 2 增援判定：委托 EnemyReinforcement.spawn_batch
 ##     步骤 3 石料入账：调用 WorldMap.add_stone(ENEMY_1, stone_per_turn)
 ##     步骤 4 贪心升级：候选 slot 排序（城镇 > 村庄 / 同类低级先）+ 调 BuildSystem.start_upgrade
-##     步骤 5 移动阶段：委托 EnemyMovement 执行动画（target = 玩家核心位置）
+##     步骤 5 移动阶段：委托 EnemyMovement 执行动画（target = 玩家初始 spawn 锚 _start_pos；P0 X-A 后）
 ##   移动阶段结束后触发 "end_faction_turn(ENEMY_1) → start_faction_turn(PLAYER)" 回到玩家
 ##
 ## 解耦方式：
@@ -22,7 +22,7 @@ extends Node
 ##
 ## MVP 边界：
 ##   - 敌方 AI 只对 ENEMY_1 势力生效；多敌方扩展按 Faction.ENEMY_N 顺延
-##   - target = 玩家核心位置（`type == CORE_TOWN && owner_faction == PLAYER`）；无玩家核心时跳过移动阶段
+##   - target = 玩家初始 spawn 锚（`WorldMap._start_pos`，map_config 配置；P0 X-A 后玩家方核心已降级为 TOWN 占位）
 ##   - 升级决策仅考虑石料；不考虑战略位置（§7 MVP 简化）
 
 
@@ -150,7 +150,7 @@ func _upgrade_priority_cmp(a: PersistentSlot, b: PersistentSlot) -> bool:
 # ─────────────────────────────────────────
 
 ## 委托 EnemyMovement 执行移动动画
-## target = 玩家核心 persistent slot 的位置；无玩家核心则跳过
+## P0 X-A 后 target = 玩家初始 spawn 锚（_start_pos）；详见 [[胜负条件重设计_MVP]]
 ## 移动结束后由 EnemyMovement.phase_finished 信号 → WorldMap._on_enemy_phase_finished 接续阵营切换
 func _step_move_phase() -> void:
 	if _world_map == null:

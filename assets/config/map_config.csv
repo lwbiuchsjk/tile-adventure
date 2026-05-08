@@ -8,7 +8,8 @@
 #
 # —— M2 持久 slot 生成参数 ——
 # persistent_*: 城建锚 → 持久 slot 八阶段流水线参数
-# 数量基线见《持久slot地图生成设计》§3.1：26 = 2 核心 + 6 镇 + 18 村
+# 数量基线（P0 X-A 后）：26 = 1 敌方核心 + 7 城镇（含玩家方占位 TOWN）+ 18 村
+# 玩家方占位 TOWN：X-A 功能层降级（详见 [[胜负条件重设计_MVP]]），位置在左上对角块，type=TOWN level=0 owner=PLAYER
 # 间距与势力场参考 §五；具体数值在 M2 实跑窗口 1 验收时校准（待跟踪事项索引 P1）
 key,value
 random_generate,true
@@ -21,8 +22,8 @@ end_x,30
 end_y,22
 json_path,res://test/maps/test_map.json
 persistent_total_count,26
-persistent_core_count,2
-persistent_town_count,6
+persistent_core_count,1
+persistent_town_count,7
 persistent_village_count,18
 persistent_min_dist_normal,3
 persistent_min_dist_core,5

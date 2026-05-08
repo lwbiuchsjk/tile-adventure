@@ -273,10 +273,13 @@ func _test_pathfinder_blocked_destination_contract() -> void:
 		"end 在 blocked_positions → find_path 返回空路径（拒绝把 end 加入 open_set）")
 
 
-## 9. 动态目标集成：pack 与玩家相邻且 target=player → 直接触发 forced_battle（不移动）
-##    旧代码会走 trim 后 size<2 分支，pack 原地不动；修复后应该 emit 信号
+## 9. E4 退化回归：pack 与玩家相邻时 forced_battle_triggered **不再 emit**
+##    旧逻辑：pack 在玩家邻接 → 直接 emit forced_battle_triggered
+##    E4 后：保护区机制取代该路径——保护区把 dist < trigger_range 的格全 blocked，pack 不可能进保护区
+##           即使停在 dist == range 边缘也不再 emit；被动战斗由 _on_enemy_phase_finished 末尾统一扫描
+##    本用例验证 emit 路径已废弃（防御性回归——防止后续误重新 emit）
 func _test_dynamic_target_adjacent_forced_battle() -> void:
-	print("-- pack 邻玩家 target=player forced_battle")
+	print("-- E4 退化：pack 邻玩家 forced_battle_triggered 不 emit")
 	var schema: MapSchema = MapSchema.new()
 	schema.init(10, 10)
 	schema.terrain_costs = {MapSchema.TerrainType.FLATLAND: 1.0}
@@ -285,14 +288,12 @@ func _test_dynamic_target_adjacent_forced_battle() -> void:
 	em.tile_size = 48
 
 	# 构造 LevelSlot 在 (4,5)；玩家在 (5,5)；核心在 (0,0)
-	# d_player = 1, d_core = 10 → pack_target = player_pos
-	# pack 已在 player 相邻格 → 走早退 forced_battle 分支
 	var pack: LevelSlot = LevelSlot.new()
 	pack.position = Vector2i(4, 5)
 	pack.state = LevelSlot.State.UNCHALLENGED
 	pack.faction = Faction.ENEMY_1
 
-	# 信号捕获：_test_dynamic_target_adjacent_forced_battle_captured 累积触发次数
+	# 信号捕获：累积 emit 次数（E4 后期望恒为 0）
 	var fired: Array[LevelSlot] = []
 	em.forced_battle_triggered.connect(func(lv: LevelSlot) -> void: fired.append(lv))
 
@@ -306,9 +307,8 @@ func _test_dynamic_target_adjacent_forced_battle() -> void:
 		false              # game_over
 	)
 
-	_assert(fired.size() == 1,        "forced_battle 触发了 1 次")
-	_assert(fired[0] == pack,         "触发的 LevelSlot 就是该 pack")
-	_assert(pack.position == Vector2i(4, 5), "pack 未移动（原地触发战斗）")
+	# E4 退化：emit 路径已删除，预期 0 次（被动战斗由 _on_enemy_phase_finished 统一扫描）
+	_assert(fired.is_empty(), "E4 后 forced_battle_triggered 不再 emit")
 
 	em.queue_free()
 
