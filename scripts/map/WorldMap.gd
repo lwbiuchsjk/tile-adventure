@@ -61,7 +61,8 @@ const CONFIG_BATTLE_UNIT: String = "res://assets/config/battle_unit_config.csv"
 # ─────────────────────────────────────────
 
 ## 每格像素尺寸（参见 Design/地图格子视觉规范.md）
-const TILE_SIZE: int = 48
+## 入口 4 第 1 份 MVP（地格放大与镜头）：48 → 72；基线分辨率 1280×720 下单屏 17×10 格
+const TILE_SIZE: int = 72
 
 ## 各地形渲染颜色（纯色块占位）
 ## key 使用整数字面量对应 MapSchema.TerrainType 枚举值
@@ -117,7 +118,8 @@ const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
 const UNIT_SHADOW_COLOR: Color = Color(0.0, 0.0, 0.0, 0.30)   ## 投影半透黑
 
 ## 单位标记边距（像素）—— 圆形半径 = (TILE_SIZE - UNIT_MARGIN*2) / 2
-const UNIT_MARGIN: int = 8
+## 入口 4 MVP：8 → 12 保持半径占比 (TILE_SIZE-2*UNIT_MARGIN)/TILE_SIZE = 0.667 不变
+const UNIT_MARGIN: int = 12
 
 ## 玩家单位外环厚度（px）—— 环色复用 M4_FACTION_COLORS[Faction.PLAYER]，保证 UI 一致
 ## 环宽 3 略薄于建筑 4，因为单位整体小一档（半径 16 vs 建筑半边长 24）
@@ -164,15 +166,17 @@ const ENEMY_TIER_DOT_COLOR: Color = Color(1.0, 0.84, 0.0)         ## 金色 #FFD
 const ENEMY_TIER_DOT_SIZE_RATIO: float = 0.3
 
 ## 敌方外菱形按 tier 的格内边距（像素）—— 尺寸梯度通道
-## 占格比例：弱 67% / 中 75% / 强 83% / 超 90%
+## 占格比例：弱 67% / 中 75% / 强 83% / 超 92%
 ##   弱档显著最小（67%）+ 小菱形居中（不在米字 4 方向），与其他档形成"位置 + 尺寸"双重区分
 ##   1 个居中小菱形 vs 3 个 T 型小菱形语义完全不同，远观一眼可辨
-## margin = (TILE_SIZE - TILE_SIZE * 占比) / 2，TILE_SIZE = 48
+## margin = (TILE_SIZE - TILE_SIZE * 占比) / 2
+## 入口 4 MVP（codex 审查 P2 修复 2026-05-09）：TILE_SIZE 48→72 后按比例重算 margin
+##   旧值（48 基线）8/6/4/2 在 72 下实际占格变为 78/83/89/94%，弱档识别度被压缩
 const ENEMY_TIER_SLOT_MARGINS: Dictionary = {
-	0: 8,   ## 67% 占格 —— 弱档显著最小
-	1: 6,   ## 75%
-	2: 4,   ## 83%
-	3: 2,   ## 92%
+	0: 12,  ## 67% 占格 —— 弱档显著最小（72 - 72*0.67)/2 ≈ 12）
+	1: 9,   ## 75%（(72 - 72*0.75)/2 = 9）
+	2: 6,   ## 83%（(72 - 72*0.83)/2 ≈ 6）
+	3: 3,   ## 92%（(72 - 72*0.92)/2 ≈ 3）
 }
 
 ## 一次性资源点底色（按类型区分）
@@ -192,11 +196,13 @@ const ENEMY_GLOW_COLOR: Color = Color(1.0, 0.30, 0.15, 0.35)
 ## 击退冷却关卡边框颜色（暗淡）
 const REPELLED_BORDER_COLOR: Color = Color(0.6, 0.3, 0.3, 0.5)
 
-## 地图标签字号（格子放大后使用 12px）
-const LABEL_FONT_SIZE: int = 12
+## 地图标签字号（绑定地格视觉，随 TILE_SIZE 等比放大）
+## 入口 4 MVP：12 → 18（TILE_SIZE 48→72，比例 1.5）
+const LABEL_FONT_SIZE: int = 18
 
 ## 持久 slot 等级角标字号（右上角 L0/1/2/3，小字与主 ID 分离）
-const LEVEL_BADGE_FONT_SIZE: int = 9
+## 入口 4 MVP：9 → 14（按 TILE_SIZE 比例 1.5 取整）
+const LEVEL_BADGE_FONT_SIZE: int = 14
 
 ## 单位逐格移动动画耗时（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
@@ -206,6 +212,34 @@ const ROUND_HINT_DURATION: float = 1.5
 
 ## 醒目提示显示时长（秒）
 const NOTICE_DURATION: float = 2.5
+
+## 入口 4 MVP 战斗镜头 zoom 参数
+## 战场 = 队长 ±_battle_arena_range 格，本 MVP 默认 13×13；上下各留 1 格视觉余量
+const BATTLE_ZOOM_MARGIN_GRID: int = 1
+## HUD 上下保留像素（CanvasLayer 不受 Camera zoom 影响，物理像素恒定占屏）
+## 实测调整：跑测后若发现战场贴 HUD 边可调大；若空余过多可调小
+const BATTLE_ZOOM_HUD_RESERVE_PX: int = 120
+## 战斗 zoom 平滑过渡时长（秒）
+const BATTLE_ZOOM_TWEEN_DURATION: float = 0.3
+
+## 入口 4 MVP（2026-05-09 追加）：战场外压暗 overlay
+## 战斗触发时画半透明黑覆盖战场之外的区域（含 camera 视野内的地图边外）
+## 视觉作用：让玩家注意力聚焦战场，弱化战场之外的干扰元素
+const BATTLE_DIM_COLOR: Color = Color(0.0, 0.0, 0.0, 0.50)
+## overlay 覆盖范围 padding（像素），保证 camera 视野完全覆盖（含 zoom out 后的视野扩张）
+const BATTLE_DIM_PADDING_PX: int = 4096
+
+## 入口 4 MVP（2026-05-09 补）：战斗镜头倾斜角度（弧度）
+## 用户提议 15° 偏大（晕动症 + 可读性损伤），先用 5° 试 —— 不平衡感够 + 可读性几乎无损
+## HUD 在 CanvasLayer 自动保持水平，不受 Camera 旋转影响；地图 + 战斗单位整体倾斜
+const BATTLE_TILT_RAD: float = 0.0872664626  ## deg_to_rad(5.0)
+
+## 入口 4 MVP（2026-05-09 跑测补丁）：探索态 HUD 底栏占用预留
+## 修复：玩家贴地图底边时，HudBar 浮在地图上方 → 队长视觉被 HUD 遮挡
+## 方案：Camera2D.offset.y 向下偏 RESERVE/2 让玩家在屏幕几何中心上方；同时扩展
+##       limit_bottom，允许 camera 继续下移到地图边外（屏幕底部 RESERVE 像素正好被 HUD 遮）
+## 数值：60 px = HudBar 实测 ~40px + 20px 安全间距
+const EXPLORE_HUD_BOTTOM_RESERVE_PX: int = 60
 
 # ─────────────────────────────────────────
 # 节点引用
@@ -389,6 +423,15 @@ var _battle_session: BattleSession = null
 ## 通过 _battle_session.on_redraw_requested 接收 redraw 请求并刷新 HUD 内容
 var _battle_hud: BattleHUD = null
 
+## 入口 4 MVP 战斗 zoom 状态
+## 战斗触发时 Camera2D zoom Tween 缩小 + 居中战场；结束时 Tween 回 Vector2.ONE + 队长位置
+## _battle_zoom_active = true 期间 _on_move_step 不会被触发（战斗中世界冻结），无需额外守卫
+var _battle_zoom_active: bool = false
+var _battle_zoom_tween: Tween = null
+## 入口 4 MVP（2026-05-09 追加）：战斗中心格缓存（用于战场外压暗 overlay）
+## 在 _start_battle_camera 设置；_end_battle_camera 不清——战场结束后压暗自然不画
+var _battle_center_grid: Vector2i = Vector2i.ZERO
+
 ## 入口 1.2 战斗动画状态：BattleUnit → 像素偏移（叠加在 battle_position*TILE_SIZE 之上）
 ## 用于移动 Tween / 攻击推冲 / 颤抖；动画完成后 erase 自动恢复原位
 var _battle_unit_visual_offsets: Dictionary = {}
@@ -417,6 +460,17 @@ var _battle_displayed_hps: Dictionary = {}
 ## 点击 = _try_trigger_active_battle（与 [F] 键同语义）
 ## 避免玩家忽略 [F] 键提示，给"可发起攻击"一个醒目的视觉信号
 var _explore_attack_btn: Button = null
+
+## 入口 4 MVP（2026-05-09）：探索态【扎营】按钮
+## 仅在玩家回合 + 补给耗尽（_supply == 0）+ 非战斗态时显示
+## 与 _explore_attack_btn 用 HBoxContainer 平行排布（同时满足时两按钮并列显示，玩家自选）
+## 点击 = _start_camp（与空格键同语义）
+var _explore_camp_btn: Button = null
+
+## 入口 4 MVP（2026-05-09）：探索态行动按钮容器（HBox）
+## 两个按钮（攻击 / 扎营）的父容器；只挂可见按钮的位置由 HBox 自动布局
+## anchor 居中屏幕底部偏上；HBox.size 自动跟随可见 child 之和
+var _explore_action_bar: HBoxContainer = null
 
 ## 敌方 AI 目标切换半径（曼哈顿距离）—— M8 扩展
 ## dist(pack, player) <= 该值 + d_player < d_core → pack 追玩家；否则推核心
@@ -718,6 +772,10 @@ func _ready() -> void:
 
 	# Camera 初始位置直接设到单位位置（首帧不需要平滑）
 	_camera.position = _unit_visual_pos
+	# 入口 4 MVP（2026-05-09 跑测补丁）：Camera offset 向下偏 RESERVE/2
+	# 让玩家在屏幕几何中心上方 RESERVE/2 → 远离底部 HudBar；战斗 zoom 期间 offset 仍生效
+	# 视觉效果：地图渲染区中心从屏幕几何中心上移，HUD 在玩家下方独立条带不重叠
+	_camera.offset = Vector2(0, float(EXPLORE_HUD_BOTTOM_RESERVE_PX) * 0.5)
 
 	# 初始化子系统
 	_init_subsystems()
@@ -831,6 +889,9 @@ func _init_subsystems() -> void:
 	_event_panel.name = "EventPanelUI"
 	add_child(_event_panel)
 	_event_panel.create_ui(ui_layer)
+	# 入口 4 MVP（2026-05-09 BUG 修复）：事件面板关闭时刷新探索态行动按钮
+	# 修复 BUG：补给 0 时踩即时 slot 触发事件，关闭事件面板后扎营按钮未显示
+	_event_panel.closed.connect(_on_event_panel_closed)
 
 	# E 战斗就地展开 MVP：战斗内 HUD
 	# 挂载位置：EventPanelUI 之后、VictoryUI 之前
@@ -844,6 +905,20 @@ func _init_subsystems() -> void:
 	_battle_hud.attack_pressed.connect(_on_battle_hud_attack_pressed)
 	_battle_hud.skip_pressed.connect(_on_battle_hud_skip_pressed)
 	_battle_hud.exit_pressed.connect(_on_battle_hud_exit_pressed)
+
+	# 入口 4 MVP（2026-05-09）：探索态行动栏 HBoxContainer（攻击 + 扎营平行排布）
+	# 居中屏幕底部偏上；child 数 0 / 1 / 2 都自然布局
+	_explore_action_bar = HBoxContainer.new()
+	_explore_action_bar.name = "ExploreActionBar"
+	_explore_action_bar.add_theme_constant_override("separation", 12)
+	_explore_action_bar.anchor_left = 0.5
+	_explore_action_bar.anchor_right = 0.5
+	_explore_action_bar.anchor_top = 1.0
+	_explore_action_bar.anchor_bottom = 1.0
+	_explore_action_bar.offset_bottom = -64
+	_explore_action_bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_explore_action_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	ui_layer.add_child(_explore_action_bar)
 
 	# E MVP 探索态【攻击】按钮：玩家回合且触发距离内有敌方包时显示，醒目红色
 	# 屏幕中央偏下浮动；与 BattleHUD 行动栏不会同时显示（战斗态时本按钮隐藏）
@@ -873,16 +948,40 @@ func _init_subsystems() -> void:
 	var btn_pressed: StyleBoxFlat = btn_normal.duplicate() as StyleBoxFlat
 	btn_pressed.bg_color = Color(0.62, 0.12, 0.14, 1.0)
 	_explore_attack_btn.add_theme_stylebox_override("pressed", btn_pressed)
-	# 屏幕底部偏上居中（避免遮挡 HudBar 顶部 + 与 BattleHUD 错位）
-	_explore_attack_btn.anchor_left = 0.5
-	_explore_attack_btn.anchor_right = 0.5
-	_explore_attack_btn.anchor_top = 1.0
-	_explore_attack_btn.anchor_bottom = 1.0
-	_explore_attack_btn.offset_bottom = -64
-	_explore_attack_btn.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_explore_attack_btn.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	ui_layer.add_child(_explore_attack_btn)
+	# 入口 4 MVP（2026-05-09）：挂到 HBox（位置由容器管理，不再单独设 anchor）
+	_explore_action_bar.add_child(_explore_attack_btn)
 	_explore_attack_btn.pressed.connect(_on_explore_attack_pressed)
+
+	# 入口 4 MVP（2026-05-09）：探索态【扎营】按钮（与攻击按钮同位置 / 互斥）
+	# 配色：泥土棕 + 米色描边 —— 与攻击按钮的"红 + 金边"形成色相区分（紧迫 vs 安静）
+	_explore_camp_btn = Button.new()
+	_explore_camp_btn.name = "ExploreCampBtn"
+	_explore_camp_btn.text = "⛺ 扎营 [Space]"
+	_explore_camp_btn.visible = false
+	_explore_camp_btn.custom_minimum_size = Vector2(160, 44)
+	_explore_camp_btn.add_theme_font_size_override("font_size", 18)
+	_explore_camp_btn.add_theme_color_override("font_color", Color(1.0, 0.95, 0.85, 1.0))
+	var camp_normal: StyleBoxFlat = StyleBoxFlat.new()
+	camp_normal.bg_color = Color(0.42, 0.30, 0.18, 0.95)
+	camp_normal.border_width_left = 2
+	camp_normal.border_width_right = 2
+	camp_normal.border_width_top = 2
+	camp_normal.border_width_bottom = 2
+	camp_normal.border_color = Color(0.92, 0.82, 0.62, 1.0)
+	camp_normal.content_margin_left = 16
+	camp_normal.content_margin_right = 16
+	camp_normal.content_margin_top = 8
+	camp_normal.content_margin_bottom = 8
+	_explore_camp_btn.add_theme_stylebox_override("normal", camp_normal)
+	var camp_hover: StyleBoxFlat = camp_normal.duplicate() as StyleBoxFlat
+	camp_hover.bg_color = Color(0.55, 0.40, 0.25, 0.98)
+	_explore_camp_btn.add_theme_stylebox_override("hover", camp_hover)
+	var camp_pressed: StyleBoxFlat = camp_normal.duplicate() as StyleBoxFlat
+	camp_pressed.bg_color = Color(0.32, 0.22, 0.12, 1.0)
+	_explore_camp_btn.add_theme_stylebox_override("pressed", camp_pressed)
+	# 挂到同一 HBox（与攻击按钮平行排布）
+	_explore_action_bar.add_child(_explore_camp_btn)
+	_explore_camp_btn.pressed.connect(_on_explore_camp_pressed)
 
 	# 胜负遮罩 UI（M8）
 	# 挂载顺序放在所有 UI 面板之后，保证遮罩渲染在最上层（吸收点击）
@@ -912,7 +1011,23 @@ func _init_subsystems() -> void:
 # 输入处理
 # ─────────────────────────────────────────
 
-func _input(event: InputEvent) -> void:
+## 入口 4 MVP BUG 修复（2026-05-09）：_input → _unhandled_input
+## 根因：Godot 4 输入流 _input 在 Viewport GUI 之前；点击 _explore_attack_btn 时 _input 先吞下
+##       MOUSE_BUTTON_LEFT 触发 _handle_click(移动)，然后按钮才 emit pressed → 行为冲突
+## 修复：改用 _unhandled_input，GUI 先消费按钮点击，地图点击才到这里
+##       空格键扎营仍正常（按钮不消费空格，未被 GUI 处理的事件流到 _unhandled_input）
+##
+## 入口 4 MVP（2026-05-09 v2）：SPACE 上下文路由——按状态分流到不同确认 / 扎营
+## 优先级：胜负遮罩 > 事件面板 > ManageUI 扎营态 > 探索态扎营兜底
+func _unhandled_input(event: InputEvent) -> void:
+	# SPACE 路由前置：在通用守卫 return 之前判断面板态确认（让 SPACE 可在面板打开时确认）
+	if event is InputEventKey:
+		var key0: InputEventKey = event as InputEventKey
+		if key0.pressed and not key0.echo and key0.keycode == KEY_SPACE:
+			if _route_space_confirm():
+				get_viewport().set_input_as_handled()
+				return
+
 	# 动画播放中、战斗确认中、敌方移动中、管理 / 建造 / 事件面板打开中、扎营中、昏迷过渡中或流程结束时锁定所有输入
 	# 事件面板（F MVP）：玩家未确认事件前禁止地图点击 / 空格扎营，避免叠加触发
 	# 昏迷过渡（B MVP）：_is_in_coma=true 期间 reload 场景已排队，不允许任何操作
@@ -925,11 +1040,46 @@ func _input(event: InputEvent) -> void:
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 			_handle_click(mb.position)
 
-	# 空格键：扎营（触发扎营流程）
+	# 空格键：扎营（探索态兜底——_route_space_confirm 前置已处理面板态）
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
 		if key.pressed and not key.echo and key.keycode == KEY_SPACE:
 			_start_camp()
+
+
+## 入口 4 MVP（2026-05-09）：SPACE 上下文确认路由
+##
+## 路由清单（按优先级）：
+##   1. 胜负遮罩可见 → 重开（_victory_ui.confirm_restart）
+##   2. 事件面板打开 → 触发首个 action（_event_panel.confirm_first_action）
+##   3. ManageUI 扎营态打开 → 关闭（_manage_ui.close —— 即"确认结束"）
+##   4. 战斗中玩家回合 → 结束当前 actor 行动（_on_battle_hud_skip_pressed —— 即"结束行动"）
+##
+## 返回值：true = SPACE 已被消费，调用方 return；false = 继续走兜底（探索态扎营）
+##
+## 优先级理由：
+##   - 胜负遮罩压顶（无视其他状态）
+##   - 事件面板优先于 ManageUI（事件面板挡住所有面板交互）
+##   - ManageUI 扎营态：玩家在养成完成后按 SPACE 一键收尾
+##   - 战斗态结束行动：高频操作（每回合可能用），_on_battle_hud_skip_pressed 内部已有 session/turn 守卫
+func _route_space_confirm() -> bool:
+	if _victory_ui != null and _victory_ui.is_open:
+		_victory_ui.confirm_restart()
+		return true
+	if _event_panel != null and _event_panel.is_open:
+		_event_panel.confirm_first_action()
+		return true
+	if _manage_ui != null and _manage_ui.is_open and _manage_ui.is_camp_mode():
+		_manage_ui.close()
+		return true
+	# 入口 4 MVP（2026-05-09 追加）：战斗态结束行动
+	# 内部守卫（session 存在 / 未结束 / 玩家回合）由 _on_battle_hud_skip_pressed 处理
+	if _is_in_battle() and _battle_session != null \
+			and not _battle_session.is_ended() \
+			and _battle_session.is_player_turn():
+		_on_battle_hud_skip_pressed()
+		return true
+	return false
 
 # ─────────────────────────────────────────
 # 坐标工具
@@ -953,7 +1103,114 @@ func _setup_camera_limits() -> void:
 	_camera.limit_left = 0
 	_camera.limit_top = 0
 	_camera.limit_right = _schema.width * TILE_SIZE
-	_camera.limit_bottom = _schema.height * TILE_SIZE
+	# 入口 4 MVP（2026-05-09 跑测补丁）：limit_bottom 扩 RESERVE 让 camera 能下移到地图外
+	# 配合 _camera.offset.y = +RESERVE/2，玩家贴底时屏幕底部 RESERVE 像素是地图外虚空（被 HUD 遮挡）
+	# 不动 limit_top —— 顶部无 HUD 占用
+	_camera.limit_bottom = _schema.height * TILE_SIZE + EXPLORE_HUD_BOTTOM_RESERVE_PX
+
+
+## 入口 4 MVP：战斗 Camera zoom + 战场居中（进入战斗触发）
+##
+## zoom 公式（设计文档 §流程）：
+##   need_grids = 战场尺寸(2*range+1) + 上下各 1 格余量
+##   zoom = min(viewport_width / (need_grids*TILE_SIZE),
+##              (viewport_height - HUD_RESERVE) / (need_grids*TILE_SIZE))
+##   Godot 4 Camera2D.zoom 语义：< 1 = 视野扩大；这里目标 zoom 必然 ≤ 1
+## Tween 0.3s 平滑过渡 zoom + position；战斗中 Camera 锁定，不再被 _sync_camera_to_unit_visual 同步
+func _start_battle_camera(battle_center: Vector2i) -> void:
+	if _camera == null:
+		return
+	var zoom_target: float = _compute_battle_zoom_target()
+	var center_pixel: Vector2 = _grid_to_pixel_center(battle_center)
+	if _battle_zoom_tween != null and _battle_zoom_tween.is_valid():
+		_battle_zoom_tween.kill()
+	_battle_zoom_active = true
+	_battle_center_grid = battle_center  # 入口 4 MVP（追加）：缓存战场中心供 _draw_battle_dim_overlay 使用
+	_battle_zoom_tween = create_tween().set_parallel(true)
+	_battle_zoom_tween.tween_property(_camera, "zoom", Vector2(zoom_target, zoom_target), BATTLE_ZOOM_TWEEN_DURATION) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_battle_zoom_tween.tween_property(_camera, "position", center_pixel, BATTLE_ZOOM_TWEEN_DURATION) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 入口 4 MVP（2026-05-09 补）：战斗倾斜 5° —— 营造不平衡 / 紧张感
+	_battle_zoom_tween.tween_property(_camera, "rotation", BATTLE_TILT_RAD, BATTLE_ZOOM_TWEEN_DURATION) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+## 入口 4 MVP：战斗结束 Camera zoom 回归 + 镜头回到队长（_on_battle_session_ended 开头调用）
+##
+## 配对调用：每次 _start_battle_camera 必有一次 _end_battle_camera
+## 注意：本函数应在 _sync_world_unit_from_battle_leader（如调用）之前/之后皆可——
+##   如之后则 _unit.position 已是战斗结束最终位置；如之前则可能仍是开战时位置。
+##   当前选择：在 _on_battle_session_ended 顶部调用，与 _battle_hud.hide_hud 同时机
+func _end_battle_camera() -> void:
+	if not _battle_zoom_active:
+		return
+	_battle_zoom_active = false
+	if _battle_zoom_tween != null and _battle_zoom_tween.is_valid():
+		_battle_zoom_tween.kill()
+	if _camera == null:
+		return
+	var leader_pos: Vector2 = _camera.position
+	if _unit != null:
+		leader_pos = _grid_to_pixel_center(_unit.position)
+	_battle_zoom_tween = create_tween().set_parallel(true)
+	_battle_zoom_tween.tween_property(_camera, "zoom", Vector2.ONE, BATTLE_ZOOM_TWEEN_DURATION) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_battle_zoom_tween.tween_property(_camera, "position", leader_pos, BATTLE_ZOOM_TWEEN_DURATION) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 入口 4 MVP（2026-05-09 补）：倾斜归位
+	_battle_zoom_tween.tween_property(_camera, "rotation", 0.0, BATTLE_ZOOM_TWEEN_DURATION) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+## 入口 4 MVP（2026-05-09 追加）：战场外压暗 overlay
+##
+## 战斗 zoom 期间（_battle_zoom_active = true）画 4 个半透明黑色矩形覆盖战场之外
+## 战场区域 = 队长 ±_battle_arena_range 格 = (2*range+1)² 矩形
+## 实装方式：以战场为中心做"挖空"——画上 / 下 / 左 / 右 4 个矩形，中间留出战场不画
+## 覆盖范围：BATTLE_DIM_PADDING_PX 远超 camera 视野（zoom 0.55 + 倾斜 5° 仍可覆盖）
+## 调用时机：_draw() 末尾、HUD 之前
+func _draw_battle_dim_overlay() -> void:
+	if not _battle_zoom_active:
+		return
+	var r: int = _battle_arena_range
+	var cx: int = _battle_center_grid.x
+	var cy: int = _battle_center_grid.y
+	# 战场矩形（世界像素坐标）
+	var bx: int = (cx - r) * TILE_SIZE
+	var by: int = (cy - r) * TILE_SIZE
+	var bw: int = (2 * r + 1) * TILE_SIZE
+	var bh: int = (2 * r + 1) * TILE_SIZE
+	# Overlay 总范围（远超 camera 视野；padding 大保证 zoom out + 倾斜后仍覆盖）
+	var pad: int = BATTLE_DIM_PADDING_PX
+	var ox: int = bx - pad
+	var oy: int = by - pad
+	var ow: int = bw + 2 * pad
+	var oh: int = bh + 2 * pad
+	# 四矩形挖空：上 / 下（覆盖战场上下方全宽）+ 左 / 右（仅战场同高范围内）
+	# 上方
+	draw_rect(Rect2(ox, oy, ow, by - oy), BATTLE_DIM_COLOR, true)
+	# 下方
+	draw_rect(Rect2(ox, by + bh, ow, (oy + oh) - (by + bh)), BATTLE_DIM_COLOR, true)
+	# 左侧（仅战场同高）
+	draw_rect(Rect2(ox, by, bx - ox, bh), BATTLE_DIM_COLOR, true)
+	# 右侧（仅战场同高）
+	draw_rect(Rect2(bx + bw, by, (ox + ow) - (bx + bw), bh), BATTLE_DIM_COLOR, true)
+
+
+## 入口 4 MVP：战斗 zoom 目标值计算（设计文档公式）
+## 取 viewport 实际尺寸（不依赖基线 1280×720，stretch 等比缩放在更上层处理）
+## HUD 占位用 BATTLE_ZOOM_HUD_RESERVE_PX 估值；跑测后调常量值
+func _compute_battle_zoom_target() -> float:
+	var battle_size: int = _battle_arena_range * 2 + 1
+	var need_grids: int = battle_size + BATTLE_ZOOM_MARGIN_GRID * 2
+	var need_world_px: float = float(need_grids * TILE_SIZE)
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var usable_h: float = maxf(vp.y - float(BATTLE_ZOOM_HUD_RESERVE_PX), 1.0)
+	var zoom_x: float = vp.x / need_world_px
+	var zoom_y: float = usable_h / need_world_px
+	# zoom 取较小者（保证两轴都能装下）；上限钳到 1.0 避免在大窗口下反向放大
+	return minf(minf(zoom_x, zoom_y), 1.0)
 
 # ─────────────────────────────────────────
 # HUD 更新（CanvasLayer 上的 Label 节点）
@@ -1894,6 +2151,8 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 	)
 	# 战斗中清掉探索态可达高亮（避免视觉与战场叠加层干扰）
 	_reachable_tiles = {}
+	# 入口 4 MVP：战斗 Camera zoom + 战场居中（队长位置 = 战场中心）
+	_start_battle_camera(_unit.position)
 	# HUD 先显示（refresh 内部读 session 状态）
 	if _battle_hud != null:
 		_battle_hud.show_hud(_battle_session)
@@ -1931,6 +2190,8 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		_damage_increment
 	)
 	_reachable_tiles = {}
+	# 入口 4 MVP：被动战斗同样触发战场镜头 zoom（战场中心 = 队长位置）
+	_start_battle_camera(_unit.position)
 	if _battle_hud != null:
 		_battle_hud.show_hud(_battle_session)
 	_update_hud()
@@ -2328,8 +2589,11 @@ func _sync_world_unit_from_battle_leader() -> void:
 		return
 	_unit.position = leader_unit.battle_position
 	_unit_visual_pos = _grid_to_pixel_center(_unit.position)
-	if _camera != null:
-		_camera.position = _unit_visual_pos
+	# 入口 4 MVP（codex 审查 P1 修复 2026-05-09）：不再直接瞬移 _camera.position
+	# 原因：调用顺序是 sync → _end_battle_camera()，sync 把 camera 瞬移到队长位置后，
+	#       _end_battle_camera 的 position tween 起点 = 终点 = 队长位置 → tween 没有视觉变化（瞬移而非平滑）
+	# 修复：让 camera 暂时停在战场中心（_battle_zoom_active 期间的位置），
+	#       由 _end_battle_camera 从战场中心 tween 平滑过渡到队长位置
 
 
 ## 战斗结束 sink（设计 §3.4 / §2.8）
@@ -2360,6 +2624,10 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 		# B MVP 重生分支：_trigger_coma_or_lose 内部会处理 _is_in_coma 守卫
 		# _battle_session 在 reload 场景后由新 _ready 重新初始化（默认 null），无需手动清
 		_battle_session = null
+		# 入口 4 MVP：先 zoom 回归（用开战时 _unit.position 作 tween 终点）
+		# 重生分支由 _trigger_coma_or_lose 内部处理 _unit.position 重置 + camera 同步（瞬移到 spawn）
+		# 视觉效果：zoom 在 0.3s 内从 zoom_target 回到 1.0；camera position 由重生路径瞬移覆盖
+		_end_battle_camera()
 		_trigger_coma_or_lose()
 		return
 
@@ -2367,6 +2635,9 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 	# 同步战斗内队长 battle_position 回 _unit.position + 视觉位置 + 摄像机；
 	# 不调用会让探索态单位回到开战前位置，违背设计约束
 	_sync_world_unit_from_battle_leader()
+	# 入口 4 MVP：sync 之后再 zoom 回归 —— _end_battle_camera 内取 _unit.position 已是最终队长格
+	# Tween 起点 = sync 设的 camera.position（=队长最终位置），终点 = 同位置；只 zoom 在变（视觉自然）
+	_end_battle_camera()
 
 	if reason == BattleSession.EndReason.VICTORY:
 		# 1. 收集合并奖励
@@ -3325,27 +3596,62 @@ func _on_explore_attack_pressed() -> void:
 	_handle_f_key()
 
 
-## 刷新探索态【攻击】按钮可见性
+## 入口 4 MVP（2026-05-09）：探索态【扎营】按钮点击 handler
+## 守卫由 _start_camp 内部处理（与空格键路径共用单一入口）
+func _on_explore_camp_pressed() -> void:
+	_start_camp()
+
+
+## 入口 4 MVP（2026-05-09 BUG 修复）：事件面板关闭后刷新探索态行动按钮
+## 触发：EventPanelUI.closed signal
+## 必要性：事件面板关闭时 _supply / 触发距离内敌包 等条件可能已变（事件 callback 改了 _supply）
+##         不刷新 → 扎营 / 攻击按钮 visible 状态滞后
+func _on_event_panel_closed() -> void:
+	_update_explore_action_button()
+	queue_redraw()
+
+
+## 刷新探索态【攻击】/【扎营】按钮可见性
 ##
-## 显示条件（全部满足）：
-##   - 不在战斗中
-##   - 不在游戏结束 / 移动动画 / 昏迷过渡 / 各面板打开
-##   - 当前是 PLAYER 回合
-##   - 敌方移动阶段未在执行
-##   - 玩家位置 dist ≤ _battle_trigger_range 内有可交互敌方包
+## 入口 4 MVP（2026-05-09 v2）：两按钮独立判断 + HBox 平行排布
+## 显示规则（独立，可同时为 true）：
+##   - 攻击按钮：通用守卫通过 + 补给 > 0 + 触发距离内有可交互敌方包
+##   - 扎营按钮：通用守卫通过 + 补给耗尽（_supply == 0）
+##   - 同时满足时两按钮并列展示，玩家自选
 ##
 ## 调用时机：_update_hud / _refresh_reachable / sink 末尾 / faction 切换 / 战斗结束
-## 这些点覆盖了所有可能让条件变化的场景
 func _update_explore_action_button() -> void:
 	if _explore_attack_btn == null:
 		return
-	var should_show: bool = _can_show_explore_attack()
-	_explore_attack_btn.visible = should_show
+	_explore_attack_btn.visible = _can_show_explore_attack()
+	if _explore_camp_btn != null:
+		_explore_camp_btn.visible = _can_show_explore_camp()
 
 
 ## 探索态【攻击】按钮可见性条件评估
 ## 抽出独立函数避免在 _update_explore_action_button 里堆守卫表达式
+## 入口 4 MVP（v3 2026-05-09）：去掉 _supply <= 0 短路 —— 补给耗尽 + 敌包在范围时按钮仍显示
+##                              点击会走 _try_trigger_active_battle 内的 supply==0 notice 分支
+##                              这样"补给 0 + 敌包在范围"才能同时显示攻击 + 扎营两按钮供玩家选
 func _can_show_explore_attack() -> bool:
+	if not _passes_explore_action_guards():
+		return false
+	var candidates: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
+	return not candidates.is_empty()
+
+
+## 探索态【扎营】按钮可见性条件评估（入口 4 MVP）
+## 显示条件：通用守卫通过 + 补给 == 0
+## 不要求"敌包不在范围"——补给 0 时即使有敌包也无法主动战斗，仍优先提示扎营
+func _can_show_explore_camp() -> bool:
+	if not _passes_explore_action_guards():
+		return false
+	return _supply <= 0
+
+
+## 探索态行动按钮共通守卫（入口 4 MVP 抽取）
+## 攻击 / 扎营按钮共用的"能不能现在弹按钮"基础检查
+func _passes_explore_action_guards() -> bool:
 	if _is_in_battle():
 		return false
 	if _game_finished or _is_moving or _is_in_coma or _is_camping:
@@ -3366,8 +3672,7 @@ func _can_show_explore_attack() -> bool:
 		return false
 	if _characters.is_empty() or _characters[0] == null or not _characters[0].has_troop():
 		return false
-	var candidates: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
-	return not candidates.is_empty()
+	return true
 
 
 ## E MVP [F] 键 sink：探索态触发主动战斗 / 战斗态尝试手动退出
@@ -3379,9 +3684,12 @@ func _can_show_explore_attack() -> bool:
 ##
 ## 战斗态：BattleHUD 退出按钮按下也走 _on_battle_hud_exit_pressed，与 [F] 同语义
 func _handle_f_key() -> void:
+	# 入口 4 MVP（2026-05-09）：战斗态 F 语义改为「攻击」（与按钮等价）
+	# 原语义「退出战斗」（try_manual_exit）极低频，仅保留按钮入口
+	# 设计意图：F 在两态语义统一为"进攻 / 推进战斗"——探索态主动战斗 + 战斗态选最弱目标攻击
+	# 内部守卫（session 存在 / 玩家回合 / 有可攻击目标）由 _on_battle_hud_attack_pressed 处理
 	if _is_in_battle():
-		if not _battle_session.try_manual_exit():
-			_show_notice("战场内仍有敌人，无法退出")
+		_on_battle_hud_attack_pressed()
 		return
 	# 探索态：补给 / 候选 / 触发由 _try_trigger_active_battle 内部判定
 	if _game_finished or _is_in_coma or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:
@@ -3527,6 +3835,10 @@ func _draw() -> void:
 	# 第 1.8 层：持久 slot 本体标记（M4；外框色块 + 核心城镇金边 + 类型等级文字）
 	_draw_persistent_slots()
 
+	# 第 1.85 层：敌方关卡（入口 4 MVP 2026-05-09 抽出）
+	# 必须在持久 slot 影响范围 / 本体之后画 —— 否则菱形被半透明红色影响范围吞没
+	_draw_level_slots()
+
 	# 第二层：可达范围高亮
 	# UI 重构步骤 7：可达范围双通道渲染
 	#   - 整格铺 REACHABLE_COLOR（alpha 0.08，轻量背景提示）
@@ -3585,6 +3897,12 @@ func _draw() -> void:
 		)
 		draw_rect(night_rect, Color(0.5, 0.5, 0.7, 0.35), true)
 
+	# 第 5.5 层：入口 4 MVP（2026-05-09 追加）战场外压暗 overlay
+	# 战斗态时画半透明黑覆盖战场之外；战场内不画 → 视觉聚焦战场
+	# 顺序：夜晚滤镜之后（让战场外 = 夜晚 + 压暗双层；战场内 = 仅夜晚保留昼夜感）
+	#       战场 overlay 之前（战斗单位 / 高亮 / HP 条画在压暗之上）
+	_draw_battle_dim_overlay()
+
 	# 第六层：E MVP 战场叠加（战斗态时渲染战场边框 / 单位 / 移动+攻击高亮 / HP 条）
 	# 渲染顺序在夜晚滤镜之后：让战场单位 / 高亮不被夜晚色调遮罩，保证战斗操作的可见性
 	if _is_in_battle():
@@ -3614,65 +3932,78 @@ func _draw_tile(x: int, y: int) -> void:
 	)
 	draw_rect(tile_rect, base_color)
 
-	# 若有 Slot，在格中央叠加色块标记 + 文字
+	# 若有非敌方关卡 Slot，在格中央叠加色块标记（兜底矩形渲染）
+	# 入口 4 MVP（2026-05-09）：敌方关卡（LevelSlot）渲染抽出到独立的 _draw_level_slots()
+	# 原因：原渲染层级低于持久 slot 影响范围（半透明红色块），同色叠加导致菱形被吞
+	# 新顺序：地形 → 兜底 slot → 影响范围 → 威胁圈 → 持久 slot 本体 → **敌方关卡** → 可达 → ...
 	var slot: MapSchema.SlotType = _schema.get_slot(x, y)
 	if slot != MapSchema.SlotType.NONE:
 		var pos: Vector2i = Vector2i(x, y)
-		var level: LevelSlot = _get_level_at(pos)
-		var is_enemy: bool = false
-		var is_repelled: bool = false
+		# 敌方关卡格本格在此层不画（由 _draw_level_slots 在更高层处理）
+		if _get_level_at(pos) != null:
+			return
+		var slot_color: Color = SLOT_COLORS.get(slot, Color.WHITE) as Color
+		var slot_rect: Rect2 = Rect2(
+			x * TILE_SIZE + SLOT_MARGIN,
+			y * TILE_SIZE + SLOT_MARGIN,
+			TILE_SIZE - SLOT_MARGIN * 2 - 1,
+			TILE_SIZE - SLOT_MARGIN * 2 - 1
+		)
+		draw_rect(slot_rect, slot_color)
 
-		# 敌方格统一标准敌方红底色；其他 slot 使用 SLOT_COLORS 兜底色
-		var slot_color: Color
-		if level != null:
-			# 正在移动的关卡跳过静态渲染（由 _draw_enemy_move_marker 负责）
-			if level == _enemy_movement.get_moving_level():
-				return
-			# E MVP 战斗态：参战 LevelSlot 跳过敌方关卡视觉，让 BattleUnit 圆形独占视觉
-			# 避免 LevelSlot 红菱形 + BattleUnit 红圆形重叠"敌方分身"观感
-			# 战斗结束 sink 清理 _level_slots 后本格自然不再走入这个分支
-			if _is_pack_in_battle(pos):
-				return
-			is_enemy = true
-			slot_color = ENEMY_SLOT_COLOR
-			if level.is_defeated():
-				# 已击败：变暗显示，不再叠加文字
-				slot_color = slot_color.darkened(CHALLENGED_DIM)
-			elif level.is_repelled():
-				# 已击退冷却中：半透明显示，不再叠加文字
-				is_repelled = true
-				slot_color = Color(slot_color.r, slot_color.g, slot_color.b, 0.4)
-		else:
-			slot_color = SLOT_COLORS.get(slot, Color.WHITE) as Color
 
-		# 敌方菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；其他 slot 仍用统一 SLOT_MARGIN
+## 入口 4 MVP（2026-05-09）：敌方关卡渲染独立层
+## 抽出原因：原 _draw_tile 内画法处于第一层（最低），被持久 slot 影响范围（半透明红色块）+
+##           持久 slot 本体（不透明）从上方覆盖。同色 / 强色叠加导致菱形被视觉吞没
+## 新位置：_draw() 内置于第 1.85 层 —— 持久 slot 本体之后、可达范围 / 单位 marker 之前
+## 守卫与原 _draw_tile 一致：跳过移动中关卡（_draw_enemy_move_marker 负责）+ 跳过参战关卡（BattleUnit 独占）
+func _draw_level_slots() -> void:
+	if _schema == null:
+		return
+	for pos_v in _level_slots:
+		var pos: Vector2i = pos_v as Vector2i
+		var level: LevelSlot = _level_slots[pos] as LevelSlot
+		if level == null:
+			continue
+		# 正在移动的关卡跳过静态渲染（由 _draw_enemy_move_marker 负责）
+		if level == _enemy_movement.get_moving_level():
+			continue
+		# 战斗态：参战 LevelSlot 跳过（BattleUnit 圆形独占视觉，避免红菱形+红圆形分身感）
+		if _is_pack_in_battle(pos):
+			continue
+
+		var is_repelled: bool = level.is_repelled()
+		var is_defeated: bool = level.is_defeated()
+		var slot_color: Color = ENEMY_SLOT_COLOR
+		if is_defeated:
+			# 已击败：变暗显示
+			slot_color = slot_color.darkened(CHALLENGED_DIM)
+		elif is_repelled:
+			# 已击退冷却中：半透明显示
+			slot_color = Color(slot_color.r, slot_color.g, slot_color.b, 0.4)
+
+		# 菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；击败 / 击退态用统一 SLOT_MARGIN
 		var rect_margin: int = SLOT_MARGIN
-		if is_enemy and not is_repelled and not level.is_defeated() and ENEMY_TIER_SLOT_MARGINS.has(level.tier):
+		if not is_repelled and not is_defeated and ENEMY_TIER_SLOT_MARGINS.has(level.tier):
 			rect_margin = ENEMY_TIER_SLOT_MARGINS[level.tier]
 		var slot_rect: Rect2 = Rect2(
-			x * TILE_SIZE + rect_margin,
-			y * TILE_SIZE + rect_margin,
+			pos.x * TILE_SIZE + rect_margin,
+			pos.y * TILE_SIZE + rect_margin,
 			TILE_SIZE - rect_margin * 2 - 1,
 			TILE_SIZE - rect_margin * 2 - 1
 		)
-		# 敌方关卡用菱形绘制，其他 Slot 保持矩形
-		if is_enemy:
-			_draw_diamond(slot_rect, slot_color)
-		else:
-			draw_rect(slot_rect, slot_color)
+		# 底色菱形
+		_draw_diamond(slot_rect, slot_color)
 
-		# 敌方关卡：菱形描边 + 米字小菱形图形（仅活跃状态）
-		# 视觉栈简化为 3 层：底色（统一红） → 外描边（黑红 + 宽度梯度） → 金色小菱形（米字累积）
-		if is_enemy:
-			var border_color: Color = REPELLED_BORDER_COLOR
-			var border_width: float = TIER_BORDER_WIDTHS.get(1, 2.5)  ## 兜底用中档宽度
-			if not is_repelled and not level.is_defeated():
-				border_color = TIER_BORDER_COLOR
-				border_width = TIER_BORDER_WIDTHS.get(level.tier, 2.5)
-			_draw_diamond(slot_rect, border_color, false, border_width)
-			# 米字 4 小菱形：按 tier 累积点亮（活跃状态）
-			if not is_repelled and not level.is_defeated():
-				_draw_enemy_tier_pattern(slot_rect, level.tier)
+		# 描边 + 米字（仅活跃状态）
+		var border_color: Color = REPELLED_BORDER_COLOR
+		var border_width: float = TIER_BORDER_WIDTHS.get(1, 2.5)
+		if not is_repelled and not is_defeated:
+			border_color = TIER_BORDER_COLOR
+			border_width = TIER_BORDER_WIDTHS.get(level.tier, 2.5)
+		_draw_diamond(slot_rect, border_color, false, border_width)
+		if not is_repelled and not is_defeated:
+			_draw_enemy_tier_pattern(slot_rect, level.tier)
 
 ## 即时资源点盲盒色（M6 视觉统一：采集前不显示具体类型，避免与"等权采集"规则冲突）
 ## UI 重构步骤 5：从冷灰 #8C8C99 改为暖浅灰 #B8B8B0（接近木箱感）+ 白描边，
@@ -4246,11 +4577,17 @@ const BATTLE_HP_BAR_BG: Color = Color(0.0, 0.0, 0.0, 0.55)
 # 入口 1.2 战斗内反馈（队长银三角 / 兵种字符 / 克制图标）
 # 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §8 视觉规格基准
 # ─────────────────────────────────────
-const BATTLE_LEADER_TRIANGLE_COLOR: Color = Color(0.95, 0.95, 1.0)  ## 队长银三角色（银白）
-const BATTLE_LEADER_TRIANGLE_SIZE: float = 6.0                      ## 三角边长（px）
+## 入口 4 MVP 队长标识改造（2026-05-09）：银三角 → HP 条金边
+## 替换原因：原银三角与克制图标共享头顶轨道 + 形状同族（▽ vs ▼/▲）→ 玩家瞬间无法区分
+## 新方案：队长 HP 条加金色描边——位置（脚下 vs 头顶）+ 颜色（金 vs 绿/橙）双重隔离
+const BATTLE_LEADER_HP_BORDER_COLOR: Color = Color(1.0, 0.84, 0.0)  ## 队长 HP 条金边色 #FFD700
+const BATTLE_LEADER_HP_BORDER_WIDTH: float = 2.0                    ## 金边线宽（px）
 const BATTLE_TROOP_LABEL_COLOR: Color = Color(1, 1, 1)              ## 兵种字符白色（高对比）
-const BATTLE_COUNTER_ICON_SIZE: float = 6.0                         ## 克制图标尺寸
-const BATTLE_COUNTER_ICON_GAP: float = 6.0                          ## 左右图标中心水平间距
+## 入口 4 MVP（2026-05-09）：6 → 12 / 6 → 12
+## 跑测发现 TILE_SIZE 72 下 6px 图标占单位半径 12.5%（48 时占 19%），过小不易观察
+## 修正后占比 25%，与单位整体协调（仍小于头顶轨道宽度，与队长标识不冲突）
+const BATTLE_COUNTER_ICON_SIZE: float = 12.0                        ## 克制图标尺寸
+const BATTLE_COUNTER_ICON_GAP: float = 12.0                         ## 左右图标中心水平间距
 const BATTLE_COUNTER_ICON_ADV: Color = Color(0.3, 0.85, 0.3)        ## ▲ 优势绿
 const BATTLE_COUNTER_ICON_DIS: Color = Color(1.0, 0.55, 0.1)        ## ▼ 劣势警示橙
 const BATTLE_COUNTER_ICON_NEUTRAL: Color = Color(0.95, 0.95, 0.95)  ## ● 中性亮白
@@ -4405,14 +4742,10 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 			32, BATTLE_CURRENT_ACTOR_RING, BATTLE_CURRENT_ACTOR_RING_WIDTH
 		)
 	# HP 条（单位下方）—— 入口 1.2 P1-5：传 unit 而非 troop，让函数内部决定是否补间
+	# 入口 4 MVP：_draw_battle_hp_bar 内部判断队长身份并加金边（替换原银三角方案）
 	_draw_battle_hp_bar(center, radius, u)
-	# 入口 1.2 视觉层：兵种字符 + 队长银三角 + 克制图标（详见 §8 视觉规格基准）
+	# 入口 1.2 视觉层：兵种字符 + 克制图标（队长银三角已移除，改为 HP 条金边，详见 §8 视觉规格基准）
 	_draw_battle_troop_glyph(center, u.troop)
-	# 队长银三角：仅玩家方 player_units[0] 对应的 BattleUnit 才画（与白环独立轨道，可同时显示）
-	if u.owner_faction == Faction.PLAYER \
-			and not _battle_session.player_units.is_empty() \
-			and u == _battle_session.player_units[0]:
-		_draw_leader_triangle(center, radius)
 	# 克制图标 2 个：仅在敌方单位 + 玩家回合 + 战斗未结束 + 当前 actor 为玩家方时画
 	if u.owner_faction != Faction.PLAYER \
 			and _battle_session.is_player_turn() \
@@ -4461,23 +4794,6 @@ func _draw_battle_troop_glyph(center: Vector2, troop: TroopData) -> void:
 	# TROOP_TYPE_NAMES 形如 "剑兵" / "弓兵"，取首字以紧凑显示在单位中心
 	var glyph: String = full_name.substr(0, 1) if full_name.length() > 0 else "?"
 	_draw_slot_label(center, glyph, BATTLE_TROOP_LABEL_COLOR)
-
-
-## 队长银三角：单位顶部 6×6 三角（顶点向下）
-## 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §8
-##   - 锚点 center.y - radius - BATTLE_HEAD_OFFSET（与克制图标共用头顶轨道）
-##   - 与当前 actor 白环不冲突：白环画在外圈，三角画在头顶上方
-func _draw_leader_triangle(center: Vector2, radius: float) -> void:
-	var anchor_y: float = center.y - radius - BATTLE_HEAD_OFFSET
-	var half: float = BATTLE_LEADER_TRIANGLE_SIZE * 0.5
-	# 顶点向下：左上 / 右上 / 下顶
-	var p_top_left: Vector2 = Vector2(center.x - half, anchor_y - half)
-	var p_top_right: Vector2 = Vector2(center.x + half, anchor_y - half)
-	var p_bottom: Vector2 = Vector2(center.x, anchor_y + half)
-	draw_polygon(
-		PackedVector2Array([p_top_left, p_top_right, p_bottom]),
-		PackedColorArray([BATTLE_LEADER_TRIANGLE_COLOR])
-	)
 
 
 ## 克制图标 2 个：左 = 兵种克制，右 = 地形克制
@@ -4567,8 +4883,9 @@ func _draw_battle_hp_bar(center: Vector2, radius: float, unit: BattleUnit) -> vo
 	var bar_h: float = float(BATTLE_HP_BAR_HEIGHT)
 	var bar_x: float = center.x - bar_w * 0.5
 	var bar_y: float = center.y + radius + 4.0
+	var bar_rect: Rect2 = Rect2(bar_x, bar_y, bar_w, bar_h)
 	# 背景
-	draw_rect(Rect2(bar_x, bar_y, bar_w, bar_h), BATTLE_HP_BAR_BG, true)
+	draw_rect(bar_rect, BATTLE_HP_BAR_BG, true)
 	# 前景按 hp_ratio
 	var fg: Color = BATTLE_HP_COLOR_LOW
 	if ratio >= 0.66:
@@ -4577,3 +4894,13 @@ func _draw_battle_hp_bar(center: Vector2, radius: float, unit: BattleUnit) -> vo
 		fg = BATTLE_HP_COLOR_MID
 	if ratio > 0.0:
 		draw_rect(Rect2(bar_x, bar_y, bar_w * ratio, bar_h), fg, true)
+	# 入口 4 MVP：队长 HP 条金边（替换原银三角方案）
+	# 判断条件：玩家阵营 + player_units[0] = 队长
+	# 修正（2026-05-09 跑测）：原 draw_rect 在 bar_rect 边界居中描边会向内压一半 → 血条本身被遮
+	# 改为 grow(BORDER_WIDTH) 把描边外扩，金边内侧贴血条外缘 + 完全不覆盖血条本体
+	if unit.owner_faction == Faction.PLAYER \
+			and _battle_session != null \
+			and not _battle_session.player_units.is_empty() \
+			and unit == _battle_session.player_units[0]:
+		var border_rect: Rect2 = bar_rect.grow(BATTLE_LEADER_HP_BORDER_WIDTH)
+		draw_rect(border_rect, BATTLE_LEADER_HP_BORDER_COLOR, false, BATTLE_LEADER_HP_BORDER_WIDTH)

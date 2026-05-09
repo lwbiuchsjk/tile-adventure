@@ -111,7 +111,8 @@ func create_ui(ui_layer: CanvasLayer) -> void:
 	# 重开按钮
 	_btn_restart = Button.new()
 	_btn_restart.name = "RestartButton"
-	_btn_restart.text = "重开"
+	# 入口 4 MVP（2026-05-09）：绑 SPACE 快捷键，按钮文字带标识
+	_btn_restart.text = "重开 [Space]"
 	_btn_restart.custom_minimum_size = Vector2(160, 40)
 	_btn_restart.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_btn_restart.pressed.connect(_on_restart_pressed)
@@ -163,4 +164,12 @@ func hide_overlay() -> void:
 
 ## 重开按钮点击：向 WorldMap 发信号
 func _on_restart_pressed() -> void:
+	restart_pressed.emit()
+
+
+## 入口 4 MVP：SPACE 路由触发重开（与点击重开按钮等价）
+## 由 WorldMap._unhandled_input SPACE 分流时调用；遮罩不可见时为 noop
+func confirm_restart() -> void:
+	if not is_open:
+		return
 	restart_pressed.emit()

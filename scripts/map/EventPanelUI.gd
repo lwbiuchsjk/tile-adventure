@@ -24,6 +24,13 @@ extends Node
 var is_open: bool = false
 
 
+## 入口 4 MVP（2026-05-09 BUG 修复）：面板关闭时 emit
+## 触发：_hide_panel 内（队列空时调用）
+## 监听方：WorldMap → _update_explore_action_button + queue_redraw
+##   修复 BUG：踩即时 slot 后补给 0，事件面板关闭后扎营按钮未刷新
+signal closed
+
+
 # ─────────────────────────────────────
 # 队列与当前事件
 # ─────────────────────────────────────
@@ -197,6 +204,9 @@ func _hide_panel() -> void:
 	is_open = false
 	_current_event = {}
 	_clear_action_buttons()
+	# 入口 4 MVP（2026-05-09 BUG 修复）：emit closed 让 WorldMap 刷新探索态行动按钮
+	# 修复 BUG：补给 0 时踩即时 slot 触发事件，关闭事件面板后扎营按钮未显示
+	closed.emit()
 
 
 ## 清空按钮容器（事件切换 / 关闭前）
@@ -212,10 +222,23 @@ func _clear_action_buttons() -> void:
 ## 用 Callable.bind 把 result 绑入回调，避免 lambda 捕获散落
 func _add_action_button(label: String, result: String) -> void:
 	var btn: Button = Button.new()
-	btn.text = label
+	# 入口 4 MVP（2026-05-09）：第一个 action 绑 SPACE 快捷键
+	# 多 action 事件（如"是 / 否"）SPACE 走第一项，玩家鼠标可选其他
+	var is_first: bool = _button_box.get_child_count() == 0
+	btn.text = (label + " [Space]") if is_first else label
 	btn.custom_minimum_size = Vector2(120, 32)
 	btn.pressed.connect(_on_action_clicked.bind(result))
 	_button_box.add_child(btn)
+
+
+## 入口 4 MVP：SPACE 路由触发首个 action（与点击首个按钮等价）
+## 由 WorldMap._unhandled_input SPACE 分流时调用；面板关闭时为 noop
+func confirm_first_action() -> void:
+	if not is_open or _button_box == null or _button_box.get_child_count() == 0:
+		return
+	var first: Button = _button_box.get_child(0) as Button
+	if first != null:
+		first.emit_signal("pressed")
 
 
 ## 玩家点击 action 回调

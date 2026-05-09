@@ -113,7 +113,8 @@ func open(characters: Array[CharacterData], inventory: Inventory, camp_mode: boo
 	_selected_char_index = -1
 	is_open = true
 	_title_label.text = "扎营 - 养成" if camp_mode else "装配管理"
-	_btn_close.text = "确认结束" if camp_mode else "关闭 [M]"
+	# 入口 4 MVP（2026-05-09）：扎营态绑 SPACE 快捷键，按钮文字带 [Space] 标识
+	_btn_close.text = "确认结束 [Space]" if camp_mode else "关闭 [M]"
 	refresh()
 	_panel.visible = true
 
@@ -124,6 +125,11 @@ func close() -> void:
 		_panel.visible = false
 	is_open = false
 	closed.emit()
+
+
+## 入口 4 MVP：是否处于扎营养成模式（用于 SPACE 路由判定）
+func is_camp_mode() -> bool:
+	return _camp_mode
 
 
 ## 刷新面板内容（装配/使用后调用）

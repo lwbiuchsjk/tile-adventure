@@ -8,7 +8,7 @@ extends Node
 ##
 ## 职责：
 ##   - 战斗态时显示顶部状态栏（战斗回合 / 当前行动单位 hp）
-##   - 底部行动按钮：[攻击] / [跳过] / [退出战斗]
+##   - 底部行动按钮：[攻击] / [结束行动] / [退出战斗]
 ##   - 通过信号通知 WorldMap 玩家操作意图（不直接调 BattleSession，便于 WorldMap 统一调度）
 ##   - 通过 refresh(session) 接收 BattleSession 状态变化拉新
 ##
@@ -26,7 +26,8 @@ extends Node
 ## 玩家点击 [攻击] 按钮（攻击范围内 hp 最低的敌方单位作目标）
 signal attack_pressed
 
-## 玩家点击 [跳过] 按钮（当前单位本回合行动结束）
+## 玩家点击 [结束行动] 按钮（当前单位本回合行动结束）
+## 内部信号名 skip_pressed 保留为逻辑语义，UI 文案为"结束行动"
 signal skip_pressed
 
 ## 玩家点击 [退出战斗] 按钮（手动退出尝试）
@@ -131,9 +132,9 @@ func create_ui(ui_layer: CanvasLayer) -> void:
 	hbox.add_theme_constant_override("separation", 12)
 	_bottom_panel.add_child(hbox)
 
-	_attack_btn = _make_button("攻击", "attack")
+	_attack_btn = _make_button("攻击 [F]", "attack")
 	hbox.add_child(_attack_btn)
-	_skip_btn = _make_button("跳过", "skip")
+	_skip_btn = _make_button("结束行动 [Space]", "skip")
 	hbox.add_child(_skip_btn)
 	_exit_btn = _make_button("退出战斗", "exit")
 	hbox.add_child(_exit_btn)
@@ -212,7 +213,7 @@ func set_actions_enabled(enabled: bool) -> void:
 ##
 ## 状态栏：战斗回合 X / 当前：[兵种 hp/max] / 阶段（玩家行动 / 敌方行动 / 已结束）
 ## [攻击] 按钮：玩家回合 + 当前 actor 攻击范围内有敌方目标 → 启用
-## [跳过] 按钮：玩家回合 + 当前 actor 未结束 → 启用
+## [结束行动] 按钮：玩家回合 + 当前 actor 未结束 → 启用
 ## [退出战斗] 按钮：玩家回合 + 战场内无敌方存活 → 启用（点击后 BattleSession.try_manual_exit）
 func refresh(session: BattleSession) -> void:
 	if session == null or _status_label == null:
@@ -231,7 +232,7 @@ func refresh(session: BattleSession) -> void:
 	# 入口 1.2：_actions_locked 为 true 时强制 disable 所有按钮（覆盖 session 状态判断）
 	if _attack_btn != null:
 		_attack_btn.disabled = _actions_locked or not (is_player and has_actor and has_target)
-	# 跳过按钮：玩家回合 + 当前单位未结束
+	# 结束行动按钮：玩家回合 + 当前单位未结束
 	if _skip_btn != null:
 		_skip_btn.disabled = _actions_locked or not (is_player and has_actor)
 	# 退出战斗按钮：玩家回合 + 战场内无敌方
