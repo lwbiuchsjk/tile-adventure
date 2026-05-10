@@ -32,6 +32,39 @@ signal closed
 
 
 # ─────────────────────────────────────
+# 入口 2 MVP 2.2 视觉规格常量（2026-05-10）
+# 跑测调参 / 美术接入时改这里;后续可被 .tres 资源替换
+# ─────────────────────────────────────
+
+## 整段 fade in 时长 —— 实际调用 UIFadeHelper.DEFAULT_FADE_IN_DURATION
+## 不在此处再重声明常量(GDScript const 要求常量表达式,跨 class_name 引用不算)
+
+## Panel 最小尺寸(让圆角 + 阴影 + 内边距撑开后不挤)
+const PANEL_MIN_SIZE: Vector2 = Vector2(360, 220)
+
+## StyleBoxFlat 视觉规格
+const PANEL_BG_COLOR: Color = Color(0.13, 0.09, 0.05, 0.92)
+const PANEL_BORDER_COLOR: Color = Color(0.78, 0.62, 0.32, 1.0)
+const PANEL_BORDER_WIDTH: int = 2
+const PANEL_CORNER_RADIUS: int = 8
+const PANEL_CONTENT_MARGIN_H: int = 20
+const PANEL_CONTENT_MARGIN_V: int = 18
+const PANEL_SHADOW_COLOR: Color = Color(0, 0, 0, 0.5)
+const PANEL_SHADOW_SIZE: int = 8
+const PANEL_SHADOW_OFFSET: Vector2 = Vector2(0, 4)
+
+## 字号 / 字色
+const TITLE_FONT_SIZE: int = 18
+const TITLE_FONT_COLOR: Color = Color(1.0, 0.92, 0.65, 1.0)
+const NARRATIVE_FONT_SIZE: int = 14
+const NARRATIVE_FONT_COLOR: Color = Color(0.92, 0.90, 0.85, 1.0)
+const BUTTON_FONT_SIZE: int = 14
+
+## 叙事 Label 宽度 = PANEL_MIN_SIZE.x - PANEL_CONTENT_MARGIN_H * 2 = 360 - 40 = 320
+const NARRATIVE_LABEL_WIDTH: int = 320
+
+
+# ─────────────────────────────────────
 # 队列与当前事件
 # ─────────────────────────────────────
 
@@ -60,6 +93,12 @@ var _narrative_label: Label = null
 
 ## 按钮容器（动态按 actions 重建）
 var _button_box: HBoxContainer = null
+
+## 入口 2 MVP 2.2（2026-05-10）：fade in 状态
+## _is_fading_in == true 时屏蔽所有"确认"输入(SPACE / 按钮点击 / SHIFT+SPACE 批量)
+## 0.4s fade in 完成后置 false,玩家正常交互
+var _is_fading_in: bool = false
+var _fade_tween: Tween = null
 
 
 # ─────────────────────────────────────
@@ -93,21 +132,32 @@ func create_ui(ui_layer: CanvasLayer) -> void:
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(center)
 
-	# 中央面板：300×200，深棕底（StyleBoxFlat 实装 §2 色号占位）
+	# 中央面板：360×220，暖金描边 + 圆角 + 阴影（入口 2 MVP 2.2 视觉规格升级 2026-05-10）
 	_panel = PanelContainer.new()
 	_panel.name = "EventPanel"
-	_panel.custom_minimum_size = Vector2(300, 200)
+	_panel.custom_minimum_size = PANEL_MIN_SIZE
 	var sb: StyleBoxFlat = StyleBoxFlat.new()
-	sb.bg_color = Color(0.15, 0.10, 0.05, 0.95)
-	sb.border_width_left = 1
-	sb.border_width_right = 1
-	sb.border_width_top = 1
-	sb.border_width_bottom = 1
-	sb.border_color = Color(0.45, 0.30, 0.15, 1.0)
-	sb.content_margin_left = 16
-	sb.content_margin_right = 16
-	sb.content_margin_top = 14
-	sb.content_margin_bottom = 14
+	sb.bg_color = PANEL_BG_COLOR
+	# 暖金描边(2px)
+	sb.border_width_left = PANEL_BORDER_WIDTH
+	sb.border_width_right = PANEL_BORDER_WIDTH
+	sb.border_width_top = PANEL_BORDER_WIDTH
+	sb.border_width_bottom = PANEL_BORDER_WIDTH
+	sb.border_color = PANEL_BORDER_COLOR
+	# 圆角(8px)
+	sb.corner_radius_top_left = PANEL_CORNER_RADIUS
+	sb.corner_radius_top_right = PANEL_CORNER_RADIUS
+	sb.corner_radius_bottom_left = PANEL_CORNER_RADIUS
+	sb.corner_radius_bottom_right = PANEL_CORNER_RADIUS
+	# 阴影(黑色 alpha 0.5 / 8px / 向下偏 4px)
+	sb.shadow_color = PANEL_SHADOW_COLOR
+	sb.shadow_size = PANEL_SHADOW_SIZE
+	sb.shadow_offset = PANEL_SHADOW_OFFSET
+	# 内边距(更"空气感")
+	sb.content_margin_left = PANEL_CONTENT_MARGIN_H
+	sb.content_margin_right = PANEL_CONTENT_MARGIN_H
+	sb.content_margin_top = PANEL_CONTENT_MARGIN_V
+	sb.content_margin_bottom = PANEL_CONTENT_MARGIN_V
 	_panel.add_theme_stylebox_override("panel", sb)
 	center.add_child(_panel)
 
@@ -116,23 +166,23 @@ func create_ui(ui_layer: CanvasLayer) -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	_panel.add_child(vbox)
 
-	# 标题（顶部，16pt 粗体 — 项目无独立粗体字体，靠 font_size 区分）
+	# 标题（顶部，18pt 米色 — MVP 2.2 视觉规格 2026-05-10）
 	_title_label = Label.new()
 	_title_label.name = "TitleLabel"
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title_label.add_theme_font_size_override("font_size", 16)
-	_title_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.65, 1.0))
+	_title_label.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
+	_title_label.add_theme_color_override("font_color", TITLE_FONT_COLOR)
 	vbox.add_child(_title_label)
 
-	# 叙事文本（中央，12pt，自动换行）
-	# custom_minimum_size 配合 panel 的 content_margin 留出 268px 文字宽
+	# 叙事文本（中央，14pt，自动换行 — MVP 2.2 视觉规格 2026-05-10）
+	# custom_minimum_size 配合 panel 的 content_margin 留出 320px 文字宽
 	_narrative_label = Label.new()
 	_narrative_label.name = "NarrativeLabel"
-	_narrative_label.add_theme_font_size_override("font_size", 12)
-	_narrative_label.add_theme_color_override("font_color", Color(0.92, 0.90, 0.85, 1.0))
+	_narrative_label.add_theme_font_size_override("font_size", NARRATIVE_FONT_SIZE)
+	_narrative_label.add_theme_color_override("font_color", NARRATIVE_FONT_COLOR)
 	_narrative_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_narrative_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_narrative_label.custom_minimum_size = Vector2(268, 0)
+	_narrative_label.custom_minimum_size = Vector2(NARRATIVE_LABEL_WIDTH, 0)
 	vbox.add_child(_narrative_label)
 
 	# 按钮容器（底部居中；MVP 通常仅 1 项"确认"，预留 ≥1 按钮的 HBox）
@@ -196,6 +246,24 @@ func _show_event(event: Dictionary) -> void:
 	_root.visible = true
 	is_open = true
 
+	# 入口 2 MVP 2.2（2026-05-10）：整段 fade in 0.4s
+	# panel + 标题 + 叙事 + 按钮整体淡入(modulate 沿层级穿透)
+	# fade in 期间 _is_fading_in == true,屏蔽确认输入(防误跳)
+	# 2026-05-11 抽 UIFadeHelper 共用工具:与 ManageUI / 后续 UI 表现一致
+	if _fade_tween != null and _fade_tween.is_valid():
+		_fade_tween.kill()
+	_is_fading_in = true
+	_fade_tween = UIFadeHelper.fade_in(
+		_root,
+		UIFadeHelper.DEFAULT_FADE_IN_DURATION,
+		_on_fade_in_finished
+	)
+
+
+## fade in 完成回调:解除输入屏蔽
+func _on_fade_in_finished() -> void:
+	_is_fading_in = false
+
 
 ## 隐藏面板（仅在队列已空时调用）
 func _hide_panel() -> void:
@@ -204,6 +272,11 @@ func _hide_panel() -> void:
 	is_open = false
 	_current_event = {}
 	_clear_action_buttons()
+	# MVP 2.2:清理 fade in 状态(避免下次开面板时残留)
+	_is_fading_in = false
+	if _fade_tween != null and _fade_tween.is_valid():
+		_fade_tween.kill()
+	_fade_tween = null
 	# 入口 4 MVP（2026-05-09 BUG 修复）：emit closed 让 WorldMap 刷新探索态行动按钮
 	# 修复 BUG：补给 0 时踩即时 slot 触发事件，关闭事件面板后扎营按钮未显示
 	closed.emit()
@@ -227,13 +300,19 @@ func _add_action_button(label: String, result: String) -> void:
 	var is_first: bool = _button_box.get_child_count() == 0
 	btn.text = (label + " [Space]") if is_first else label
 	btn.custom_minimum_size = Vector2(120, 32)
+	# 入口 2 MVP 2.2(2026-05-10):按钮字号 14pt(默认偏小,贴合 TILE_SIZE=72 新规格)
+	btn.add_theme_font_size_override("font_size", BUTTON_FONT_SIZE)
 	btn.pressed.connect(_on_action_clicked.bind(result))
 	_button_box.add_child(btn)
 
 
 ## 入口 4 MVP：SPACE 路由触发首个 action（与点击首个按钮等价）
 ## 由 WorldMap._unhandled_input SPACE 分流时调用；面板关闭时为 noop
+##
+## 入口 2 MVP 2.2 (2026-05-10):fade in 期间(_is_fading_in == true)屏蔽,防误跳
 func confirm_first_action() -> void:
+	if _is_fading_in:
+		return
 	if not is_open or _button_box == null or _button_box.get_child_count() == 0:
 		return
 	var first: Button = _button_box.get_child(0) as Button
@@ -257,6 +336,9 @@ func confirm_first_action() -> void:
 ## safety_cap：防御性循环上限，正常事件队列 ≤ 10，64 留充足保险
 ##             避免 result_callback 链式 push_event 导致死循环
 func confirm_all_single_action() -> void:
+	# 入口 2 MVP 2.2(2026-05-10):fade in 期间屏蔽,防玩家在过渡内连按导致跳过
+	if _is_fading_in:
+		return
 	if not is_open or _button_box == null:
 		return
 	var safety_cap: int = 64
@@ -278,7 +360,11 @@ func confirm_all_single_action() -> void:
 ##
 ## 注意：result_callback 内部可能再次 push_event（链式触发），
 ## 这里保存本地 event 副本后再切换，避免引用错乱
+##
+## 入口 2 MVP 2.2 (2026-05-10):fade in 期间屏蔽,防玩家盲点按钮误跳过
 func _on_action_clicked(action_result: String) -> void:
+	if _is_fading_in:
+		return
 	var event: Dictionary = _current_event
 	var payload: Dictionary = event.get("payload", {}) as Dictionary
 	var cb_variant: Variant = event.get("result_callback")

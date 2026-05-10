@@ -37,6 +37,12 @@ var _char_area: VBoxContainer = null
 var _inv_area: VBoxContainer = null
 var _btn_close: Button = null
 
+## 入口 2 MVP 2.2（2026-05-11）：fade in 状态(与 EventPanelUI 共用 UIFadeHelper)
+## 屏蔽 close 路径:防玩家在过渡内按 SPACE / 点关闭按钮立即跳过仪式感
+## 角色装配 / 道具使用按钮在 fade 期间不强制屏蔽(0.4s 内偶尔盲点容忍,玩家停留时间长)
+var _is_fading_in: bool = false
+var _fade_tween: Tween = null
+
 # ─────────────────────────────────────
 # 初始化
 # ─────────────────────────────────────
@@ -118,12 +124,38 @@ func open(characters: Array[CharacterData], inventory: Inventory, camp_mode: boo
 	refresh()
 	_panel.visible = true
 
+	# 入口 2 MVP 2.2（2026-05-11）：整段 fade in 0.4s,与 EventPanelUI 共用 UIFadeHelper
+	# panel.modulate 沿层级穿透,标题 / 角色区 / 背包区 / 按钮整体淡入
+	if _fade_tween != null and _fade_tween.is_valid():
+		_fade_tween.kill()
+	_is_fading_in = true
+	_fade_tween = UIFadeHelper.fade_in(
+		_panel,
+		UIFadeHelper.DEFAULT_FADE_IN_DURATION,
+		_on_fade_in_finished
+	)
+
+
+## fade in 完成回调:解除输入屏蔽
+func _on_fade_in_finished() -> void:
+	_is_fading_in = false
+
 
 ## 关闭管理面板
+##
+## 入口 2 MVP 2.2 (2026-05-11):fade in 期间(_is_fading_in)屏蔽 close 路径
+## 防玩家在 0.4s 过渡内按 SPACE / 点关闭按钮立即跳过仪式感
 func close() -> void:
+	if _is_fading_in:
+		return
 	if _panel != null:
 		_panel.visible = false
 	is_open = false
+	# 清理 fade in 状态
+	if _fade_tween != null and _fade_tween.is_valid():
+		_fade_tween.kill()
+	_fade_tween = null
+	_is_fading_in = false
 	closed.emit()
 
 
