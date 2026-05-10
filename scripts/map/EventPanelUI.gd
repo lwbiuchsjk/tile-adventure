@@ -241,6 +241,37 @@ func confirm_first_action() -> void:
 		first.emit_signal("pressed")
 
 
+## 入口 2 MVP 2.1 议题 4：批量确认所有单按钮事件
+## 由 WorldMap._unhandled_input SHIFT+SPACE 分流时调用
+##
+## 行为：循环触发首按钮，遇到多按钮（actions.size() > 1）的决策型事件停下
+##       —— 玩家在该事件上手动决策；若其后还有单按钮事件，需再按一次 SHIFT+SPACE
+##
+## codex review P1-4 注释（2026-05-10）：
+##   判定多按钮事件用 `_button_box.get_child_count() > 1` 与设计文档"actions.size() > 1"等价：
+##   - actions.is_empty() 时 _show_event 兜底加 1 个"确认"按钮 → child_count == 1
+##   - actions.size() == 1 → child_count == 1
+##   - actions.size() >= 2 → child_count >= 2
+##   每轮循环重新读 child_count（confirm_first_action 内部出队 + 新事件 _show_event 重建按钮）
+##
+## safety_cap：防御性循环上限，正常事件队列 ≤ 10，64 留充足保险
+##             避免 result_callback 链式 push_event 导致死循环
+func confirm_all_single_action() -> void:
+	if not is_open or _button_box == null:
+		return
+	var safety_cap: int = 64
+	var n: int = 0
+	while is_open and n < safety_cap:
+		if _button_box.get_child_count() > 1:
+			# 多按钮决策事件 → 停下，等玩家手动选择
+			break
+		if _button_box.get_child_count() == 0:
+			# 异常态（不应到达），保险退出
+			break
+		confirm_first_action()
+		n += 1
+
+
 ## 玩家点击 action 回调
 ## 1) 调用 result_callback（如有）
 ## 2) 队列非空 → 显示下一条；空 → 关闭面板

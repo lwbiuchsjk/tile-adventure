@@ -16,4 +16,4 @@ terrain_altitude_step,0.10
 active_battle_supply_cost,0
 passive_battle_supply_cost,0
 battle_player_dmg_factor,1.0
-battle_enemy_dmg_factor,0.1
+battle_enemy_dmg_factor,0.3

@@ -177,6 +177,12 @@ func start(
 	for pack in packs:
 		_deploy_enemy_pack(pack, occupied)
 
+	# 入口 2 MVP 2.1 议题 5 防御性兜底（2026-05-10）：
+	# 战斗 start 后立即检查 COMA —— 防止队长带病上场（HP 已 ≤ 阈值但因
+	# 上场战斗 _evaluate_party_state 兜底失效 / 装备道具改 max_hp 未触发判定路径而进入新战斗）
+	# 玩家"第一次 action 才触发 COMA"的体验问题在此处兜底为"start 即触发"
+	_check_battle_end_after_action()
+
 
 ## 结束战斗会话；触发 on_battle_ended sink
 ##

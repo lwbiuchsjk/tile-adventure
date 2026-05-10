@@ -227,6 +227,21 @@ static func active_used_hero_ids() -> Array[int]:
 	return _used_hero_ids.duplicate()
 
 
+## 按 hero_id 查 hero_pool 行（浅拷贝，外部修改不穿透）
+##
+## 入口 2 MVP 2.1 议题 5（2026-05-10）：让 WorldMap 在不重复加载 csv 的前提下
+## 读取 coma_narrative / respawn_narrative 等扩展字段
+##
+## 未找到（id 越界或池空）返回空 Dictionary
+static func find_hero_row(hero_id: int) -> Dictionary:
+	if hero_id < 0:
+		return {}
+	for row in _hero_pool:
+		if int(row.get("id", "-1")) == hero_id:
+			return row.duplicate()
+	return {}
+
+
 # ─────────────────────────────────────
 # 重生事件占位
 # ─────────────────────────────────────

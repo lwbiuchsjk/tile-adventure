@@ -378,6 +378,14 @@ var _camp_restore: int = 1
 ## 扎营状态标记
 var _is_camping: bool = false
 
+## 入口 2 MVP 2.1 议题 1：扎营时事件队列清空后再开 ManageUI 的标记
+## 由 _start_camp 在事件入队后置 true；_on_event_panel_closed 命中时打开 ManageUI 并清零
+##
+## codex review P1-5 修复（2026-05-10）：在 coma 触发 / 战斗启动 / 整局结束等异常路径
+## 上主动重置该 flag，防止 EventPanel 被强制 hide 而非 close 时 flag 永久停留 true
+## 导致下次任何 EventPanel.close 都触发意外的 ManageUI.open
+var _pending_camp_manage_open: bool = false
+
 ## 单局评分追踪
 var _camp_count: int = 0
 var _total_hp_lost: int = 0
@@ -804,6 +812,19 @@ func _ready() -> void:
 	# → _on_faction_turn_started 接管 HUD / reachable 刷新）
 	_turn_manager.start_faction_turn(Faction.PLAYER)
 
+	# 入口 2 MVP 2.1 议题 5（2026-05-10）：游戏首次启动 → 黑屏揭幕过渡
+	# 分流：
+	#   - 应用首次启动：is_initial_play_done() == false → play_with_blackout_start 单句揭幕
+	#   - reload 触发的新场景：_init_player 内已调 notify_world_ready 推进过渡，本路径跳过
+	# OverlayTransitionUI _ready 时已黑屏 alpha=1，掩盖应用启动到此处的全部加载耗时
+	if not OverlayTransitionUI.is_initial_play_done():
+		var line: String = _format_respawn_line_for_current_leader()
+		var lines: PackedStringArray = PackedStringArray([line])
+		# 火苗团数 = 过渡完成后的玩家总命数；游戏开始无消耗 → 当前 respawns_left + 1（含当前队长）
+		# 例：max_cycles=3, _cycle_index=0 → respawns_left=2 → 显示 3 团火苗
+		var icon_data: Dictionary = {"icon": "🔥", "count": RunState.respawns_left() + 1}
+		OverlayTransitionUI.play_with_blackout_start(lines, icon_data)
+
 
 ## M7 开局预置敌方部队包（敌方 AI 设计 §3.1）
 ## MVP 初始 5 支；调用 EnemyReinforcement.spawn_batch 5 次，每次生成 1 支
@@ -1033,10 +1054,17 @@ func _init_subsystems() -> void:
 ## 优先级：胜负遮罩 > 事件面板 > ManageUI 扎营态 > 探索态扎营兜底
 func _unhandled_input(event: InputEvent) -> void:
 	# SPACE 路由前置：在通用守卫 return 之前判断面板态确认（让 SPACE 可在面板打开时确认）
+	# 入口 2 MVP 2.1 议题 4（2026-05-10）：扩展 SHIFT+SPACE = 批量确认所有单按钮事件
 	if event is InputEventKey:
 		var key0: InputEventKey = event as InputEventKey
 		if key0.pressed and not key0.echo and key0.keycode == KEY_SPACE:
-			if _route_space_confirm():
+			if key0.shift_pressed:
+				# SHIFT+SPACE：仅对事件面板单按钮事件批量确认；面板未开时空响应（消费输入避免误触发扎营）
+				if _event_panel != null and _event_panel.is_open:
+					_event_panel.confirm_all_single_action()
+				get_viewport().set_input_as_handled()
+				return
+			elif _route_space_confirm():
 				get_viewport().set_input_as_handled()
 				return
 
@@ -1752,8 +1780,15 @@ func _start_camp() -> void:
 
 	_update_hud()
 
-	# 打开养成面板（camp_mode = true，显示全部操作）
-	_manage_ui.open(_characters, _inventory, true)
+	# 入口 2 MVP 2.1 议题 1：扎营时事件队列清空后再开 ManageUI
+	# 流程拆分：
+	#   - 有事件入队（_event_panel.is_open）→ 置 _pending_camp_manage_open，等 closed 信号回调
+	#   - 无事件入队（产出 / 里程碑都未命中）→ 直接打开 ManageUI（保持原行为）
+	# 设计意图：避免事件面板与 ManageUI 同帧叠加弹出（详见 [[事件流程与队长过渡_MVP#流程 1]]）
+	if _event_panel != null and _event_panel.is_open:
+		_pending_camp_manage_open = true
+	else:
+		_manage_ui.open(_characters, _inventory, true)
 
 
 ## M6 扎营结算：ProductionSystem.settle_camp + apply_production + 飘字
@@ -2164,6 +2199,13 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 		_round_manager.get_current_round() if _round_manager != null else 0,
 		_damage_increment
 	)
+	# 入口 2 MVP 2.1 codex review P0-1 修复（2026-05-10）：
+	# BattleSession.start 末尾的防御性 _check_battle_end_after_action 可能立即触发 COMA →
+	# on_battle_ended sink 同步进入 _on_battle_session_ended → await 处 yield 出来,start() 返回
+	# 此时 is_ended() == true,不应再启动战场镜头 / 显示 HUD（否则会闪现一帧 zoom + HUD 然后黑屏）
+	# sink 的 await 完成后会自然进入 _trigger_coma_or_lose 启动黑屏过渡
+	if _battle_session.is_ended():
+		return
 	# 战斗中清掉探索态可达高亮（避免视觉与战场叠加层干扰）
 	_reachable_tiles = {}
 	# 入口 4 MVP：战斗 Camera zoom + 战场居中（队长位置 = 战场中心）
@@ -2204,6 +2246,10 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		_round_manager.get_current_round() if _round_manager != null else 0,
 		_damage_increment
 	)
+	# 入口 2 MVP 2.1 codex review P0-1 修复（2026-05-10）：与 _start_battle_session 同因
+	# 详见上方 _start_battle_session 内同段注释
+	if _battle_session.is_ended():
+		return
 	_reachable_tiles = {}
 	# 入口 4 MVP：被动战斗同样触发战场镜头 zoom（战场中心 = 队长位置）
 	_start_battle_camera(_unit.position)
@@ -2320,6 +2366,28 @@ func _drain_battle_anim_queue() -> void:
 		return
 	var runner: Callable = _battle_anim_queue.pop_front()
 	runner.call()
+
+
+## 入口 2 MVP 2.1 议题 5（2026-05-10）：等待战斗动画队列完全跑完
+##
+## 用于 COMA 触发时让玩家看到致命一击的完整动画再进入黑屏
+## 完成条件：_battle_anim_count == 0 且 _battle_anim_queue 为空
+##
+## 实现：每帧 polling；典型动画 0.3-0.6s，polling 帧数 < 60
+## safety_cap 保险：单 Tween 卡死时不让此函数永久 await
+##
+## codex review P2-2 限制说明（2026-05-10）：本函数用 get_tree().process_frame 推进，
+## WorldMap 是普通 Node（非 PROCESS_MODE_ALWAYS）—— 若未来引入 pause 机制（暂停菜单等），
+## tree paused 时 process_frame 不会推进，本函数会卡死。届时需改为 SceneTreeTimer 或将
+## WorldMap process_mode 改为 ALWAYS（或 _on_battle_session_ended COMA 分支单独处理）
+func _await_battle_anims_finished() -> void:
+	var safety_frames: int = 600  # 10s @ 60fps；正常动画绝不会跑这么久
+	var n: int = 0
+	while (_battle_anim_count > 0 or not _battle_anim_queue.is_empty()) and n < safety_frames:
+		await get_tree().process_frame
+		n += 1
+	if n >= safety_frames:
+		push_warning("WorldMap._await_battle_anims_finished: 超时 %d 帧，强制退出（_battle_anim_count=%d / queue.size=%d）" % [safety_frames, _battle_anim_count, _battle_anim_queue.size()])
 
 
 ## 调度下一个敌方 step：仅在 anim 完成 + queue 空 + 仍敌方回合时启动 0.18s 间隔 timer
@@ -2623,7 +2691,33 @@ func _sync_world_unit_from_battle_leader() -> void:
 ##
 ## 收尾通用：清空 _battle_session / 隐藏 HUD / 重置移动力 / 刷新可达
 func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
-	# 入口 1.2 P1-4 修复：清理所有动画状态字典 / 计数 / 队列
+	# 入口 2 MVP 2.1 议题 5（2026-05-10 跑测调整）：COMA 分支与其他分支的动画清理时机不同
+	#
+	# COMA 分支：先 await 致命一击的攻击 / 死亡动画跑完，玩家能看到完整因果，再清理 + 黑屏
+	#   不这么做的体验问题：致命一击的 anim runner 还在队列中就被 clear，玩家"敌人没动作就黑屏"
+	# VICTORY / MANUAL_EXIT 分支：保持原行为（立即清理 + 进入收尾流程）
+	if reason == BattleSession.EndReason.COMA:
+		# 隐藏 HUD（提前；防止 await 期间玩家点按钮）
+		if _battle_hud != null:
+			_battle_hud.hide_hud()
+		# 等致命一击的攻击 / 死亡动画完整播放（队列空 + 没在跑）
+		await _await_battle_anims_finished()
+		# 此时动画已自然跑完；清理状态字典 / 计数 / 队列（理论应已空，防御性归零）
+		_battle_unit_visual_offsets.clear()
+		_battle_dying_units.clear()
+		_battle_displayed_hps.clear()
+		_battle_anim_count = 0
+		_battle_anim_queue.clear()
+		# B MVP 重生分支：_trigger_coma_or_lose 内部会处理 _is_in_coma 守卫
+		# _battle_session 在 reload 场景后由新 _ready 重新初始化（默认 null），无需手动清
+		_battle_session = null
+		# 入口 4 MVP：先 zoom 回归（用开战时 _unit.position 作 tween 终点）
+		# 重生分支由 _trigger_coma_or_lose 内部处理 _unit.position 重置 + camera 同步（瞬移到 spawn）
+		_end_battle_camera()
+		_trigger_coma_or_lose()
+		return
+
+	# VICTORY / MANUAL_EXIT：原入口 1.2 P1-4 修复路径（立即清理）
 	# Tween 完成回调可能在战斗结束后异步触发，但回调内的 erase / count -= 都对清空后的字典安全
 	# 不主动 kill Tween：让 Tween 自然跑完，回调即 noop（字典已空 + count 已 0）
 	_battle_unit_visual_offsets.clear()
@@ -2631,20 +2725,8 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 	_battle_displayed_hps.clear()
 	_battle_anim_count = 0
 	_battle_anim_queue.clear()
-	# 隐藏 HUD（提前；防止 sink 中 push_event / notice 时 HUD 仍可见干扰）
 	if _battle_hud != null:
 		_battle_hud.hide_hud()
-
-	if reason == BattleSession.EndReason.COMA:
-		# B MVP 重生分支：_trigger_coma_or_lose 内部会处理 _is_in_coma 守卫
-		# _battle_session 在 reload 场景后由新 _ready 重新初始化（默认 null），无需手动清
-		_battle_session = null
-		# 入口 4 MVP：先 zoom 回归（用开战时 _unit.position 作 tween 终点）
-		# 重生分支由 _trigger_coma_or_lose 内部处理 _unit.position 重置 + camera 同步（瞬移到 spawn）
-		# 视觉效果：zoom 在 0.3s 内从 zoom_target 回到 1.0；camera position 由重生路径瞬移覆盖
-		_end_battle_camera()
-		_trigger_coma_or_lose()
-		return
 
 	# E MVP §2.8 / §3.4：胜利 / 手动退出 → 玩家位置保持队长当前格
 	# 同步战斗内队长 battle_position 回 _unit.position + 视觉位置 + 摄像机；
@@ -3237,9 +3319,10 @@ func _tick_repelled_cooldowns(faction: int) -> void:
 ##   - troop_type / troop_quality 字段名按 TroopData.TroopType / Quality 枚举名（"SWORD"/"R" 等）
 ##   - 兵种枚举不在 hero_pool 中预设时回退到 SWORD，品质回退到 R
 ##
-## 重生事件占位：函数末尾消费 RunState._pending_respawn_intro
-##   - true → _play_respawn_intro_anim() + 文字 "新指挥官 X 接过指挥权……"
-##   - false → 跳过（首次进入不显示介绍）
+## 重生事件：函数末尾消费 RunState._pending_respawn_intro
+##   - true → 上一帧 _trigger_coma_or_lose 已启动 OverlayTransitionUI 黑屏过渡（phase B 在等）
+##           调 OverlayTransitionUI.notify_world_ready(1, respawn_line) 替换第二句 + 推进 phase C
+##   - false → 跳过（首次进入由 _ready 末尾的 play_with_blackout_start 接管）
 ##
 ## 参数 player_cfg 暂保留：留作未来 hero_pool 缺省时的兜底字段来源；本期不再读 character_count
 func _init_player(player_cfg: Dictionary) -> void:
@@ -3268,12 +3351,16 @@ func _init_player(player_cfg: Dictionary) -> void:
 	_total_max_hp += troop.max_hp
 	_characters.append(ch)
 
-	# 重生事件占位（B MVP）
+	# 重生事件（B MVP → 入口 2 MVP 2.1 议题 5 升级）
 	# RunState.advance_cycle 时置 _pending_respawn_intro=true；
 	# 新场景 _ready → _init_player 末尾消费一次后清零
+	#
+	# 入口 2 MVP 2.1（2026-05-10）：
+	# 上一帧 _trigger_coma_or_lose 已启动 OverlayTransitionUI.play 黑屏过渡（phase B 在等 world_ready_signal）
+	# 此处替换 phase C 第二句的占位文本 + emit signal 让 phase B 通过
 	if RunState.consume_pending_respawn_intro():
-		_play_respawn_intro_anim()
-		_show_notice("新指挥官 %s 接过指挥权……" % _leader_display_name)
+		var respawn_line: String = _format_respawn_line_for_current_leader(leader_row)
+		OverlayTransitionUI.notify_world_ready(1, respawn_line)
 
 
 ## 兵种枚举字符串 → TroopData.TroopType
@@ -3303,16 +3390,30 @@ func _parse_troop_quality(name: String, default_quality: int) -> TroopData.Quali
 			return TroopData.Quality.R
 
 
-## 重生介绍美术接口（B MVP §2 占位 / P1 待跟踪扩展挂点）
-## MVP 阶段空实现；完整版升级为 [[F_事件面板基础_MVP]] 的 respawn 事件类型 + 立绘 + 过场动画
-func _play_respawn_intro_anim() -> void:
-	pass
+## 入口 2 MVP 2.1 议题 5（2026-05-10）：构造 coma 文案
+## 查 _characters[0] 的 coma_narrative csv 字段，空则用通用模板
+## 通用模板内 {name} 占位会被替换为传入 leader_name
+func _format_coma_line(leader_name: String) -> String:
+	var template: String = ""
+	if not _characters.is_empty() and _characters[0] != null:
+		var row: Dictionary = RunState.find_hero_row(_characters[0].hero_id)
+		template = String(row.get("coma_narrative", ""))
+	if template.is_empty():
+		return "队长 %s 失去了意识" % leader_name
+	return template.replace("{name}", leader_name)
 
 
-## 昏迷态美术接口（B MVP §2 占位 / P1 待跟踪扩展挂点）
-## MVP 阶段空实现；完整版升级为独立面板 + 立绘 + 过场动画
-func _play_coma_anim() -> void:
-	pass
+## 入口 2 MVP 2.1 议题 5（2026-05-10）：构造当前队长的 respawn 文案
+## leader_row_hint 可由 _init_player 直接传入（避免 find_hero_row 重复查）；
+## 未提供 hint 时用 _characters[0].hero_id 查 RunState
+func _format_respawn_line_for_current_leader(leader_row_hint: Dictionary = {}) -> String:
+	var template: String = String(leader_row_hint.get("respawn_narrative", ""))
+	if template.is_empty() and not _characters.is_empty() and _characters[0] != null:
+		var row: Dictionary = RunState.find_hero_row(_characters[0].hero_id)
+		template = String(row.get("respawn_narrative", ""))
+	if template.is_empty():
+		return "队长 %s 开启了旅程" % _leader_display_name
+	return template.replace("{name}", _leader_display_name)
 
 
 # ─────────────────────────────────────────
@@ -3451,9 +3552,14 @@ func _evaluate_party_state() -> bool:
 ## B 重生周期 MVP：队长昏迷或末周期失败分支
 ##
 ## 路径：
-##   - RunState.respawns_left() > 0 → 进入昏迷态：锁输入 + 文字占位 + 美术接口（空实现）
-##                                    → SceneTreeTimer 走完后 advance_cycle + reload_current_scene
+##   - RunState.respawns_left() > 0 → 进入昏迷态 + 走 OverlayTransitionUI 黑屏过渡
+##                                    midpoint 闭包内 advance_cycle + reload_current_scene
+##                                    新场景 _init_player 调 notify_world_ready 让 phase B 通过
 ##   - 否则                          → 末周期失败 → _on_victory_decided(ENEMY_1) 走 VictoryUI 失败遮罩
+##
+## 入口 2 MVP 2.1 升级（2026-05-10 议题 5）：
+##   - 删除原 _show_notice + SceneTreeTimer + _play_coma_anim 路径
+##   - 黑屏期间执行 reload，玩家不感知卡顿；视觉时长由 OverlayTransitionUI phase 决定
 ##
 ## 幂等：_is_in_coma / _game_finished 守卫，重复调用不重复触发
 func _trigger_coma_or_lose() -> void:
@@ -3462,27 +3568,28 @@ func _trigger_coma_or_lose() -> void:
 	if RunState.respawns_left() > 0:
 		_is_in_coma = true
 		_reachable_tiles = {}
-		# 重生事件占位（B MVP §2 / §8）
-		# 文字 _show_notice + 美术接口 _play_coma_anim（空实现）；P1 完整版升级为 F MVP respawn 事件
-		_show_notice("队长 %s 倒下了……" % _leader_display_name, _coma_duration_sec)
-		_play_coma_anim()
+		# codex review P1-5 修复（2026-05-10）：coma 触发即重置 flag
+		# 防 EventPanel 在战斗中被 hide 而非 close → flag 永久 true → 下次 EventPanel close 误开 ManageUI
+		_pending_camp_manage_open = false
 		queue_redraw()
-		# 计时结束 → 推进周期 + reload；新场景 _ready 走 ensure_initialized 时
-		# _initialized=true 直接 return，沿用 _used_hero_ids / _cycle_index
-		var coma_timer: SceneTreeTimer = get_tree().create_timer(_coma_duration_sec)
-		coma_timer.timeout.connect(_on_coma_timer_finished)
+		# 双句：第 1 句"X 失去了意识"立即可定；
+		# 第 2 句留空占位，reload 后 _init_player 内 notify_world_ready(1, ...) 替换为"队长 Y 开启了旅程"
+		var coma_line: String = _format_coma_line(_leader_display_name)
+		var lines: PackedStringArray = PackedStringArray([coma_line, ""])
+		# 火苗团数 = 过渡完成后的玩家总命数
+		# coma 触发会消耗 1 命（advance_cycle 把 _cycle_index +1），advance 后 respawns_left + 1 = 调用时的 respawns_left
+		# 例：max_cycles=3, _cycle_index=0 时触发：调用时 respawns_left=2 → 显示 2 团（advance 后剩 1 + 当前新队长）
+		var icon_data: Dictionary = {"icon": "🔥", "count": RunState.respawns_left()}
+		# midpoint 闭包：phase B 内由 OverlayTransitionUI 调用
+		# 返回 world_ready_signal 让 OverlayTransitionUI await，等新场景 ready 后继续
+		var midpoint: Callable = func() -> Signal:
+			RunState.advance_cycle()
+			get_tree().reload_current_scene()
+			return OverlayTransitionUI.world_ready_signal
+		OverlayTransitionUI.play(lines, icon_data, midpoint)
 	else:
 		# 末周期无保护 → 整局失败（沿用现有 VictoryUI 失败遮罩）
 		_on_victory_decided(Faction.ENEMY_1)
-
-
-## 昏迷计时结束回调：推进 RunState + reload 场景
-## reload 前再校验一次 _game_finished，避免极端时序下的重入（如 reload 期间被外部触发）
-func _on_coma_timer_finished() -> void:
-	if _game_finished:
-		return
-	RunState.advance_cycle()
-	get_tree().reload_current_scene()
 
 
 ## 全灭兜底（B MVP 退化）：仅在 _characters 为空时触发；正常昏迷 / 失败路径已被 _evaluate_party_state 接管
@@ -3546,7 +3653,7 @@ func _format_rewards_text(rewards: Array[ItemData]) -> String:
 
 ## 放弃流程：直接结束，记为失败（无二次确认）
 func _on_abandon() -> void:
-	# B 重生周期 MVP：昏迷过渡期间锁 Q 键放弃，否则会让 _on_coma_timer_finished 提前 return 截断重生流程
+	# B 重生周期 MVP：昏迷过渡期间锁 Q 键放弃，避免在 OverlayTransitionUI 黑屏过渡中触发整局失败
 	# E MVP：战斗态期间锁 Q 键放弃（设计 §2.10）；战斗结束才允许整局放弃
 	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open or _is_in_coma or _is_in_battle():
 		return
@@ -3621,9 +3728,17 @@ func _on_explore_camp_pressed() -> void:
 ## 触发：EventPanelUI.closed signal
 ## 必要性：事件面板关闭时 _supply / 触发距离内敌包 等条件可能已变（事件 callback 改了 _supply）
 ##         不刷新 → 扎营 / 攻击按钮 visible 状态滞后
+##
+## 入口 2 MVP 2.1 议题 1（2026-05-10）：扎营路径事件队列清空 → 打开 ManageUI
+## _pending_camp_manage_open 由 _start_camp 内事件入队分支置 true
 func _on_event_panel_closed() -> void:
 	_update_explore_action_button()
 	queue_redraw()
+	# 议题 1：扎营路径上的事件全部确认完毕后才打开养成面板
+	if _pending_camp_manage_open:
+		_pending_camp_manage_open = false
+		if _manage_ui != null:
+			_manage_ui.open(_characters, _inventory, true)
 
 
 ## 刷新探索态【攻击】/【扎营】按钮可见性
