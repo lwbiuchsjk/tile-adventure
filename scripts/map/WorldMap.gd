@@ -236,10 +236,20 @@ const BATTLE_TILT_RAD: float = 0.0872664626  ## deg_to_rad(5.0)
 
 ## 入口 4 MVP（2026-05-09 跑测补丁）：探索态 HUD 底栏占用预留
 ## 修复：玩家贴地图底边时，HudBar 浮在地图上方 → 队长视觉被 HUD 遮挡
-## 方案：Camera2D.offset.y 向下偏 RESERVE/2 让玩家在屏幕几何中心上方；同时扩展
+## 方案：Camera2D.offset.y 向下偏 OFFSET 让玩家在屏幕几何中心上方；同时扩展
 ##       limit_bottom，允许 camera 继续下移到地图边外（屏幕底部 RESERVE 像素正好被 HUD 遮）
 ## 数值：60 px = HudBar 实测 ~40px + 20px 安全间距
 const EXPLORE_HUD_BOTTOM_RESERVE_PX: int = 60
+
+## 入口 4 MVP（2026-05-10 HTML 跑测补丁）：offset.y 与 limit_top 对称偏移的共享推导值
+## offset.y = +OFFSET 让画面下移；limit_top = -OFFSET 让 camera 可上越界相同距离 → 顶行不裁
+## 显式抽常量避免"修一处忘一处"，并防 RESERVE 改奇数时 int 除法导致 offset/limit_top 失对称
+const EXPLORE_HUD_OFFSET_PX: int = EXPLORE_HUD_BOTTOM_RESERVE_PX / 2
+
+## 项目主字体（FontVariation = SourceHanSansSC + NotoColorEmoji fallback）
+## 入口 4 MVP（2026-05-10 HTML 跑测）：preload 形式让编辑期校验路径，与项目其他 const 风格一致
+## Web 端 ThemeDB.fallback_font 仅含 ASCII，无 OS 字体回退，所有 draw_string() 直绘必须显式用本字体
+const MAIN_FONT: Font = preload("res://assets/font/main_font.tres")
 
 # ─────────────────────────────────────────
 # 节点引用
@@ -773,9 +783,9 @@ func _ready() -> void:
 	# Camera 初始位置直接设到单位位置（首帧不需要平滑）
 	_camera.position = _unit_visual_pos
 	# 入口 4 MVP（2026-05-09 跑测补丁）：Camera offset 向下偏 RESERVE/2
-	# 让玩家在屏幕几何中心上方 RESERVE/2 → 远离底部 HudBar；战斗 zoom 期间 offset 仍生效
+	# 让玩家在屏幕几何中心上方 OFFSET → 远离底部 HudBar；战斗 zoom 期间 offset 仍生效
 	# 视觉效果：地图渲染区中心从屏幕几何中心上移，HUD 在玩家下方独立条带不重叠
-	_camera.offset = Vector2(0, float(EXPLORE_HUD_BOTTOM_RESERVE_PX) * 0.5)
+	_camera.offset = Vector2(0, float(EXPLORE_HUD_OFFSET_PX))
 
 	# 初始化子系统
 	_init_subsystems()
@@ -783,8 +793,8 @@ func _ready() -> void:
 	# 启动第一轮（触发 _on_round_started → 生成资源点 + 预生成轮次奖励；M7 后不再生成敌方关卡）
 	_round_manager.start_current_round()
 
-	# 初始化地图标签字体（使用主题默认字体，供 _draw 中绘制文字标注）
-	_label_font = ThemeDB.fallback_font
+	# 初始化地图标签字体：使用顶部 const MAIN_FONT（preload 形式，编辑期校验路径）
+	_label_font = MAIN_FONT
 
 	# M7：开局预置 5 支敌方部队包（在敌方核心影响范围内随机空地）
 	# 必须在 start_current_round 之后（资源点已铺好、避免位置冲突）+ 首个玩家回合开始之前
@@ -924,6 +934,7 @@ func _init_subsystems() -> void:
 	# 屏幕中央偏下浮动；与 BattleHUD 行动栏不会同时显示（战斗态时本按钮隐藏）
 	_explore_attack_btn = Button.new()
 	_explore_attack_btn.name = "ExploreAttackBtn"
+	# 入口 4 MVP（2026-05-10）：emoji 前缀通过 main_font.tres 的 NotoColorEmoji fallback 渲染
 	_explore_attack_btn.text = "⚔ 攻击 [F]"
 	_explore_attack_btn.visible = false
 	_explore_attack_btn.custom_minimum_size = Vector2(160, 44)
@@ -956,6 +967,7 @@ func _init_subsystems() -> void:
 	# 配色：泥土棕 + 米色描边 —— 与攻击按钮的"红 + 金边"形成色相区分（紧迫 vs 安静）
 	_explore_camp_btn = Button.new()
 	_explore_camp_btn.name = "ExploreCampBtn"
+	# 入口 4 MVP（2026-05-10）：emoji 前缀通过 main_font.tres 的 NotoColorEmoji fallback 渲染
 	_explore_camp_btn.text = "⛺ 扎营 [Space]"
 	_explore_camp_btn.visible = false
 	_explore_camp_btn.custom_minimum_size = Vector2(160, 44)
@@ -1101,11 +1113,14 @@ func _setup_camera_limits() -> void:
 	if _schema == null or _camera == null:
 		return
 	_camera.limit_left = 0
-	_camera.limit_top = 0
+	# 入口 4 MVP（2026-05-10 HTML 跑测补丁）：limit_top 反向偏移补偿 camera.offset
+	# Godot 4 Camera2D.limit_* 计算时不计入 offset；offset.y=+OFFSET 让画面下移
+	# 若 limit_top=0，玩家贴顶时顶行只剩 (TILE_SIZE-OFFSET)/TILE_SIZE 比例（实测约 0.58 行）
+	# 设 limit_top=-OFFSET 让 camera 可上越界，使顶行完整呈现
+	_camera.limit_top = -EXPLORE_HUD_OFFSET_PX
 	_camera.limit_right = _schema.width * TILE_SIZE
 	# 入口 4 MVP（2026-05-09 跑测补丁）：limit_bottom 扩 RESERVE 让 camera 能下移到地图外
 	# 配合 _camera.offset.y = +RESERVE/2，玩家贴底时屏幕底部 RESERVE 像素是地图外虚空（被 HUD 遮挡）
-	# 不动 limit_top —— 顶部无 HUD 占用
 	_camera.limit_bottom = _schema.height * TILE_SIZE + EXPLORE_HUD_BOTTOM_RESERVE_PX
 
 

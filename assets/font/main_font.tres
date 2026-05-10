@@ -1,0 +1,18 @@
+[gd_resource type="FontVariation" load_steps=3 format=3]
+
+; 项目主字体：SourceHanSansSC（CJK 文字）+ NotoColorEmoji（emoji 字形）fallback
+; 入口 4 MVP（2026-05-10 HTML 跑测）：Web 端无 OS 字体回退，需显式打包 emoji 字体
+; 用法：default_theme.tres 引用此资源；地图 _draw 中的 _label_font / 战斗飘字 _font 也加载此资源
+;
+; 为何用 FontVariation 而非直接在 FontFile 上挂 fallbacks：
+;   - 当前不做字重/斜体派生，仅借 FontVariation 的 fallbacks 字段；功能上等价于 FontFile.fallbacks
+;   - 保留这层 wrapper 是为后续做字重 600 / 斜体派生留接口（FontVariation 的 variation_coordinates / opentype_features
+;     可在不改字体源文件的情况下派生衍生字重）
+;   - 如未来明确不会做字重派生，可以把这层折叠回 FontFile.fallbacks 减少一次 load_steps
+
+[ext_resource type="FontFile" path="res://assets/font/SourceHanSansSC-Regular.otf" id="1_base"]
+[ext_resource type="FontFile" path="res://assets/font/NotoColorEmoji.ttf" id="2_emoji"]
+
+[resource]
+base_font = ExtResource("1_base")
+fallbacks = Array[Font]([ExtResource("2_emoji")])

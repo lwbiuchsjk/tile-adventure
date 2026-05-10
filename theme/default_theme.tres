@@ -1,6 +1,8 @@
 [gd_resource type="Theme" load_steps=10 format=3]
 
-[ext_resource type="FontFile" path="res://assets/font/SourceHanSansSC-Regular.otf" id="1"]
+; 入口 4 MVP（2026-05-10 HTML 跑测）：default_font 改用 main_font.tres（FontVariation）
+; main_font 内部已配置 SourceHanSansSC + NotoColorEmoji fallback，让所有 HUD/Button 自动支持 emoji
+[ext_resource type="FontVariation" path="res://assets/font/main_font.tres" id="1"]
 
 [sub_resource type="StyleBoxFlat" id="panel_bg"]
 bg_color = Color(0.12, 0.14, 0.18, 0.92)

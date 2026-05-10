@@ -20,6 +20,11 @@ const DEFAULT_DURATION: float = 1.0            ## 默认持续时间（伤害飘
 const SUBTITLE_LINE_HEIGHT: float = 12.0       ## 主行基线到副行基线垂直间距
 const TEXT_WIDTH: float = 200.0                ## 文字水平居中参考宽度（远大于实际飘字宽度，保证 CENTER 对齐生效）
 
+## 项目主字体（FontVariation = SourceHanSansSC + NotoColorEmoji fallback）
+## 入口 4 MVP（2026-05-10 HTML 跑测）：preload 形式让编辑期校验路径
+## 命名为 PROJECT_FONT 避免与本类已有的 MAIN_FONT_SIZE 视觉混淆
+const PROJECT_FONT: Font = preload("res://assets/font/main_font.tres")
+
 var _main_text: String = ""
 var _subtitle: String = ""
 var _color: Color = Color.WHITE
@@ -59,7 +64,8 @@ static func spawn_text(
 
 
 func _ready() -> void:
-	_font = ThemeDB.fallback_font
+	# 使用顶部 const PROJECT_FONT（preload 形式，编辑期校验路径）
+	_font = PROJECT_FONT
 	# 启动 Tween：position.y 上飘 + modulate.a 渐隐；并行执行；finished 后自删
 	var tween: Tween = create_tween()
 	tween.set_parallel(true)
