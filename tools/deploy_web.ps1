@@ -91,3 +91,21 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ""
 Write-Host "===== Deploy complete =====" -ForegroundColor Green
 Write-Host "URL: $finalUrl" -ForegroundColor Green
+
+# Optional CDN reminder: if deploy.cdn_url is configured, source server is updated but
+# CDN edge nodes still hold the previous version (Cache-Control: immutable typically
+# makes .pck cached for 7 days). User must manually purge CDN cache via console.
+if ($deploy.cdn_url) {
+    $cdnRoot = $deploy.cdn_url.TrimEnd("/")
+    $cdnUrl  = "$cdnRoot/$GameName/"
+    Write-Host ""
+    Write-Host "===== CDN cache reminder =====" -ForegroundColor Yellow
+    Write-Host "Source server updated, but CDN edge nodes still serve the previous version." -ForegroundColor Yellow
+    Write-Host "(Cache-Control: immutable on .pck => effective TTL up to 7 days)" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Manually purge CDN cache for:" -ForegroundColor Yellow
+    Write-Host "  $cdnUrl" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Aliyun CDN console -> Refresh & Preheat -> URL/Directory Refresh." -ForegroundColor Yellow
+    Write-Host "After propagation, hard-reload browser (Ctrl+Shift+R) to verify." -ForegroundColor Yellow
+}
