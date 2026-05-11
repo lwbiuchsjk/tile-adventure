@@ -1,0 +1,12 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://assets/shader/night_overlay.gdshader" id="1_night"]
+
+[resource]
+shader = ExtResource("1_night")
+shader_parameter/light_uv = Vector2(0.5, 0.5)
+shader_parameter/light_radius_uv = 0.25
+shader_parameter/fog_falloff_uv = 0.05
+shader_parameter/fog_color = Color(0, 0, 0, 1)
+shader_parameter/phase_alpha = 0.0
+shader_parameter/aspect_xy = 1.778

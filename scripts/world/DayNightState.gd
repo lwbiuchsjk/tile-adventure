@@ -193,6 +193,11 @@ static func _dispatch_phase_changed(phase: Phase) -> void:
 ## 视野限制 stub —— D MVP 不实装，仅保留接口
 ## 返回值：玩家可见格集合 {Vector2i: bool}；is_night 时调用方应裁剪渲染
 ## 落地时机：用户希望让"夜晚视野收缩"成为玩法变量时再展开（设计文档 §2 P2 待跟踪）
+##
+## 入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）：
+##   表现层夜晚视野已实装，见 tile-advanture-design/夜晚视野_MVP.md +
+##   scripts/map/WorldMap.gd::_setup_night_overlay / _update_night_shader_uniforms。
+##   逻辑层裁剪（"看不见 = 不能移动 / 不被 AI 感知"等）仍属本 stub 范围，未在本 MVP 中展开。
 static func get_visible_tiles(turn_manager: TurnManager, player_pos: Vector2i, schema: MapSchema) -> Dictionary:
 	push_warning("DayNightState.get_visible_tiles: 视野限制接口未实装")
 	# 参数显式 _ 标记未使用，避免 LSP 警告

@@ -256,6 +256,65 @@ const EXPLORE_HUD_OFFSET_PX: int = EXPLORE_HUD_BOTTOM_RESERVE_PX / 2
 ## Web 端 ThemeDB.fallback_font 仅含 ASCII，无 OS 字体回退，所有 draw_string() 直绘必须显式用本字体
 const MAIN_FONT: Font = preload("res://assets/font/main_font.tres")
 
+## 入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）：暗夜遮罩 + 视野半径 + 闪烁敌人
+## 设计文档：tile-advanture-design/夜晚视野_MVP.md
+## CanvasLayer 层数：5（介于世界 layer=0 与 UILayer=10 之间，让 HUD 不被夜晚遮罩压暗）
+const NIGHT_OVERLAY_CANVAS_LAYER: int = 5
+## 玩家队伍光源照亮半径（格数）—— 在屏幕像素空间转换时 × TILE_SIZE × camera.zoom
+const NIGHT_VISION_RADIUS_GRIDS: float = 3.5
+## 浓雾过渡带宽度（格数）—— shader smoothstep 衰减带，让光源边缘平滑而非硬切
+const NIGHT_FOG_FALLOFF_GRIDS: float = 0.75
+## 昼夜切换 fade 时长（秒）—— DAY ↔ NIGHT 平滑过渡
+const DAY_NIGHT_FADE_DURATION: float = 0.6
+## 战斗强制白天 fade 时长（秒）—— 与战斗 zoom BATTLE_ZOOM_TWEEN_DURATION 同步
+const BATTLE_FORCE_DAY_DURATION: float = 0.3
+## 浓雾外敌人闪烁参数 —— alpha = BASE + AMP * (sin(2πt/PERIOD + phase) * 0.5 + 0.5)
+## 峰值 = BASE + AMP；为保证不越界，需 BASE + AMP ≤ 1.0
+const BLINK_BASE_ALPHA: float = 0.35
+const BLINK_AMP: float = 0.45
+const BLINK_PERIOD: float = 1.6
+## 夜晚遮罩 ShaderMaterial 资源（preload 让编辑期校验路径，与 MAIN_FONT 风格一致）
+## 2026-05-11 跑测修复：shader 从 vec4[N] 多光源数组简化为单光源 UV 空间；
+##   多光源扩展接口（玩家方城建 slot 等）记入待跟踪事项索引 §十一 P3
+const NIGHT_OVERLAY_MATERIAL: ShaderMaterial = preload("res://assets/shader/night_overlay.tres")
+
+## 入口 4 后段第 1 份（夜晚视野 MVP，codex P0 修复 2026-05-11）：
+## 浓雾外敌人信号图层 CanvasLayer 层数 = 6（在夜晚遮罩 layer=5 之上、UILayer=10 之下）
+## 信号菱形屏幕像素半径 = TILE_SIZE × camera.zoom.x × FOG_SIGNAL_DIAMOND_SCALE
+## 选 0.30 让信号比正常视野内菱形略小，强化"远处只是模糊信号"的语义
+const FOG_SIGNAL_CANVAS_LAYER: int = 6
+const FOG_SIGNAL_DIAMOND_SCALE: float = 0.30
+
+
+# ─────────────────────────────────────────
+# 内嵌类型：浓雾外敌人信号节点（夜晚视野 MVP codex P0 修复）
+# ─────────────────────────────────────────
+
+## 浮层节点：CanvasLayer=6 内含的 Node2D，专门画浓雾外敌人闪烁信号
+## 自己的 _draw 调回宿主 WorldMap.collect_fog_signals 拿数据 → 画屏幕空间菱形
+## 与世界层渲染解耦，绕开 CanvasLayer=5 夜晚遮罩黑幕的遮挡
+class FogSignalNode extends Node2D:
+	## 宿主 WorldMap 引用（弱引用语义；WorldMap 退出场景时整个浮层一起 free）
+	var world_map: Node = null
+
+	func _draw() -> void:
+		if world_map == null:
+			return
+		var signals: Array = world_map.collect_fog_signals()
+		for s_v in signals:
+			var s: Dictionary = s_v as Dictionary
+			var center: Vector2 = s.get("center", Vector2.ZERO) as Vector2
+			var half: float = s.get("half", 8.0) as float
+			var color: Color = s.get("color", Color.RED) as Color
+			# 屏幕空间小菱形：四顶点取 (center ± half) 的上下左右
+			var pts: PackedVector2Array = PackedVector2Array([
+				Vector2(center.x, center.y - half),
+				Vector2(center.x + half, center.y),
+				Vector2(center.x, center.y + half),
+				Vector2(center.x - half, center.y),
+			])
+			draw_colored_polygon(pts, color)
+
 # ─────────────────────────────────────────
 # 节点引用
 # ─────────────────────────────────────────
@@ -477,6 +536,24 @@ var _battle_zoom_tween: Tween = null
 ## 入口 4 MVP（2026-05-09 追加）：战斗中心格缓存（用于战场外压暗 overlay）
 ## 在 _start_battle_camera 设置；_end_battle_camera 不清——战场结束后压暗自然不画
 var _battle_center_grid: Vector2i = Vector2i.ZERO
+
+## 入口 4 后段第 1 份（夜晚视野 MVP）状态
+## 设计文档：tile-advanture-design/夜晚视野_MVP.md
+## CanvasLayer 挂在 layer=5（介于世界与 UI 之间），内含全屏 ColorRect 用 night_overlay shader
+var _night_overlay_layer: CanvasLayer = null
+var _night_overlay_rect: ColorRect = null
+## 当前 shader 的 phase_alpha 因子（0=白天 / 1=夜晚 / 中间值 = Tween 进行中）
+var _phase_alpha: float = 0.0
+## 昼夜 fade Tween 引用（任意时刻只允许一个 Tween）
+var _phase_alpha_tween: Tween = null
+## 战斗中强制白天遮罩（force-day）
+## true 期间所有 phase_changed 仅更新 _pending_post_battle_phase，不动 Tween
+var _battle_force_day: bool = false
+## 战斗中收到的最后 phase 切换（DAY=0 / NIGHT=1）；战斗结束时按此 fade 回去
+var _pending_post_battle_phase: int = 0
+## 入口 4 后段第 1 份（codex P0 修复）：浓雾外敌人信号浮层（CanvasLayer=6）+ 内含 Node2D 画屏幕空间菱形
+var _fog_signal_layer: CanvasLayer = null
+var _fog_signal_node: FogSignalNode = null
 
 ## 入口 1.2 战斗动画状态：BattleUnit → 像素偏移（叠加在 battle_position*TILE_SIZE 之上）
 ## 用于移动 Tween / 攻击推冲 / 颤抖；动画完成后 erase 自动恢复原位
@@ -840,6 +917,16 @@ func _ready() -> void:
 	# 初始化子系统
 	_init_subsystems()
 
+	# 入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）：挂载夜晚遮罩 CanvasLayer
+	# 必须在 _init_subsystems 之后——后者已通过 DayNightState.register_phase_changed_sink
+	# 注册了 _on_day_night_phase_changed；本函数挂载完节点后，sink 即可驱动 fade
+	# set_process(true) 启用每帧 update（默认 Node 自动启用，显式声明意图）
+	_setup_night_overlay()
+	# 入口 4 后段第 1 份（codex P0 修复）：紧跟挂载浓雾外敌人信号浮层
+	# 必须在 _setup_night_overlay 之后——layer=6 排在 layer=5 之上才能盖过黑幕
+	_setup_fog_signal_layer()
+	set_process(true)
+
 	# 启动第一轮（触发 _on_round_started → 生成资源点 + 预生成轮次奖励；M7 后不再生成敌方关卡）
 	_round_manager.start_current_round()
 
@@ -904,6 +991,10 @@ func _exit_tree() -> void:
 	VictoryJudge.clear_sink()
 	# D MVP：清理昼夜监听 + sink，避免跨场景残留 connect / 悬空 Callable
 	DayNightState.clear_sinks()
+	# 入口 4 后段第 1 份（夜晚视野 MVP）：清理 fade Tween，避免场景退出后悬空 Callable 触发
+	if _phase_alpha_tween != null and _phase_alpha_tween.is_valid():
+		_phase_alpha_tween.kill()
+	_phase_alpha_tween = null
 	# B 重生周期 MVP：清理周期推进 sink；不清整局态（_cycle_index / _used_hero_ids 跨场景持久）
 	# 整局态 reset 由 _on_restart_pressed 显式触发
 	RunState.clear_sinks()
@@ -1231,6 +1322,17 @@ func _start_battle_camera(battle_center: Vector2i) -> void:
 	_battle_zoom_tween.tween_property(_camera, "rotation", BATTLE_TILT_RAD, BATTLE_ZOOM_TWEEN_DURATION) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
+	# 入口 4 后段第 1 份（夜晚视野 MVP）：战斗中强制白天遮罩
+	# 记录战斗开始前的目标 phase（用于战斗结束时回到原状态）；fade 出夜晚遮罩到 alpha=0
+	# 0.3s 与 zoom Tween 同步完成；force=true 表示无视 _battle_force_day 限制（本路径就是要设它）
+	_pending_post_battle_phase = int(DayNightState.current(_turn_manager))
+	_battle_force_day = true
+	_fade_phase_alpha(0.0, BATTLE_FORCE_DAY_DURATION, true)
+	# 跑测修复（2026-05-11 第 2 轮）：force-day 启动时强制清浮层信号
+	# 与 phase_changed 边沿触发同理——避免战斗触发瞬间浮层菱形残留
+	if _fog_signal_node != null:
+		_fog_signal_node.queue_redraw()
+
 
 ## 入口 4 MVP：战斗结束 Camera zoom 回归 + 镜头回到队长（_on_battle_session_ended 开头调用）
 ##
@@ -1239,6 +1341,9 @@ func _start_battle_camera(battle_center: Vector2i) -> void:
 ##   如之后则 _unit.position 已是战斗结束最终位置；如之前则可能仍是开战时位置。
 ##   当前选择：在 _on_battle_session_ended 顶部调用，与 _battle_hud.hide_hud 同时机
 func _end_battle_camera() -> void:
+	# 入口 4 后段第 1 份（codex P1-4 修复）：force-day 解除前置——无论后续 early return 触发与否，
+	# 夜晚状态恢复都要执行；否则 _battle_zoom_active=false / _camera==null 异常路径下 force-day 卡死
+	_resync_night_overlay_to_post_battle_state()
 	if not _battle_zoom_active:
 		return
 	_battle_zoom_active = false
@@ -1257,6 +1362,22 @@ func _end_battle_camera() -> void:
 	# 入口 4 MVP（2026-05-09 补）：倾斜归位
 	_battle_zoom_tween.tween_property(_camera, "rotation", 0.0, BATTLE_ZOOM_TWEEN_DURATION) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+## 入口 4 后段第 1 份（codex P1-4 修复）：抽出夜晚遮罩状态恢复 helper
+##
+## 在 _end_battle_camera 顶部调用，先于所有 early return；保证 force-day 总能被解除
+## 即使 _battle_zoom_active=false 或 _camera==null 也走完整的"解除 + fade 回正确 phase"逻辑
+func _resync_night_overlay_to_post_battle_state() -> void:
+	if not _battle_force_day:
+		return
+	_battle_force_day = false
+	var resync_target: float = 1.0 if _pending_post_battle_phase == int(DayNightState.Phase.NIGHT) else 0.0
+	_fade_phase_alpha(resync_target, DAY_NIGHT_FADE_DURATION, true)
+	# 跑测修复（2026-05-11 第 2 轮）：force-day 解除时强制刷浮层
+	# 退战回到夜晚时让浮层重新渲染信号；退战回到白天时让浮层清空
+	if _fog_signal_node != null:
+		_fog_signal_node.queue_redraw()
 
 
 ## 入口 4 MVP（2026-05-09 追加）：战场外压暗 overlay
@@ -1292,6 +1413,328 @@ func _draw_battle_dim_overlay() -> void:
 	draw_rect(Rect2(ox, by, bx - ox, bh), BATTLE_DIM_COLOR, true)
 	# 右侧（仅战场同高）
 	draw_rect(Rect2(bx + bw, by, (ox + ow) - (bx + bw), bh), BATTLE_DIM_COLOR, true)
+
+
+## 入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）：挂载夜晚遮罩 CanvasLayer
+##
+## 层级关系：世界 layer=0 → night_overlay layer=5 → UILayer layer=10
+## ColorRect 默认 mouse_filter = MOUSE_FILTER_STOP 会吞下输入 → 改为 IGNORE
+##
+## ShaderMaterial 资源通过 const 在文件顶 preload，编辑期校验路径；
+## duplicate() 是为了让每个 WorldMap 实例独立持有 shader 参数副本，
+## 避免跨场景 reload 时 set_shader_parameter 影响到旧场景（防御性，主要为
+## reload_current_scene 路径 + 编辑器 Run Scene 多次启动场景）
+func _setup_night_overlay() -> void:
+	_night_overlay_layer = CanvasLayer.new()
+	_night_overlay_layer.name = "NightOverlayLayer"
+	_night_overlay_layer.layer = NIGHT_OVERLAY_CANVAS_LAYER
+	add_child(_night_overlay_layer)
+
+	_night_overlay_rect = ColorRect.new()
+	_night_overlay_rect.name = "NightOverlayRect"
+	# 用基础颜色 + shader；shader 输出 alpha 接管最终可见度，ColorRect 本身的颜色不影响最终结果
+	_night_overlay_rect.color = Color(1.0, 1.0, 1.0, 1.0)
+	_night_overlay_rect.material = NIGHT_OVERLAY_MATERIAL.duplicate() as ShaderMaterial
+	_night_overlay_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_night_overlay_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_night_overlay_layer.add_child(_night_overlay_rect)
+
+	# 初始全部清零：白天 phase_alpha=0 → shader 输出 alpha=0，遮罩完全透明
+	_apply_phase_alpha_to_shader()
+
+
+## 入口 4 后段第 1 份（codex P0 修复）：挂载浓雾外敌人信号浮层（CanvasLayer=6）
+##
+## 与 _setup_night_overlay 配对，必须在其之后挂——layer=6 > layer=5 → 信号画在遮罩之上
+## 信号 Node2D 持有 self 引用，_draw 时回调 collect_fog_signals 拿数据
+func _setup_fog_signal_layer() -> void:
+	_fog_signal_layer = CanvasLayer.new()
+	_fog_signal_layer.name = "FogSignalLayer"
+	_fog_signal_layer.layer = FOG_SIGNAL_CANVAS_LAYER
+	add_child(_fog_signal_layer)
+
+	_fog_signal_node = FogSignalNode.new()
+	_fog_signal_node.name = "FogSignalNode"
+	_fog_signal_node.world_map = self
+	_fog_signal_layer.add_child(_fog_signal_node)
+
+
+## 入口 4 后段第 1 份（codex P0 修复）：FogSignalNode._draw 回调
+##
+## 返回需要画的浓雾外敌方信号列表，每项 = { center: Vector2(屏幕坐标), half: float, color: Color }
+##
+## 跑测修复（2026-05-11 第 2 轮）：守卫从 is_night 改为 _phase_alpha > 0.001
+##   并把信号 alpha 乘以 _phase_alpha，让 fade 过程中浮层信号与背景遮罩同步渐隐
+##   force-day 期间 _phase_alpha 在 Tween 中 fade 到 0，自然不画 → 与战斗白天语义一致
+func collect_fog_signals() -> Array:
+	var out: Array = []
+	if _battle_force_day:
+		return out
+	if _phase_alpha < 0.001:
+		return out
+	if _level_slots == null or _level_slots.is_empty():
+		return out
+	if _camera == null:
+		return out
+	# 信号菱形屏幕像素半径 = TILE_SIZE × camera.zoom.x × 缩放比例
+	# 战斗 zoom 时（zoom < 1）信号会更小，但战斗中 force-day 已 return，此分支主要服务探索态
+	var screen_half: float = float(TILE_SIZE) * 0.5 * _camera.zoom.x * FOG_SIGNAL_DIAMOND_SCALE
+
+	# 静态敌方关卡
+	var moving_level: LevelSlot = _enemy_movement.get_moving_level() if _enemy_movement != null else null
+	for pos_v in _level_slots:
+		var pos: Vector2i = pos_v as Vector2i
+		var level: LevelSlot = _level_slots[pos] as LevelSlot
+		if level == null:
+			continue
+		# 击败 / 击退态敌方不再是"威胁信号"，浓雾中不画（与世界层视野内一致）
+		if level.is_defeated() or level.is_repelled():
+			continue
+		# 移动中关卡由下方独立分支处理（避免 visual_pos 与 grid 位置不一致时重复画）
+		if level == moving_level:
+			continue
+		# 战斗中参战 LevelSlot 跳过（视野内由 BattleUnit 独占；浓雾外不画信号避免重复）
+		if _is_pack_in_battle(pos):
+			continue
+		var world_center: Vector2 = _grid_to_pixel_center(pos)
+		if not _is_in_fog(world_center):
+			continue
+		var seed: int = level.get_instance_id()
+		var blink_a: float = _compute_blink_alpha(seed) * _phase_alpha
+		var screen_center: Vector2 = _world_to_screen(world_center)
+		out.append({
+			"center": screen_center,
+			"half": screen_half,
+			"color": Color(ENEMY_SLOT_COLOR.r, ENEMY_SLOT_COLOR.g, ENEMY_SLOT_COLOR.b, blink_a),
+		})
+
+	# 移动中敌方关卡（codex P1 修复：用 LevelSlot.get_instance_id 作 seed，移动中相位稳定）
+	if moving_level != null and _enemy_movement != null:
+		var enemy_vis_pos: Vector2 = _enemy_movement.get_visual_pos()
+		if _is_in_fog(enemy_vis_pos):
+			var seed: int = moving_level.get_instance_id()
+			var blink_a: float = _compute_blink_alpha(seed) * _phase_alpha
+			var screen_center: Vector2 = _world_to_screen(enemy_vis_pos)
+			out.append({
+				"center": screen_center,
+				"half": screen_half,
+				"color": Color(ENEMY_MOVE_COLOR.r, ENEMY_MOVE_COLOR.g, ENEMY_MOVE_COLOR.b, blink_a),
+			})
+
+	return out
+
+
+## 入口 4 后段第 1 份：每帧驱动 shader uniform + 闪烁敌人 redraw
+##
+## 性能守卫：
+##   - shader uniform 更新仅在 _phase_alpha > 0.001（fade 中或夜晚）时执行，白天空转跳过
+##   - queue_redraw 仅在 is_night + 非 force-day + 视野外有敌方 slot 时触发
+func _process(_delta: float) -> void:
+	if _night_overlay_rect == null:
+		return
+	# 守卫：白天且非 fade 中 → 全跳过（_phase_alpha 已是 0，shader 输出 alpha=0）
+	if _phase_alpha < 0.001 and not _is_phase_alpha_tween_active():
+		return
+	_update_night_shader_uniforms()
+	# 闪烁敌人需要每帧 redraw 驱动 sin 动画；codex P0 修复：浮层 _fog_signal_node 是真正画信号的节点
+	# 世界层 _draw 不再画闪烁，但仍可能需要 queue_redraw 应对玩家移动时光源位置变化导致的可见性边界变化
+	if _need_blinking_redraw():
+		if _fog_signal_node != null:
+			_fog_signal_node.queue_redraw()
+		queue_redraw()
+
+
+## 入口 4 后段第 1 份：每帧把玩家队伍像素位置 + 视野半径转 UV 空间，喂给 shader
+##
+## 2026-05-11 跑测修复：从"viewport pixel + vec4 数组"切换到"UV 空间 + 单光源"
+##   根因 1：vec4[N] uniform 在 Godot 4.6 canvas_item shader 下传递不稳，光源位置丢失
+##   根因 2：viewport pixel 空间在 stretch=canvas_items + 跨分辨率窗口下与 shader
+##           SCREEN_UV/SCREEN_PIXEL_SIZE 反算的"屏幕像素"不一致，导致光源位置错位
+##           + 半径不随窗口缩放
+##   修复：所有坐标统一到 SCREEN_UV [0,1] 空间——viewport pixel / vp_size = UV
+##         半径用 vp_size.y 归一化（与 shader 内 aspect 校正基准一致 = viewport 高度）
+##         无论 stretch_mode、真实窗口大小、4K/720p，UV 都是稳定的 [0,1]
+##
+## codex P2-6 修复：_unit == null 时把 phase_alpha 归零，避免启动早期 1 帧整屏全黑
+func _update_night_shader_uniforms() -> void:
+	var mat: ShaderMaterial = _night_overlay_rect.material as ShaderMaterial
+	if mat == null:
+		return
+	# _unit == null 守卫：临时把 phase_alpha 归零（光源缺失 = 看不到，不如让玩家有"白天感"）
+	if _unit == null:
+		mat.set_shader_parameter("phase_alpha", 0.0)
+		return
+	if _camera == null:
+		return
+	var vp_size: Vector2 = get_viewport().get_visible_rect().size
+	if vp_size.x <= 0.0 or vp_size.y <= 0.0:
+		return
+
+	# 光源在世界空间的坐标（移动中用 _unit_visual_pos，静止用格中心）
+	# codex P1-1 修复：光源跟随棋子视觉动画
+	var light_world: Vector2 = _player_light_world_center()
+
+	# world → viewport pixel → UV
+	# canvas_transform 已自动包含 Camera2D position / zoom / rotation / offset 全部变换
+	# 用同一个 canvas_transform 算"半径锚点"距离，保证 zoom + stretch 怎么变都一致
+	var canvas_t: Transform2D = _camera.get_canvas_transform()
+	var light_vp: Vector2 = canvas_t * light_world
+	var light_uv: Vector2 = light_vp / vp_size
+
+	# 半径锚点 = 光源右侧 NIGHT_VISION_RADIUS_GRIDS 格的世界位置
+	# 经过同一 canvas_transform 后，距离 = 半径在 viewport pixel 空间的值
+	# 不直接乘 zoom.x：让 canvas_transform 统一处理所有缩放（含 stretch + camera zoom）
+	var radius_anchor_world: Vector2 = light_world + Vector2(NIGHT_VISION_RADIUS_GRIDS * float(TILE_SIZE), 0.0)
+	var radius_anchor_vp: Vector2 = canvas_t * radius_anchor_world
+	var radius_vp_px: float = light_vp.distance_to(radius_anchor_vp)
+	# 用 viewport 高度归一化：与 shader 内 d.x *= aspect_xy 的基准（Y = 高度）对齐
+	var radius_uv: float = radius_vp_px / vp_size.y
+
+	var falloff_anchor_world: Vector2 = light_world + Vector2(NIGHT_FOG_FALLOFF_GRIDS * float(TILE_SIZE), 0.0)
+	var falloff_anchor_vp: Vector2 = canvas_t * falloff_anchor_world
+	var falloff_vp_px: float = light_vp.distance_to(falloff_anchor_vp)
+	var falloff_uv: float = falloff_vp_px / vp_size.y
+
+	# 宽高比：让 shader 内距离 X 方向按 aspect 拉伸，圆始终是正圆而非椭圆
+	var aspect_xy: float = vp_size.x / vp_size.y
+
+	mat.set_shader_parameter("light_uv", light_uv)
+	mat.set_shader_parameter("light_radius_uv", radius_uv)
+	mat.set_shader_parameter("fog_falloff_uv", falloff_uv)
+	mat.set_shader_parameter("aspect_xy", aspect_xy)
+	mat.set_shader_parameter("phase_alpha", _phase_alpha)
+
+
+## 玩家队伍火把光源世界坐标（格中心像素）
+##
+## codex P1-1 修复：移动中读 _unit_visual_pos（Tween 动画位置），静止时读 _unit.position 的格中心
+## 防御：_unit == null 时返回 _unit_visual_pos（启动时默认 _start_pos 像素）
+func _player_light_world_center() -> Vector2:
+	if _unit == null:
+		return _unit_visual_pos
+	if _is_moving:
+		return _unit_visual_pos
+	return _grid_to_pixel_center(_unit.position)
+
+
+## 把世界坐标转屏幕像素坐标
+## 用 _camera.get_canvas_transform()：返回的是 Canvas → Viewport 的变换
+## 屏幕像素 = canvas_transform * world_pos
+func _world_to_screen(world_pos: Vector2) -> Vector2:
+	if _camera == null:
+		return world_pos
+	return _camera.get_canvas_transform() * world_pos
+
+
+## 把 _phase_alpha 当前值写入 shader uniform
+## 由 Tween tween_method 每帧调用 + _setup_night_overlay 初始化时调用
+func _apply_phase_alpha_to_shader() -> void:
+	if _night_overlay_rect == null:
+		return
+	var mat: ShaderMaterial = _night_overlay_rect.material as ShaderMaterial
+	if mat == null:
+		return
+	mat.set_shader_parameter("phase_alpha", _phase_alpha)
+
+
+## 入口 4 后段第 1 份：启动 _phase_alpha fade Tween
+##
+## 参数：
+##   target：目标 alpha 值（0.0 = 白天 / 1.0 = 夜晚）
+##   duration：Tween 时长（秒）
+##   force：是否强制启动（force-day fade in/out 用 true 跳过守卫）
+##
+## 同值守卫：当前 alpha 与目标差 < 0.001 时跳过（避免重复 Tween）；force=true 时不守卫
+func _fade_phase_alpha(target: float, duration: float, force: bool) -> void:
+	if not force and absf(_phase_alpha - target) < 0.001:
+		return
+	if _phase_alpha_tween != null and _phase_alpha_tween.is_valid():
+		_phase_alpha_tween.kill()
+	_phase_alpha_tween = create_tween()
+	_phase_alpha_tween.tween_method(_set_phase_alpha_value, _phase_alpha, target, duration) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+## Tween tween_method 回调：写入 _phase_alpha 并同步刷 shader
+func _set_phase_alpha_value(value: float) -> void:
+	_phase_alpha = value
+	_apply_phase_alpha_to_shader()
+
+
+## 判断 _phase_alpha Tween 是否还在进行中
+## 用于 _process 的守卫：fade 中需要持续更新 shader uniform（光源位置可能变化）
+func _is_phase_alpha_tween_active() -> bool:
+	return _phase_alpha_tween != null and _phase_alpha_tween.is_valid() and _phase_alpha_tween.is_running()
+
+
+## 入口 4 后段第 1 份：闪烁敌人 alpha 计算
+##
+## 公式：alpha = BASE + AMP * (sin(2π * t / PERIOD + phase) * 0.5 + 0.5)
+##   - t：当前时间（秒）
+##   - phase：按 seed 哈希出的相位偏移，避免所有敌人同步闪烁
+##   - 输出范围：[BASE, BASE + AMP]
+##
+## seed 通常用 LevelSlot 的 unique_id（int）或 instance_id；调用方保证 seed 稳定
+func _compute_blink_alpha(seed: int) -> float:
+	var t: float = float(Time.get_ticks_msec()) / 1000.0
+	var phase_offset: float = float(hash(seed) % 1000) / 1000.0 * TAU
+	var sine: float = sin(t * TAU / BLINK_PERIOD + phase_offset)
+	return BLINK_BASE_ALPHA + BLINK_AMP * (sine * 0.5 + 0.5)
+
+
+## 入口 4 后段第 1 份：判断世界坐标是否在浓雾中
+##
+## 仅当夜晚 + 非 force-day 时返回有意义结果（其他情况返回 false，调用方应短路判断）
+## 距离 > 视野半径 + 过渡带 → 完全在浓雾外（GDScript 端等价于 shader smoothstep 衰减完成处）
+##
+## codex P1-1 修复：与 shader 光源对齐，移动中用 _unit_visual_pos；保证视觉与判定同步
+func _is_in_fog(world_pos: Vector2) -> bool:
+	if _unit == null:
+		return false
+	var light_center: Vector2 = _player_light_world_center()
+	var threshold_px: float = (NIGHT_VISION_RADIUS_GRIDS + NIGHT_FOG_FALLOFF_GRIDS) * float(TILE_SIZE)
+	return world_pos.distance_to(light_center) > threshold_px
+
+
+## 入口 4 后段第 1 份：判断当前帧是否需要 redraw 驱动闪烁动画
+##
+## 仅当 phase_alpha > 0（夜晚或 fade 中）+ 非战斗强制白天 + 视野外有敌方关卡时返回 true
+## 否则避免空转 queue_redraw（_draw 是 mega 函数，redraw 有可观开销）
+##
+## 跑测修复（2026-05-11 第 2 轮）：判断条件从 is_night 改为 _phase_alpha > 0.001
+##   原 is_night 在 phase 切换瞬间立即 false，导致 fade 过程中浮层信号 / 闪烁敌人
+##   突然消失而不是跟随 0.6s fade 渐隐。改用 phase_alpha 守卫让浮层与背景 shader 同步
+func _need_blinking_redraw() -> bool:
+	if _phase_alpha < 0.001 and not _is_phase_alpha_tween_active():
+		return false
+	if _battle_force_day:
+		return false
+	if _level_slots == null or _level_slots.is_empty():
+		return false
+	# 仅扫一遍 _level_slots 找视野外的敌方关卡；视野内的不需要闪烁
+	for pos_v in _level_slots:
+		var pos: Vector2i = pos_v as Vector2i
+		var world_pos: Vector2 = _grid_to_pixel_center(pos)
+		if _is_in_fog(world_pos):
+			return true
+	return false
+
+
+## 入口 4 后段第 1 份：返回应用闪烁后的颜色
+##
+## 仅在 夜晚 + 非 force-day + world_pos 在浓雾外 三个条件全部满足时缩 alpha；
+## 否则原色返回（保持调用方逻辑不变）
+##
+## seed 用于 _compute_blink_alpha 的 phase 偏移（避免同步闪烁）
+func _apply_blink_modulate(color: Color, world_pos: Vector2, seed: int) -> Color:
+	if _battle_force_day:
+		return color
+	if not DayNightState.is_night(_turn_manager):
+		return color
+	if not _is_in_fog(world_pos):
+		return color
+	var blink_a: float = _compute_blink_alpha(seed)
+	return Color(color.r, color.g, color.b, color.a * blink_a)
 
 
 ## 入口 4 MVP：战斗 zoom 目标值计算（设计文档公式）
@@ -2099,11 +2542,30 @@ func _on_restart_pressed() -> void:
 	get_tree().reload_current_scene()
 
 
-## D MVP：昼夜阶段切换回调
-## 仅作 redraw 触发——保证 faction 切换瞬间夜晚滤镜立刻出现 / 消失
-## 未来美术接入时可在此加淡入淡出 Tween；视野限制接入时可在此重算可见格集
-func _on_day_night_phase_changed(_phase: int) -> void:
+## D MVP + 入口 4 后段第 1 份（夜晚视野 MVP）：昼夜阶段切换回调
+##
+## 双重职责：
+##   1. queue_redraw —— 让闪烁敌人渲染 / 战场外压暗 overlay 等 _draw 分支立即响应（D MVP 既有）
+##   2. _fade_phase_alpha —— 启动夜晚遮罩 fade 0↔1（入口 4 后段新增）
+##
+## 战斗中（_battle_force_day = true）：
+##   仅记录 _pending_post_battle_phase，不动 Tween（战斗内强制白天，phase 切换不影响遮罩）
+##   战斗结束时 _end_battle_camera 会按 _pending_post_battle_phase fade 回正确状态
+func _on_day_night_phase_changed(phase: int) -> void:
 	queue_redraw()
+	# 跑测修复（2026-05-11 第 2 轮）：phase 边沿触发清浮层
+	# _fog_signal_node 只在 _need_blinking_redraw 命中时 queue_redraw；切到白天后
+	# 不再 redraw，上一帧画的菱形会"卡"在 CanvasLayer 缓冲里不消失。
+	# 这里强制 redraw 一次，让 fade 过程中浮层信号正确跟随 phase_alpha 渐隐。
+	if _fog_signal_node != null:
+		_fog_signal_node.queue_redraw()
+	# 战斗中只记录目标 phase，不动 Tween（force-day 优先级最高）
+	if _battle_force_day:
+		_pending_post_battle_phase = phase
+		return
+	# 正常昼夜切换：NIGHT → 遮罩 fade in 到 1.0；DAY → fade out 到 0.0
+	var target: float = 1.0 if phase == int(DayNightState.Phase.NIGHT) else 0.0
+	_fade_phase_alpha(target, DAY_NIGHT_FADE_DURATION, false)
 
 
 # ─────────────────────────────────────────
@@ -4319,15 +4781,10 @@ func _draw() -> void:
 	if _unit != null and not _is_in_battle():
 		_draw_unit_marker()
 
-	# 第五层：D MVP 夜晚滤镜占位
-	# 仅在 is_night 时叠加深蓝半透明覆盖整个地图区域；HUD 在独立 CanvasLayer 不受影响
-	# 后续接美术时替换为渐变 / shader（见 D MVP §8 备注）
-	if DayNightState.is_night(_turn_manager):
-		var night_rect: Rect2 = Rect2(
-			Vector2.ZERO,
-			Vector2(_schema.width, _schema.height) * TILE_SIZE
-		)
-		draw_rect(night_rect, Color(0.5, 0.5, 0.7, 0.35), true)
+	# 第五层：夜晚效果（已上移至 night_overlay CanvasLayer=5，本 _draw 不再处理）
+	# 入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）：原 D MVP 深蓝半透 draw_rect 占位删除；
+	# 替换为屏幕空间 shader（assets/shader/night_overlay.gdshader）+ 玩家光源 + 浓雾近黑
+	# 实装位置：_setup_night_overlay / _process / _on_day_night_phase_changed / _fade_phase_alpha
 
 	# 第 5.5 层：入口 4 MVP（2026-05-09 追加）战场外压暗 overlay
 	# 战斗态时画半透明黑覆盖战场之外；战场内不画 → 视觉聚焦战场
@@ -4406,6 +4863,15 @@ func _draw_level_slots() -> void:
 
 		var is_repelled: bool = level.is_repelled()
 		var is_defeated: bool = level.is_defeated()
+
+		# 入口 4 后段第 1 份（夜晚视野 MVP，codex P0 修复 2026-05-11）：
+		# 浓雾外敌方关卡在世界层完全跳过渲染——夜晚遮罩 CanvasLayer=5 会盖在世界层之上，
+		# 即使这里画了闪烁敌人也会被纯黑遮罩完全遮掉。浓雾外的敌人信号改由
+		# _fog_signal_node（CanvasLayer=6 浮层）画屏幕空间闪烁信号
+		var center_world: Vector2 = _grid_to_pixel_center(pos)
+		if DayNightState.is_night(_turn_manager) and (not _battle_force_day) and _is_in_fog(center_world):
+			continue
+
 		var slot_color: Color = ENEMY_SLOT_COLOR
 		if is_defeated:
 			# 已击败：变暗显示
@@ -4791,6 +5257,10 @@ func _draw_core_town_emblem(center_px: Vector2) -> void:
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
 func _draw_enemy_move_marker() -> void:
 	var enemy_vis_pos: Vector2 = _enemy_movement.get_visual_pos()
+	# 入口 4 后段第 1 份（夜晚视野 MVP，codex P0 修复 2026-05-11）：
+	# 浓雾外移动中敌方在世界层完全跳过；屏幕空间信号由 _fog_signal_node 浮层接管
+	if DayNightState.is_night(_turn_manager) and (not _battle_force_day) and _is_in_fog(enemy_vis_pos):
+		return
 	# 外圈光晕菱形（比标记更大，半透明）
 	var glow_margin: int = 2
 	var glow_rect: Rect2 = Rect2(
