@@ -18,10 +18,18 @@ extends RefCounted
 
 ## 生成一批增援并注入 WorldMap 的 _level_slots 字典
 ## world_map: WorldMap 实例（强类型；重命名字段时编译期可报错 —— P2 审查项）
-## 为兼容测试注入自定义 mock，接受 Object 类型（WorldMap 也是 Object）；
-## 运行时仍可用 get()/属性访问来保持对 mock 的鸭类型友好
+##   为兼容测试注入自定义 mock，接受 Object 类型（WorldMap 也是 Object）；
+##   运行时仍可用 get()/属性访问来保持对 mock 的鸭类型友好
+## force_tier: -1（默认）= 按 cycle 加权抽 tier；≥ 0 = 强制使用指定 tier（跳过抽样）
+##             用于 P1-1a 修复：末周期 initial deploy 第 1 个 pack 强制 tier=3 保证最强敌人出现
 ## 返回：实际 spawn 的 LevelSlot；未找到空地 / 配置缺失时返回 null
-static func spawn_batch(world_map: Object) -> LevelSlot:
+##
+## P0 第二阶段（整局节奏重设计）：
+##   - spawn 锚改为 world_map._enemy_core_origin_pos（PCG 缓存的原始位置，不查 owner）
+##     原因：玩家占领前两周期 CORE_TOWN 后 owner 翻转，按 owner 查找会失效；用原始位置保证 spawn 持续
+##   - tier 按当前 cycle 从 world_map._enemy_tier_ratio_rows 加权抽样（默认路径）
+##   - force_tier ≥ 0 时跳过权重抽样直接使用（initial deploy 末周期强制 tier 3）
+static func spawn_batch(world_map: Object, force_tier: int = -1) -> LevelSlot:
 	if world_map == null:
 		return null
 
@@ -30,13 +38,20 @@ static func spawn_batch(world_map: Object) -> LevelSlot:
 		push_warning("EnemyReinforcement.spawn_batch: _schema 未初始化")
 		return null
 
-	# 找敌方核心 persistent slot
-	var enemy_core: PersistentSlot = _find_enemy_core(schema.persistent_slots)
-	if enemy_core == null:
-		push_warning("EnemyReinforcement.spawn_batch: 未找到敌方核心城镇 slot")
+	# P0 第二阶段：用 WorldMap 缓存的 PCG 原始位置作 spawn 锚（不查 owner）
+	var core_origin: Vector2i = world_map.get("_enemy_core_origin_pos") as Vector2i
+	if core_origin.x < 0 or core_origin.y < 0:
+		push_warning("EnemyReinforcement.spawn_batch: _enemy_core_origin_pos 未缓存（PCG 后应有效），跳过本次")
 		return null
 
-	# 收集敌方核心影响范围内的可用空地
+	# 查 PersistentSlot 拿 influence_range（仍然要找 CORE_TOWN，但只用其位置半径，不用其 owner）
+	# core_origin 即原始位置；只需 schema 中位置匹配即可（不管 owner 谁）
+	var enemy_core: PersistentSlot = _find_slot_at(schema.persistent_slots, core_origin)
+	if enemy_core == null:
+		push_warning("EnemyReinforcement.spawn_batch: 原始位置 %s 未找到 PersistentSlot" % core_origin)
+		return null
+
+	# 收集影响范围内的可用空地
 	var level_slots: Dictionary = world_map.get("_level_slots") as Dictionary
 	var resource_slots_raw = world_map.get("_resource_slots")
 	var resource_slots: Dictionary = resource_slots_raw if resource_slots_raw != null else {}
@@ -44,7 +59,7 @@ static func spawn_batch(world_map: Object) -> LevelSlot:
 	var unit_pos: Vector2i = unit.position if unit != null else Vector2i(-1, -1)
 
 	var candidates: Array[Vector2i] = _find_passable_empty_tiles(
-		schema, enemy_core.position, enemy_core.influence_range,
+		schema, core_origin, enemy_core.influence_range,
 		level_slots, resource_slots, unit_pos
 	)
 	if candidates.is_empty():
@@ -66,13 +81,22 @@ static func spawn_batch(world_map: Object) -> LevelSlot:
 		push_warning("EnemyReinforcement.spawn_batch: EnemyTroopGenerator 未初始化")
 		return null
 
+	# P0 第二阶段：按当前 cycle 从 tier_ratio 加权抽 tier；force_tier ≥ 0 时跳过抽样
+	# P1-1a: 末周期 initial deploy 第 1 个 pack 传 force_tier=3 保证最强敌人出现
+	var tier: int
+	if force_tier >= 0:
+		tier = force_tier
+	else:
+		var tier_rows: Array = world_map.get("_enemy_tier_ratio_rows") as Array
+		tier = _pick_tier_for_cycle(tier_rows, RunState.cycle_index(), rng)
+
 	var pack: LevelSlot = LevelSlot.new()
 	pack.position = spawn_pos
 	pack.state = LevelSlot.State.UNCHALLENGED
 	pack.faction = Faction.ENEMY_1
-	pack.difficulty = 0    # M7 MVP：增援不挂轮次难度
-	pack.tier = 0
-	pack.troops = generator.generate_troops()
+	pack.difficulty = 0    # M7 MVP：增援不挂轮次难度（cycle 难度通过 tier 体现）
+	pack.tier = tier
+	pack.troops = generator.generate_troops_for_tier(tier)
 	# rewards 保留空数组——被玩家击败仍可发常规奖励（若 MVP 不需要可保空）
 
 	# 注册到 _level_slots
@@ -91,15 +115,55 @@ static func spawn_batch(world_map: Object) -> LevelSlot:
 # 内部工具
 # ─────────────────────────────────────────
 
-## 从 persistent_slots 里找敌方核心城镇
-static func _find_enemy_core(persistent_slots: Array) -> PersistentSlot:
+## P0 第二阶段：按位置查 persistent_slot（不查 owner）
+## 替代旧的 _find_enemy_core(查 owner=ENEMY_1)；spawn 锚改为原始位置后无需 owner 过滤
+static func _find_slot_at(persistent_slots: Array, pos: Vector2i) -> PersistentSlot:
 	for entry in persistent_slots:
 		var slot: PersistentSlot = entry as PersistentSlot
 		if slot == null:
 			continue
-		if slot.type == PersistentSlot.Type.CORE_TOWN and slot.owner_faction == Faction.ENEMY_1:
+		if slot.position == pos:
 			return slot
 	return null
+
+
+## P0 第二阶段：按当前 cycle 从 tier_ratio 加权抽 tier
+##
+## tier_rows 行结构：{cycle_index: int, tier: int, count: int}
+## count 即该 (cycle, tier) 组合的权重；累加同 cycle 的 count 得总权重，加权随机选 tier
+##
+## 兜底：tier_rows 空 / 当前 cycle 无配置 → 返回 tier 0
+static func _pick_tier_for_cycle(tier_rows: Array, cycle: int, rng: RandomNumberGenerator) -> int:
+	if tier_rows == null or tier_rows.is_empty():
+		return 0
+	# 收集当前 cycle 的 (tier, count) 列表 + 累加权重
+	var entries: Array = []   # 每项为 [tier, cumulative_weight]
+	var total_weight: int = 0
+	for row_v in tier_rows:
+		var row: Dictionary = row_v as Dictionary
+		if row == null:
+			continue
+		if int(row.get("cycle_index", "-1")) != cycle:
+			continue
+		var count: int = int(row.get("count", "0"))
+		if count <= 0:
+			continue
+		var tier: int = int(row.get("tier", "0"))
+		total_weight += count
+		entries.append([tier, total_weight])
+	if entries.is_empty() or total_weight <= 0:
+		return 0
+	# 加权随机
+	var roll: int
+	if rng != null:
+		roll = rng.randi_range(1, total_weight)
+	else:
+		roll = randi_range(1, total_weight)
+	for item_v in entries:
+		var item: Array = item_v as Array
+		if roll <= int(item[1]):
+			return int(item[0])
+	return 0
 
 
 ## 找给定范围内的可用空地：曼哈顿距离 ≤ range + 可通行 + 无占用

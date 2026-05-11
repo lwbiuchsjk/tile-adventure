@@ -56,15 +56,16 @@ var _level_slots: Dictionary = {}
 ## 玩家单位当前位置（用于强制战斗触发；敌方进入玩家曼哈顿距离 ≤ _forced_battle_range 时触发战斗）
 var _player_pos: Vector2i = Vector2i.ZERO
 ## 敌方部队寻路目的地战略目标位置
-## P0 X-A 后由 WorldMap._get_enemy_target_pos 返回 _start_pos（玩家初始 spawn 锚）
-## X-A 前为玩家方 CORE_TOWN persistent slot 位置（已降级为 TOWN 占位）
-## 与 _player_pos 分离：target 是战略目标（静态锚点），player_pos 是战术阻挡点（玩家当前位置）
+##
+## P0 第二阶段后已废弃：_pick_target_for 改为"附近 slot 占领 / 追玩家"二元，不再读取该字段
+## 历史：X-A 前 = 玩家方 CORE_TOWN；X-A 后 = _start_pos；现保留作 start_phase 签名兼容
 var _target_pos: Vector2i = Vector2i.ZERO
 var _movement_points: int = 6
 var _original_slot_types: Dictionary = {}
 var _game_over: bool = false
-## M8 扩展：追玩家阈值。pack 到玩家距离 ≤ 该值 且 d_player < d_core 时才追玩家
-## 默认 10（与 battle_config.enemy_target_switch_range 同值）；start_phase 注入实际值
+## M8 扩展遗留字段：旧"追玩家阈值"
+## P0 第二阶段后已废弃：_pick_target_for 改用 PERCEIVE_RANGE 常量（默认 3）
+## 保留字段作 start_phase 签名兼容；当前 MVP 内无任何代码读取
 var _target_switch_range: int = 10
 ## A 基线收束 MVP：强制战斗触发距离（曼哈顿）
 ## pack 移动后到玩家距离 ≤ 该值 时触发战斗
@@ -172,10 +173,11 @@ func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 ## M7：仅 UNCHALLENGED 且归属 ENEMY_1 的 LevelSlot 参与；
 ##     faction == NONE 的 legacy 敌方格（M7 前的关卡）也允许，兼容过渡期
 ##
-## 动态目标（M8 扩展）：
-##   每个部队包独立评估 min(dist_to_core, dist_to_player_troop)，选近者作为自己的 target
-##   排序字段为该 pack 到"最近目标"的距离；移动时也用同一个 target（见 _pick_target_for）
-##   效果：玩家前出时近处敌人盯玩家、远处继续推核心，战略压力 + 战术灵活并存
+## 动态目标（P0 第二阶段重设计）：
+##   每个部队包独立评估 _pick_target_for：附近 PERCEIVE_RANGE 内有非己方持久 slot → 占领该 slot；
+##   否则 → 追玩家
+##   排序字段为该 pack 到"选中 target"的距离（_min_target_distance 同口径）
+##   效果：占领优先制造"敌方扩张感"；玩家远离任何 slot 时被持续追击
 func _get_sorted_movable_levels() -> Array[LevelSlot]:
 	var movable: Array[LevelSlot] = []
 	for pos in _level_slots:
@@ -200,34 +202,61 @@ func _get_sorted_movable_levels() -> Array[LevelSlot]:
 	return movable
 
 
+## P0 第二阶段感知半径（默认 3，跑测调参；P2 待跟踪移到 cycle_config）
+## 规则：附近 PERCEIVE_RANGE 内非己方 persistent slot → 占领；否则追玩家
+const PERCEIVE_RANGE: int = 3
+
+
 ## 返回 pos 到当前选中 target 的曼哈顿距离
-## 保持和 _pick_target_for 同口径：玩家在阈值外或比核心远 → min = d_core；否则 min = d_player
-## 保持一致是为了排序与目标选择结果对齐（排序顺序 = 实际追击的优先级）
+## P0 第二阶段：与 _pick_target_for 同口径（先扫占领候选，无候选则追玩家）
 func _min_target_distance(pos: Vector2i) -> int:
-	var d_core: int = absi(pos.x - _target_pos.x) + absi(pos.y - _target_pos.y)
-	var d_player: int = absi(pos.x - _player_pos.x) + absi(pos.y - _player_pos.y)
-	if d_player <= _target_switch_range and d_player < d_core:
-		return d_player
-	return d_core
+	var occupy_target: Vector2i = _find_nearest_non_own_slot(pos, PERCEIVE_RANGE)
+	if occupy_target.x >= 0:
+		return absi(pos.x - occupy_target.x) + absi(pos.y - occupy_target.y)
+	return absi(pos.x - _player_pos.x) + absi(pos.y - _player_pos.y)
 
 
-## 为单个部队包挑选本次移动的 target
-## 规则（M8 阈值扩展）：
-##   1. 玩家距离 ≤ _target_switch_range（默认 10） 且
-##   2. 玩家比核心更近（d_player < d_core）
-##   ↑ 两个条件同时满足 → target = 玩家
-##   其他情况（玩家远离 / 核心更近或相等）→ target = 核心（战略兜底）
+## 为单个部队包挑选本次移动的 target（P0 第二阶段重设计）
 ##
-## 设计意图：
-##   - 默认保持"推 spawn 锚"战略压力，玩家初始 spawn 锚（P0 X-A 前为玩家核心）仍是 AI 的最终目标
-##   - 玩家出击深入敌方 10 格内 + 比 spawn 锚更近 → 近处 pack 切换追玩家（响应威胁）
-##   - 玩家贴在自己 spawn 锚附近 → d_target 反而小，所有 pack 仍集火推 spawn 锚
+## 规则：
+##   附近 PERCEIVE_RANGE（默认 3）步内有非 ENEMY_1 持久 slot → target = 最近可占 slot（占领行为）
+##   否则 → target = 玩家当前位置（动态追击）
+##
+## 设计意图（整局节奏重设计 §2.6 / §4.4）：
+##   - 占领优先于追击：让敌方"路过 slot 必占"，避免不自然的擦肩
+##   - 玩家远离任何 slot 时 pack 朝玩家逼近 → 制造"被追"压迫感
+##   - PERCEIVE_RANGE = 3（与 forced_battle_range 一致便于调参对齐）
+##
+## 已废弃：旧"target_pos = _start_pos 静态锚 + _target_switch_range 切换"框架
+##   (_target_pos 字段保留兼容签名但 _pick_target_for 不再读取)
 func _pick_target_for(level: LevelSlot) -> Vector2i:
-	var d_core: int = absi(level.position.x - _target_pos.x) + absi(level.position.y - _target_pos.y)
-	var d_player: int = absi(level.position.x - _player_pos.x) + absi(level.position.y - _player_pos.y)
-	if d_player <= _target_switch_range and d_player < d_core:
-		return _player_pos
-	return _target_pos
+	var occupy_target: Vector2i = _find_nearest_non_own_slot(level.position, PERCEIVE_RANGE)
+	if occupy_target.x >= 0:
+		return occupy_target
+	return _player_pos
+
+
+## P0 第二阶段：扫 schema.persistent_slots 找最近的非 ENEMY_1 slot（曼哈顿距离 ≤ range_val）
+## 返回最近 slot 位置；未找到返回 (-1, -1)
+##
+## 设计选择：扫描所有 persistent_slots（地图 26 个量级，O(n) 每 pack 开销可接受）
+## 占领候选包括：中立资源 slot / 玩家方占位 TOWN / 玩家占领后的 CORE_TOWN（所有非己方都可占）
+func _find_nearest_non_own_slot(from_pos: Vector2i, range_val: int) -> Vector2i:
+	if _schema == null:
+		return Vector2i(-1, -1)
+	var best_pos: Vector2i = Vector2i(-1, -1)
+	var best_dist: int = range_val + 1
+	for entry in _schema.persistent_slots:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null:
+			continue
+		if slot.owner_faction == Faction.ENEMY_1:
+			continue
+		var d: int = absi(slot.position.x - from_pos.x) + absi(slot.position.y - from_pos.y)
+		if d <= range_val and d < best_dist:
+			best_dist = d
+			best_pos = slot.position
+	return best_pos
 
 
 ## 处理队列中下一个关卡

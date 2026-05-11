@@ -22,6 +22,9 @@ extends Node2D
 # ─────────────────────────────────────────
 
 const CONFIG_MAP: String = "res://assets/config/map_config.csv"
+## P0 第二阶段（整局节奏重设计）：周期级配置（地图尺寸 / 持久 slot 数量 / spawn 节奏）
+## 按 RunState.cycle_index() 取行；缺失时回退 map_config 字段
+const CONFIG_CYCLE: String = "res://assets/config/cycle_config.csv"
 const CONFIG_TERRAIN: String = "res://assets/config/terrain_config.csv"
 const CONFIG_SLOT: String = "res://assets/config/slot_config.csv"
 const CONFIG_PCG: String = "res://assets/config/pcg_config.csv"
@@ -324,6 +327,29 @@ var _turn_manager: TurnManager = null
 var _reachable_tiles: Dictionary = {}
 
 ## 起点坐标（从 map_config 读取）
+## P0 第二阶段（整局节奏重设计）：当前周期 PCG 生成的敌方 CORE_TOWN 原始位置
+## 缓存到字段供 EnemyReinforcement.spawn_batch 用作 spawn 锚（不查 owner，玩家占领后仍 spawn）
+## 在 _load_pcg 之后从 schema 找敌方 CORE_TOWN 位置写入；reload 后重新缓存
+var _enemy_core_origin_pos: Vector2i = Vector2i(-1, -1)
+
+## P0 第二阶段：周期级配置原始行数据（按 cycle_index 索引）
+var _cycle_config_rows: Array = []
+
+## P0 第二阶段：enemy_tier_ratio_config 原始行数据（按 cycle_index × tier 配 count 权重）
+## EnemyReinforcement.spawn_batch 抽 tier 时使用
+var _enemy_tier_ratio_rows: Array = []
+
+## P0 第二阶段：缓存当前周期的 initial_enemy_pack_count（由 _apply_cycle_config 注入）
+var _current_cycle_initial_pack_count: int = 5
+
+## P0 第二阶段：缓存当前周期的 reinforcement_interval（由 _apply_cycle_config 注入）
+var _current_cycle_reinforcement_interval: int = 5
+
+## P0 第二阶段（P1-2a 修复）：缓存当前周期 has_enemy_core 标志
+## 视觉绘制（CORE_TOWN 双态）用该字段替代硬编码 RunState.is_last_cycle()——配置驱动 vs 代码硬编码
+## VictoryJudge cycle 过滤仍用 RunState.is_last_cycle()（static 路径不便注入；MVP 期与本字段同义）
+var _current_cycle_has_enemy_core: bool = false
+
 var _start_pos: Vector2i = Vector2i.ZERO
 
 ## 终点坐标（从 map_config 读取）
@@ -593,6 +619,9 @@ func _ready() -> void:
 	# 加载敌人强度配置（generator 初始化后再注入，见下方）
 	var enemy_tier_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_TIER)
 
+	# P0 第二阶段：加载 enemy_tier_ratio_config（按 cycle 抽 tier 用，EnemyReinforcement.spawn_batch 消费）
+	_enemy_tier_ratio_rows = ConfigLoader.load_csv(CONFIG_ENEMY_TIER_RATIO)
+
 	# B 重生周期 MVP：英雄池 + 整局周期参数
 	# RunState.ensure_initialized 幂等：首次进入写入；重生场景 reload 时
 	# _initialized=true，沿用上一周期累积的 _cycle_index / _used_hero_ids 等
@@ -705,7 +734,11 @@ func _ready() -> void:
 		push_error("WorldMap: town_troop_pool.csv 加载失败或为空；城镇 / 核心城镇产出会静默无输出")
 	ProductionSystem.load_troop_pool(town_pool_rows)
 
-	# 读取起终点坐标
+	# P0 第二阶段：用 cycle_config 覆盖 map_cfg 的周期级字段（地图尺寸 / 起终点 / 持久 slot 数量 / spawn 节奏）
+	# 必须在读取 start/end + _load_pcg 前调用；cycle_config 缺该周期则保留 map_cfg 原值作兜底
+	_apply_cycle_config(map_cfg)
+
+	# 读取起终点坐标（经 _apply_cycle_config 注入后，map_cfg 已包含本周期值）
 	_start_pos = Vector2i(
 		int(map_cfg.get("start_x", "1")),
 		int(map_cfg.get("start_y", "1"))
@@ -729,6 +762,10 @@ func _ready() -> void:
 	else:
 		push_error("WorldMap: 地图加载失败，无法渲染")
 		return
+
+	# P0 第二阶段：PCG 完成后缓存敌方 CORE_TOWN 原始位置
+	# 供 EnemyReinforcement.spawn_batch 用作 spawn 锚（不查 owner，避免玩家占领后失效）
+	_cache_enemy_core_origin_pos()
 
 	# 初始化轮次管理器
 	_round_manager = RoundManager.new()
@@ -832,13 +869,21 @@ func _ready() -> void:
 
 
 ## M7 开局预置敌方部队包（敌方 AI 设计 §3.1）
-## MVP 初始 5 支；调用 EnemyReinforcement.spawn_batch 5 次，每次生成 1 支
-## 若核心影响范围内空地不足 5 个，能放几支放几支（不强制）
+## P0 第二阶段：数量从 cycle_config 当前周期 initial_enemy_pack_count 读
+## 若核心影响范围内空地不足时，能放几支放几支（不强制）
+##
+## P1-1a 修复：has_enemy_core 周期（末周期）强制第 1 个 pack tier=3（最强敌人）
+## 实现"末周期必有强敌"设计承诺（整局节奏重设计_MVP §2.5）；其余 pack 走权重抽
 func _deploy_initial_enemy_packs() -> void:
-	var target_count: int = 5
+	var target_count: int = _current_cycle_initial_pack_count
 	var placed: int = 0
+	# has_enemy_core 周期：第 1 个 pack 强制 tier=3；其余按权重抽
+	# 通过 force_tier 参数（仅本路径使用）覆盖 EnemyReinforcement 内部权重抽样
 	for i in range(target_count):
-		var pack: LevelSlot = EnemyReinforcement.spawn_batch(self)
+		var force_tier: int = -1
+		if _current_cycle_has_enemy_core and i == 0:
+			force_tier = 3
+		var pack: LevelSlot = EnemyReinforcement.spawn_batch(self, force_tier)
 		if pack != null:
 			placed += 1
 	if placed < target_count:
@@ -916,6 +961,9 @@ func _init_subsystems() -> void:
 	_enemy_ai.name = "EnemyAI"
 	add_child(_enemy_ai)
 	_enemy_ai.init(self, _turn_manager)
+	# P0 第二阶段：从 cycle_config 注入当前周期的 reinforcement_interval（覆盖 EnemyAI 默认值）
+	# build_config.csv 的 enemy_reinforcement_interval 此后不再生效（cycle 级配置优先）
+	_enemy_ai.reinforcement_interval = _current_cycle_reinforcement_interval
 
 	# 事件面板 UI（探索体验·F MVP）
 	# 挂载位置：所有交互面板之后、VictoryUI 之前——
@@ -1983,8 +2031,10 @@ func _on_turn_end_settlement() -> void:
 # ─────────────────────────────────────────
 
 ## 启动敌方移动阶段（由 EnemyAI._step_move_phase 调用）
-## P0 X-A 后 target = 玩家初始 spawn 锚（_start_pos）；X-A 前为玩家方 CORE_TOWN（已降级为 TOWN 占位）
-## 无可移动 / target 异常 → 直接触发 phase_finished（走 _on_enemy_phase_finished → 回 PLAYER）
+##
+## P0 第二阶段：target_pos 参数已废弃（EnemyMovement._pick_target_for 改为"附近 slot 占领 + 追玩家"双轴）
+## 仍传值给保持签名兼容；实际 per-pack 决策不再读取该值（详见 EnemyMovement.gd）
+## 无可移动 → 直接触发 phase_finished（走 _on_enemy_phase_finished → 回 PLAYER）
 func start_enemy_move_phase() -> void:
 	print("[ENEMY-PHASE] start_enemy_move_phase player_turn=%d player_pos=%s in_battle=%s" % [
 		_turn_manager.player_faction_turn_count, _unit.position if _unit != null else Vector2i(-1, -1), _is_in_battle()
@@ -1992,19 +2042,17 @@ func start_enemy_move_phase() -> void:
 	if _game_finished or not _enemy_movement_enabled:
 		_on_enemy_phase_finished()
 		return
-	# P0 X-A 后：target = 玩家初始 spawn 锚（_start_pos）
-	# X-A 前为玩家方 CORE_TOWN 位置（已降级为 TOWN 占位）
-	var target_pos: Vector2i = _get_enemy_target_pos()
-	if target_pos == Vector2i(-1, -1):
-		# 异常态降级：_start_pos 应由 map_config 注入后必定有效，走到这里说明 schema 未初始化
-		# X-A 后此分支不再触发判负（玩家方区无可"失守"的核心）；改为跳过本回合敌方移动
-		push_warning("WorldMap.start_enemy_move_phase: enemy target 位置无效（schema 未初始化），跳过本回合敌方移动")
+	if _schema == null:
+		push_warning("WorldMap.start_enemy_move_phase: schema 未初始化，跳过本回合敌方移动")
 		_on_enemy_phase_finished()
 		return
+	# P0 第二阶段：target_pos 参数 deprecated（保留作签名兼容），EnemyMovement 不再读取
+	# 传 _start_pos 仅作占位；per-pack target 由 EnemyMovement._pick_target_for 内部决策
+	var legacy_target_pos: Vector2i = _start_pos
 	# E4 注入玩家保护区半径（= _battle_trigger_range）：保护区内格 cost = INF
 	# 让敌方寻路自然停在保护区边缘，等敌方阶段末尾扫描触发被动战斗
 	_enemy_movement.start_phase(
-		_schema, _level_slots, _unit.position, target_pos,
+		_schema, _level_slots, _unit.position, legacy_target_pos,
 		_enemy_movement_points, _original_slot_types, _game_finished,
 		_enemy_target_switch_range,
 		_forced_battle_range,
@@ -2074,13 +2122,15 @@ func _on_day_night_phase_changed(_phase: int) -> void:
 # 敌方 AI 协作辅助
 # ─────────────────────────────────────────
 
-## 敌方 AI 进军 target 位置（P0 X-A 后语义收窄）
+## 敌方 AI 进军 target 位置（P0 第二阶段后已废弃）
 ##
-## X-A 前：扫 schema 找 CORE_TOWN owner=PLAYER（玩家方核心位置）
-## X-A 后：玩家方核心已降级为 TOWN 占位，敌方 target 改读 `_start_pos`（玩家初始 spawn 锚）
-##         详见 [[胜负条件重设计_MVP]]
+## 历史：
+##   X-A 前：扫 schema 找 CORE_TOWN owner=PLAYER（玩家方核心位置）
+##   X-A 后：返回 _start_pos 作静态锚
+##   P0 第二阶段：EnemyMovement._pick_target_for 改为"附近 slot 占领 + 追玩家"二元，
+##                 不再依赖任何全局战略锚；本函数无被调用方。
 ##
-## 返回 (-1, -1) 表示场景初始化未完成（理论上 _start_pos 由 map_config 注入后必定有效）
+## 保留函数体为占位（返回 _start_pos）以防其他历史代码引用；新代码不应调用
 func _get_enemy_target_pos() -> Vector2i:
 	if _schema == null:
 		return Vector2i(-1, -1)
@@ -2840,6 +2890,10 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 				_schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
 				_original_slot_types.erase(lvpos)
 
+		# P0 第二阶段：兜底胜利检查 —— 敌方 pack 被清空时玩家胜利
+		# 所有 cycle 都生效；reinforcement 离散 spawn 让通常不可达
+		VictoryJudge.check_enemy_packs_clear(_level_slots)
+
 		# 3. 轮次计数累加（仅 HUD"已清 X/Y"展示用）
 		# P0 第一阶段重设计后（2026-05-09 跑测发现）：
 		#   - 整局胜负锚点 = 队长命数 + 攻占敌方 CORE_TOWN（VictoryJudge）
@@ -3287,6 +3341,10 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 	if defeated and _round_manager != null:
 		_round_manager.on_level_cleared()
 		_update_hud()
+
+	# P0 第二阶段：兜底胜利检查（保留代码与 _on_battle_session_ended 一致，避免 BattleUI 复活时漏改）
+	if defeated:
+		VictoryJudge.check_enemy_packs_clear(_level_slots)
 
 	# 敌方移动阶段中，继续处理下一个关卡
 	if was_forced:
@@ -4119,6 +4177,89 @@ func _load_pcg(map_cfg: Dictionary, terrain_costs: Dictionary) -> void:
 	if _schema == null:
 		push_error("WorldMap: PCG 地图生成失败")
 
+## P0 第二阶段（整局节奏重设计）：用 cycle_config.csv 覆盖 map_cfg 中的周期级字段
+##
+## 处理流程：
+##   1. 加载 cycle_config.csv → _cycle_config_rows
+##   2. 按 RunState.cycle_index() 找对应行
+##   3. 找到则把 map_width / map_height / start_x/y / end_x/y / persistent_total_count
+##      / persistent_town_count / persistent_village_count 字段覆盖到 map_cfg 字典；
+##      has_enemy_core 推导 persistent_core_count = "1"（始终生成 1 个敌方 CORE_TOWN）
+##   4. 缓存 initial_enemy_pack_count / reinforcement_interval 到 WorldMap 字段
+##   5. 找不到则 push_warning，map_cfg 字段保留原值（map_config 兜底）；spawn 节奏字段用默认
+##
+## 设计意图：把"按 cycle 切配置"对调用方透明——后续 _load_pcg 读 map_cfg 时拿到的是本周期值
+func _apply_cycle_config(map_cfg: Dictionary) -> void:
+	_cycle_config_rows = ConfigLoader.load_csv(CONFIG_CYCLE)
+	var current_cycle: int = RunState.cycle_index()
+	var cycle_row: Dictionary = {}
+	for entry in _cycle_config_rows:
+		var row: Dictionary = entry as Dictionary
+		if row == null:
+			continue
+		if int(row.get("cycle_index", "-1")) == current_cycle:
+			cycle_row = row
+			break
+
+	if cycle_row.is_empty():
+		push_warning("WorldMap: cycle_config 未找到 cycle_index=%d 对应行，使用 map_config 兜底" % current_cycle)
+		# 兜底：spawn 节奏字段用默认值（initial pack 5 / interval 5）
+		_current_cycle_initial_pack_count = 5
+		_current_cycle_reinforcement_interval = 5
+		_current_cycle_has_enemy_core = false
+		return
+
+	# 用 cycle row 覆盖 map_cfg 中对应字段（后续 _load_pcg 读 map_cfg 拿到本周期值）
+	var override_keys: Array[String] = [
+		"map_width", "map_height", "start_x", "start_y", "end_x", "end_y",
+		"persistent_total_count", "persistent_town_count", "persistent_village_count",
+	]
+	for key in override_keys:
+		if cycle_row.has(key):
+			map_cfg[key] = str(cycle_row[key])
+
+	# has_enemy_core 推导 persistent_core_count（数据层始终生成 1 个，视觉 / 判定由 has_enemy_core 控制）
+	# 当前 MVP：始终 1（has_enemy_core=false 时仅视觉走普通 TOWN + VictoryJudge cycle 过滤拦截胜利）
+	map_cfg["persistent_core_count"] = "1"
+
+	# 缓存周期级字段
+	# initial_enemy_pack_count: 钳制 ≥ 0（0 = 本周期不预置初始 pack，合理边界）
+	# reinforcement_interval: 钳制 ≥ 1（避免 EnemyAI._step_reinforcement 的 count % interval 除零崩溃）
+	var raw_pack: int = int(cycle_row.get("initial_enemy_pack_count", "5"))
+	var raw_interval: int = int(cycle_row.get("reinforcement_interval", "5"))
+	if raw_pack < 0:
+		push_warning("WorldMap: cycle_config[%d].initial_enemy_pack_count 非法 %d，钳制为 0" % [current_cycle, raw_pack])
+	if raw_interval < 1:
+		push_warning("WorldMap: cycle_config[%d].reinforcement_interval 非法 %d，钳制为 1 防除零" % [current_cycle, raw_interval])
+	_current_cycle_initial_pack_count = maxi(0, raw_pack)
+	_current_cycle_reinforcement_interval = maxi(1, raw_interval)
+
+	# P0 第二阶段 P1-2a 修复：缓存 has_enemy_core，视觉绘制改用该字段（替代硬编码 is_last_cycle()）
+	# VictoryJudge.check_on_slot_owner_changed 仍用 RunState.is_last_cycle()——static 路径不便注入
+	# MVP 期 has_enemy_core 与 is_last_cycle() 同义；若未来配置错位需 VictoryJudge 也切到该字段
+	_current_cycle_has_enemy_core = str(cycle_row.get("has_enemy_core", "false")).to_lower() == "true"
+
+
+## P0 第二阶段：PCG 生成后从 schema 找敌方 CORE_TOWN 位置缓存到 _enemy_core_origin_pos
+##
+## 设计原因：EnemyReinforcement.spawn_batch 当前查 owner=ENEMY_1 的 CORE_TOWN 作 spawn 锚，
+##           前两周期玩家占领后 owner 翻转 → reinforcement 失效。改为缓存"PCG 生成时的原始位置"，
+##           不查 owner——玩家占领后敌方仍从该位置周围 spawn。
+func _cache_enemy_core_origin_pos() -> void:
+	if _schema == null:
+		_enemy_core_origin_pos = Vector2i(-1, -1)
+		return
+	for entry in _schema.persistent_slots:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null:
+			continue
+		if slot.type == PersistentSlot.Type.CORE_TOWN and slot.owner_faction == Faction.ENEMY_1:
+			_enemy_core_origin_pos = slot.position
+			return
+	push_warning("WorldMap: PCG 后未找到敌方 CORE_TOWN，_enemy_core_origin_pos 保持 (-1,-1)；reinforcement 将跳过")
+	_enemy_core_origin_pos = Vector2i(-1, -1)
+
+
 ## JSON 模式：从配置中读取文件路径后加载
 func _load_json(map_cfg: Dictionary) -> void:
 	var path: String = map_cfg.get("json_path", "") as String
@@ -4636,7 +4777,12 @@ func _draw_persistent_slots() -> void:
 
 		# 核心城镇第二识别特征：金色外描边 + 下方小金菱形徽记
 		# 徽记偏下（主字居中占主视觉），避免被文字压住
-		if slot.type == PersistentSlot.Type.CORE_TOWN:
+		# P0 第二阶段：CORE_TOWN 视觉双态 —— 仅 has_enemy_core 周期激活（P1-2a 修复：配置驱动）
+		# 前两周期 CORE_TOWN 数据层仍是 CORE_TOWN（PCG / VictoryJudge / reinforcement 锚都依赖），
+		# 视觉降级为普通 TOWN：跳过金边 / 徽记，主字改用 TOWN 短标签
+		var is_core_town: bool = slot.type == PersistentSlot.Type.CORE_TOWN
+		var is_core_town_activated: bool = is_core_town and _current_cycle_has_enemy_core
+		if is_core_town_activated:
 			draw_rect(outer, M4_CORE_TOWN_BORDER, false, 2.0)
 			var emblem_pos: Vector2 = outer.get_center() + Vector2(0, 12)
 			_draw_core_town_emblem(emblem_pos)
@@ -4644,12 +4790,19 @@ func _draw_persistent_slots() -> void:
 		# 主字（display_id）+ 等级角标
 		# display_id 落在内底米白上（任何势力色下对比度都最优）
 		# legacy fallback（未分配 display_id）保留旧行为 main_text 含 level
+		# P0 第二阶段：非末周期 CORE_TOWN 伪装为普通 TOWN —— 跳过 display_id 用 TOWN 短标签
 		if _label_font != null:
 			var center_px: Vector2 = outer.get_center()
-			var main_text: String = slot.display_id if slot.display_id != "" else (slot.get_map_label() + str(slot.level))
+			var main_text: String
+			if is_core_town and not is_core_town_activated:
+				# 伪装：主字用 TOWN 短标签 + level（"镇3"），不画等级角标避免暴露 display_id
+				main_text = PersistentSlot.TYPE_MAP_LABELS.get(PersistentSlot.Type.TOWN, "镇") + str(slot.level)
+			else:
+				main_text = slot.display_id if slot.display_id != "" else (slot.get_map_label() + str(slot.level))
 			_draw_slot_label(center_px, main_text, Color(0.05, 0.05, 0.05))
 
-			if slot.display_id != "":
+			# 等级角标：仅 display_id 模式画；CORE_TOWN 伪装态走 fallback 主字不再画角标
+			if slot.display_id != "" and not (is_core_town and not is_core_town_activated):
 				_draw_level_badge(p, slot.level)
 
 
