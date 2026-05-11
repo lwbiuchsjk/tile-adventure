@@ -53,6 +53,8 @@ const CONFIG_TOWN_TROOP_POOL: String = "res://assets/config/town_troop_pool.csv"
 ## B 重生周期 MVP：英雄池 + 整局周期参数
 const CONFIG_HERO_POOL: String = "res://assets/config/hero_pool.csv"
 const CONFIG_RUN: String = "res://assets/config/run_config.csv"
+## 入口 2 MVP 2.3(2026-05-11):事件叙事文本随机池
+const CONFIG_NARRATIVE_POOL: String = "res://assets/config/event_narrative_pool.csv"
 ## E 战斗就地展开 MVP：兵种战斗参数（移动 / 攻击范围）
 const CONFIG_BATTLE_UNIT: String = "res://assets/config/battle_unit_config.csv"
 
@@ -596,6 +598,9 @@ func _ready() -> void:
 	# _initialized=true，沿用上一周期累积的 _cycle_index / _used_hero_ids 等
 	var hero_pool_rows: Array = ConfigLoader.load_csv(CONFIG_HERO_POOL)
 	var run_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_RUN)
+	# 入口 2 MVP 2.3(2026-05-11):加载事件叙事池(NarrativeProvider 静态工具类内部 _initialized 防重复加载)
+	var narrative_rows: Array = ConfigLoader.load_csv(CONFIG_NARRATIVE_POOL)
+	NarrativeProvider.ensure_loaded(narrative_rows)
 	var max_cycles_v: int = int(run_cfg.get("max_cycles", "3"))
 	_coma_duration_sec = float(run_cfg.get("coma_duration_sec", "1.5"))
 	_coma_hp_threshold_ratio = float(run_cfg.get("coma_hp_threshold_ratio", "0.2"))
@@ -1762,11 +1767,22 @@ func _start_camp() -> void:
 	# 扎营恢复补给
 	# F MVP：作为"扎营整顿"的第一条事件呈现；放在持久 slot 产出之前 push，
 	# 保证事件队列顺序与玩家心智一致（先恢复，再产出）
+	#
+	# 入口 2 MVP 2.3 扩展（2026-05-11）：补给恢复 event 也走 NarrativeProvider
+	# 场景:camp_supply_{wild|village|town}(独立池,与产出叙事分开)
+	# 占位符:leader_name / count(补给恢复量) / slot_name(村庄/城镇场景)
 	_supply += _camp_restore
 	if _camp_restore > 0:
-		_event_panel.push_event(_build_reward_event(
-			"扎营休整", "扎营整顿队伍，恢复补给×%d" % _camp_restore
-		))
+		var supply_info: Dictionary = _resolve_camp_scenario()
+		var supply_scenario: String = "camp_supply_" + String(supply_info.get("scenario", "camp_wild")).substr(5)
+		var supply_ctx: Dictionary = {
+			"leader_name": _leader_display_name,
+			"count": _camp_restore,
+		}
+		if supply_scenario != "camp_supply_wild":
+			supply_ctx["slot_name"] = String(supply_info.get("slot_name", ""))
+		var supply_narrative: String = NarrativeProvider.pick(supply_scenario, supply_ctx)
+		_event_panel.push_event(_build_reward_event("扎营休整", supply_narrative))
 
 	# M6: 持久 slot 扎营结算（玩家侧）
 	# 流程：camp_pos 查 C 作用域覆盖 → 逐 slot 按类型 × 作用域覆盖 → 落地到石料 / 补给 / 背包
@@ -1816,13 +1832,25 @@ func _settle_persistent_camp_production() -> void:
 	var dropped: Array = outcome.get("dropped", []) as Array
 	# F MVP：成功条目走事件面板（每条产出独立事件，符合 §3 / §7 场景 2 逐条呈现预期）
 	# 失败条目（背包满 / 池空）属于错误反馈，仍走 _show_notice 飘字
+	#
+	# 入口 2 MVP 2.3（2026-05-11）：narrative 走 NarrativeProvider 池抽取
+	# 整次扎营单一 scenario:玩家位置一次性判定,所有 entry 共用同一情境(野外/村庄/城镇)
 	if not applied.is_empty():
+		var camp_info: Dictionary = _resolve_camp_scenario()
+		var camp_scenario: String = String(camp_info.get("scenario", "camp_wild"))
+		var slot_name: String = String(camp_info.get("slot_name", ""))
 		for entry in applied:
 			var entry_dict: Dictionary = entry as Dictionary
-			var entry_text: String = ProductionSystem.format_results_text([entry_dict])
-			_event_panel.push_event(_build_reward_event(
-				"扎营产出", "扎营时整顿物资，获得：%s" % entry_text
-			))
+			var item_count: Dictionary = _entry_to_item_count(entry_dict)
+			var ctx: Dictionary = {
+				"leader_name": _leader_display_name,
+				"item": item_count["item"],
+				"count": item_count["count"],
+			}
+			if camp_scenario != "camp_wild":
+				ctx["slot_name"] = slot_name
+			var narrative: String = NarrativeProvider.pick(camp_scenario, ctx)
+			_event_panel.push_event(_build_reward_event("扎营产出", narrative))
 	if not dropped.is_empty():
 		_show_notice("扎营产出部分失败：%s" % ProductionSystem.format_dropped_text(dropped))
 
@@ -1843,13 +1871,19 @@ func _build_reward_event(title: String, narrative: String) -> Dictionary:
 ## 战斗胜利事件 helper：把关卡奖励 + 部队奖励合并到单条事件
 ## 用户跑测反馈：战斗一次性获得多个奖励应合并展示，避免连点 N 次确认
 ## rewards 为空（背包满全丢 / 关卡无奖励）则跳过，不弹空事件
+##
+## 入口 2 MVP 2.3（2026-05-11）：narrative 走 NarrativeProvider battle_victory 池抽取
+## item 占位符 = 合并奖励文本(已含数量,如"草药×2, 盾×1"),不需要 count
 func _push_battle_victory_event(rewards: Array[ItemData]) -> void:
 	if rewards.is_empty():
 		return
 	var reward_text: String = _format_rewards_text(rewards)
-	_event_panel.push_event(_build_reward_event(
-		"战斗胜利", "击败敌方部队，获得：%s" % reward_text
-	))
+	var ctx: Dictionary = {
+		"leader_name": _leader_display_name,
+		"item": reward_text,
+	}
+	var narrative: String = NarrativeProvider.pick("battle_victory", ctx)
+	_event_panel.push_event(_build_reward_event("战斗胜利", narrative))
 
 
 ## 尝试采集当前位置的一次性资源点（M6 改造）
@@ -1882,13 +1916,18 @@ func _try_collect_resource_at(pos: Vector2i) -> void:
 	# F MVP：即时 slot 采集走事件面板（与扎营产出同 reward 模板，叙事前缀不同）
 	# 池空 / 背包满等失败走 _show_notice，与扎营保持一致
 	# 注意：本函数早前已有 var entry，这里循环变量改名避免 shadow 冲突
+	# 入口 2 MVP 2.3（2026-05-11）:走 NarrativeProvider resource_slot_pickup 池
 	if not applied.is_empty():
 		for applied_entry in applied:
 			var entry_dict: Dictionary = applied_entry as Dictionary
-			var entry_text: String = ProductionSystem.format_results_text([entry_dict])
-			_event_panel.push_event(_build_reward_event(
-				"采集所获", "途经采集所获，获得：%s" % entry_text
-			))
+			var item_count: Dictionary = _entry_to_item_count(entry_dict)
+			var ctx: Dictionary = {
+				"leader_name": _leader_display_name,
+				"item": item_count["item"],
+				"count": item_count["count"],
+			}
+			var narrative: String = NarrativeProvider.pick("resource_slot_pickup", ctx)
+			_event_panel.push_event(_build_reward_event("采集所获", narrative))
 	if not dropped.is_empty():
 		_show_notice("采集失败：%s" % ProductionSystem.format_dropped_text(dropped))
 	queue_redraw()
@@ -3390,6 +3429,82 @@ func _parse_troop_quality(name: String, default_quality: int) -> TroopData.Quali
 			return TroopData.Quality.R
 
 
+## 入口 2 MVP 2.3（2026-05-11）：扎营场景判定
+##
+## 返回 Dictionary:
+##   {"scenario": "camp_wild" | "camp_village" | "camp_town", "slot_name": String}
+##   wild 场景 slot_name 为空字符串
+##
+## 优先级:TOWN > VILLAGE > WILD(玩家位置同时在多个 slot 范围内时取最高级)
+## slot_name 取该次判定命中的同类型 slot 中曼哈顿距离最近的 display_id
+func _resolve_camp_scenario() -> Dictionary:
+	var result: Dictionary = {"scenario": "camp_wild", "slot_name": ""}
+	if _schema == null or _unit == null:
+		return result
+	# OccupationSystem.slots_covering 返回无类型 Array;不能直接赋给 Array[PersistentSlot]
+	# 用 Array 接收 + 循环内 cast,符合项目类型化规范(避免 LSP 报错)
+	var covered: Array = OccupationSystem.slots_covering(
+		_unit.position, Faction.PLAYER, _schema.persistent_slots
+	)
+	# 过滤玩家方 + 分类
+	var towns: Array[PersistentSlot] = []
+	var villages: Array[PersistentSlot] = []
+	for entry in covered:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null or slot.owner_faction != Faction.PLAYER:
+			continue
+		if slot.type == PersistentSlot.Type.TOWN:
+			towns.append(slot)
+		elif slot.type == PersistentSlot.Type.VILLAGE:
+			villages.append(slot)
+	# 取曼哈顿距离最近的 slot 为 slot_name 来源
+	var pick_nearest: Callable = func(slots: Array[PersistentSlot]) -> PersistentSlot:
+		var best: PersistentSlot = null
+		var best_dist: int = 99999
+		for s in slots:
+			var d: int = absi(_unit.position.x - s.position.x) + absi(_unit.position.y - s.position.y)
+			if d < best_dist:
+				best_dist = d
+				best = s
+		return best
+	if not towns.is_empty():
+		result["scenario"] = "camp_town"
+		var nearest: PersistentSlot = pick_nearest.call(towns)
+		if nearest != null:
+			result["slot_name"] = nearest.display_id
+	elif not villages.is_empty():
+		result["scenario"] = "camp_village"
+		var nearest: PersistentSlot = pick_nearest.call(villages)
+		if nearest != null:
+			result["slot_name"] = nearest.display_id
+	return result
+
+
+## 入口 2 MVP 2.3（2026-05-11）：把 ProductionSystem entry 转为 {item, count} 字典
+##
+## entry 字段结构因 kind 不同:
+##   KIND_RESOURCE: resource_type / amount → 取 ResourceSlot.RESOURCE_TYPE_NAMES + amount
+##   KIND_STONE:    amount → "石料" + amount
+##   KIND_ITEM:     item: ItemData → display_name + stack_count
+##   其他:          fallback "物资" / 1
+func _entry_to_item_count(entry: Dictionary) -> Dictionary:
+	var kind: String = String(entry.get("kind", ""))
+	match kind:
+		ProductionSystem.KIND_RESOURCE:
+			var res_type: int = int(entry.get("resource_type", 0))
+			var name: String = ResourceSlot.RESOURCE_TYPE_NAMES.get(res_type, "?") as String
+			return {"item": name, "count": int(entry.get("amount", 0))}
+		ProductionSystem.KIND_STONE:
+			return {"item": "石料", "count": int(entry.get("amount", 0))}
+		ProductionSystem.KIND_ITEM:
+			var item: ItemData = entry.get("item") as ItemData
+			if item != null:
+				return {"item": item.display_name, "count": item.stack_count}
+			return {"item": "物资", "count": 1}
+		_:
+			return {"item": "物资", "count": 1}
+
+
 ## 入口 2 MVP 2.1 议题 5（2026-05-10）：构造 coma 文案
 ## 查 _characters[0] 的 coma_narrative csv 字段，空则用通用模板
 ## 通用模板内 {name} 占位会被替换为传入 leader_name
@@ -3442,10 +3557,17 @@ func _on_recruit_triggered(hero_dict: Dictionary, milestone: int) -> void:
 		push_warning("WorldMap._on_recruit_triggered: EventPanelUI 未就绪，事件丢弃")
 		return
 	var hero_name: String = String(hero_dict.get("name", "新成员"))
+	# 入口 2 MVP 2.3（2026-05-11）:走 NarrativeProvider recruit_event 池
+	var ctx: Dictionary = {
+		"leader_name": _leader_display_name,
+		"recruit_name": hero_name,
+		"milestone": milestone,
+	}
+	var narrative: String = NarrativeProvider.pick("recruit_event", ctx)
 	var event: Dictionary = {
 		"type": "recruit",
 		"title": "新成员加入",
-		"narrative": "扎营第 %d 次时，%s 闻讯前来加入队伍。" % [milestone, hero_name],
+		"narrative": narrative,
 		"actions": [{"label": "确认", "result": "confirm"}],
 		# payload 里塞整个 hero_dict —— 确认时不依赖闭包，避免重新查 hero_pool
 		"payload": hero_dict,

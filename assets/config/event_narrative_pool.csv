@@ -1,0 +1,46 @@
+scenario,narrative_template
+camp_wild,{leader_name} 在荒野扎营。搜寻片刻后获得 {item}×{count}。
+camp_wild,夜风萧瑟。{leader_name} 借着火堆清点物资。得到 {item}×{count}。
+camp_wild,无名旷野。{leader_name} 整理装备。意外发现 {item}×{count}。
+camp_wild,营地周围空无一人。{leader_name} 在搜罗中得到 {item}×{count}。
+camp_wild,{leader_name} 在篝火旁盘点行装。得到 {item}×{count}。
+camp_village,在 {slot_name} 的村口。{leader_name} 收下村民赠送的 {item}×{count}。
+camp_village,{slot_name} 的老人将 {item}×{count} 塞到 {leader_name} 手中。
+camp_village,{slot_name} 村中孩童围着 {leader_name}。送来 {item}×{count} 表示心意。
+camp_village,{leader_name} 在 {slot_name} 留宿一夜。村长赠 {item}×{count} 答谢。
+camp_village,{slot_name} 的灯火温暖了夜色。{leader_name} 收下村民相赠的 {item}×{count}。
+camp_town,在 {slot_name} 的市集中。{leader_name} 购得 {item}×{count}。
+camp_town,{slot_name} 商人为 {leader_name} 备好 {item}×{count}。
+camp_town,{slot_name} 守卫将 {item}×{count} 交给 {leader_name}。称是城主之意。
+camp_town,{slot_name} 的旅店主人为 {leader_name} 备齐 {item}×{count}。
+camp_town,{leader_name} 在 {slot_name} 城内整顿。获得 {item}×{count} 补给。
+resource_slot_pickup,{leader_name} 路过时拾得 {item}×{count}。
+resource_slot_pickup,草丛中闪过微光。{leader_name} 走近一看是 {item}×{count}。
+resource_slot_pickup,无人看管的物资。{leader_name} 收下 {item}×{count}。
+resource_slot_pickup,{leader_name} 在路旁发现 {item}×{count}。
+resource_slot_pickup,看似平常的角落却藏着 {item}×{count}。{leader_name} 顺手取走。
+recruit_event,扎营第 {milestone} 次时。{recruit_name} 闻讯前来投奔 {leader_name}。
+recruit_event,{recruit_name} 寻迹而至。愿追随 {leader_name} 同行(此为第 {milestone} 次扎营)。
+recruit_event,{leader_name} 的事迹流传。{recruit_name} 在第 {milestone} 次扎营时加入队伍。
+recruit_event,听闻 {leader_name} 之名。{recruit_name} 趁第 {milestone} 次扎营赶来效力。
+recruit_event,{recruit_name} 远道而来。在第 {milestone} 次扎营之夜结识 {leader_name}。
+battle_victory,{leader_name} 击退敌方。获得 {item}。
+battle_victory,战斗尘埃落定。{leader_name} 整队收下 {item}。
+battle_victory,{leader_name} 凯旋。从战场缴获 {item}。
+battle_victory,敌军溃散。{leader_name} 清点战果获 {item}。
+battle_victory,战毕。{leader_name} 收敛战利品:{item}。
+camp_supply_wild,{leader_name} 在荒野扎营。整顿行装,恢复补给×{count}。
+camp_supply_wild,夜风萧瑟。{leader_name} 升起篝火,清点囊中所剩,恢复补给×{count}。
+camp_supply_wild,{leader_name} 在野外搭好营地,翻找储备,恢复补给×{count}。
+camp_supply_wild,荒野孤营。{leader_name} 喘息片刻,整理给养,恢复补给×{count}。
+camp_supply_wild,{leader_name} 借月色清点行囊,恢复补给×{count}。
+camp_supply_village,{slot_name} 的村民为 {leader_name} 备好热食。恢复补给×{count}。
+camp_supply_village,在 {slot_name} 留宿一夜。{leader_name} 得村民馈赠,恢复补给×{count}。
+camp_supply_village,{slot_name} 的炊烟温暖了夜色。{leader_name} 整队休整,恢复补给×{count}。
+camp_supply_village,{leader_name} 与 {slot_name} 村民围火而坐,恢复补给×{count}。
+camp_supply_village,{slot_name} 老妪为 {leader_name} 烹汤暖身。恢复补给×{count}。
+camp_supply_town,{leader_name} 在 {slot_name} 城内补给。整队恢复补给×{count}。
+camp_supply_town,{slot_name} 的旅店为 {leader_name} 备齐口粮。恢复补给×{count}。
+camp_supply_town,{slot_name} 商队为 {leader_name} 整修装备。恢复补给×{count}。
+camp_supply_town,{leader_name} 在 {slot_name} 市集采办给养。恢复补给×{count}。
+camp_supply_town,{slot_name} 守卫为 {leader_name} 接洽补给事宜。恢复补给×{count}。
