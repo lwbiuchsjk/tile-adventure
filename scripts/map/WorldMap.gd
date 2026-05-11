@@ -1562,9 +1562,6 @@ func _on_move_finished() -> void:
 
 	# 消耗 1 补给
 	_supply = maxi(0, _supply - 1)
-	print("[WORLD-MOVE] _on_move_finished pos=%s supply=%d turn=%d" % [
-		_unit.position, _supply, _turn_manager.player_faction_turn_count if _turn_manager != null else -1
-	])
 
 	# 检查当前位置是否有一次性资源点并采集
 	_try_collect_resource_at(_unit.position)
@@ -1623,11 +1620,6 @@ func _get_blocked_positions() -> Dictionary:
 ##
 ## 敌方侧（ENEMY_1）由 EnemyAI._on_faction_turn_started 独立处理，两个 handler 按 faction 分流互不干扰
 func _on_faction_turn_started(faction: int) -> void:
-	# 全 faction 都打日志（包含敌方），便于看到完整回合切换链
-	var fac_name: String = "PLAYER" if faction == Faction.PLAYER else ("ENEMY_%d" % faction)
-	print("[WORLD-TURN] _on_faction_turn_started faction=%s player_turn_count=%d in_battle=%s" % [
-		fac_name, _turn_manager.player_faction_turn_count, _is_in_battle()
-	])
 	if faction != Faction.PLAYER:
 		return
 	# 玩家回合开始：重置单位移动力
@@ -1994,7 +1986,6 @@ func _try_collect_resource_at(pos: Vector2i) -> void:
 ## M7 前的 legacy 流程：直接调 _enemy_movement.start_phase 或 end_turn
 ## M7 新流程：end_faction_turn(PLAYER) → start_faction_turn(ENEMY_1) → EnemyAI 六步 → 回到 PLAYER
 func _on_turn_end_settlement() -> void:
-	print("[WORLD-TURN] _on_turn_end_settlement (扎营结束 → 切敌方阶段) player_turn=%d" % _turn_manager.player_faction_turn_count)
 	if _game_finished or _check_defeat():
 		return
 	# 发放回合奖励
@@ -2036,9 +2027,6 @@ func _on_turn_end_settlement() -> void:
 ## 仍传值给保持签名兼容；实际 per-pack 决策不再读取该值（详见 EnemyMovement.gd）
 ## 无可移动 → 直接触发 phase_finished（走 _on_enemy_phase_finished → 回 PLAYER）
 func start_enemy_move_phase() -> void:
-	print("[ENEMY-PHASE] start_enemy_move_phase player_turn=%d player_pos=%s in_battle=%s" % [
-		_turn_manager.player_faction_turn_count, _unit.position if _unit != null else Vector2i(-1, -1), _is_in_battle()
-	])
 	if _game_finished or not _enemy_movement_enabled:
 		_on_enemy_phase_finished()
 		return
@@ -2152,9 +2140,6 @@ func _get_enemy_target_pos() -> Vector2i:
 ## 让 phase_finished 信号发出，但本回调若切回 PLAYER 回合会跑额外 tick / HUD 刷新，
 ## 1.5s 后 reload 时这些状态被覆盖，但中间存在时序风险（如 tick 触发新增建造）
 func _on_enemy_phase_finished() -> void:
-	print("[ENEMY-PHASE] _on_enemy_phase_finished current_faction=%d in_battle=%s game_finished=%s in_coma=%s" % [
-		_turn_manager.current_faction if _turn_manager != null else -1, _is_in_battle(), _game_finished, _is_in_coma
-	])
 	if _game_finished:
 		return
 	if _is_in_coma:
@@ -2173,13 +2158,9 @@ func _on_enemy_phase_finished() -> void:
 			var packs_in_arena: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_arena_range)
 			if packs_in_arena.is_empty():
 				packs_in_arena = trigger_zone
-			print("[BATTLE-TRIGGER] passive 被动战斗触发 trigger_zone=%d arena_packs=%d player_pos=%s" % [
-				trigger_zone.size(), packs_in_arena.size(), _unit.position
-			])
 			_start_passive_battle(packs_in_arena)
 			return
 
-	print("[WORLD-TURN] 切回玩家回合（敌方阶段结束 + 无被动战斗）")
 	_turn_manager.end_faction_turn()
 	_turn_manager.current_faction = Faction.PLAYER
 	_turn_manager.start_faction_turn(Faction.PLAYER)
@@ -2289,10 +2270,6 @@ func _get_battle_unit_at_pos(pos: Vector2i) -> BattleUnit:
 func _start_battle_session(packs: Array[LevelSlot]) -> void:
 	if packs.is_empty():
 		return
-	print("[BATTLE-TRIGGER] active 主动战斗 packs=%d player_pos=%s supply_before=%d cost=%d current_faction=%d" % [
-		packs.size(), _unit.position, _supply, _active_battle_supply_cost,
-		_turn_manager.current_faction if _turn_manager != null else -1
-	])
 	# 补给扣除钳到 ≥0；调用前由 _try_trigger_active_battle 已校验充足
 	# 钳位防御 _active_battle_supply_cost > _supply 时不进入负数（被动战斗 E4 路径同样适用）
 	_supply = maxi(0, _supply - _active_battle_supply_cost)
@@ -2342,10 +2319,6 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 	if packs.is_empty():
 		return
-	print("[BATTLE-TRIGGER] passive 被动战斗启动 packs=%d player_pos=%s supply_before=%d cost=%d current_faction=%d" % [
-		packs.size(), _unit.position, _supply, _passive_battle_supply_cost,
-		_turn_manager.current_faction if _turn_manager != null else -1
-	])
 	_supply = maxi(0, _supply - _passive_battle_supply_cost)
 	_battle_session = BattleSession.new()
 	_bind_battle_session_sinks()
@@ -2391,7 +2364,7 @@ func _try_trigger_active_battle() -> void:
 	# 队长无部队 → 不能入战；走兜底队伍状态评估（理论上 _evaluate_party_state 此时应已触发昏迷 / 失败）
 	# 防御性检查避免 BattleSession._deploy_player_side 落到无 actor 的卡死战斗态
 	if _characters.is_empty() or _characters[0] == null or not _characters[0].has_troop():
-		_evaluate_party_state("try_trigger_active_battle_no_leader")
+		_evaluate_party_state()
 		return
 	# 触发判断：dist ≤ _battle_trigger_range 内有候选 → 才能按 [F]
 	var trigger_candidates: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
@@ -2807,16 +2780,6 @@ func _sync_world_unit_from_battle_leader() -> void:
 ##
 ## 收尾通用：清空 _battle_session / 隐藏 HUD / 重置移动力 / 刷新可达
 func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
-	# 诊断打印：sink 触发时机 + reason / 当前 faction / anim 队列状态
-	# 配合 BattleSession 的 [BATTLE-END] 一起看：BATTLE-END 表示 end() 被调用，
-	# BATTLE-SESSION-ENDED-SINK 表示 WorldMap 这边收到回调开始处理
-	var reason_name: String = ["VICTORY", "MANUAL_EXIT", "COMA"][reason] if reason >= 0 and reason < 3 else "UNKNOWN"
-	var faction_tag: String = "?"
-	if _turn_manager != null:
-		faction_tag = "PLAYER" if _turn_manager.current_faction == Faction.PLAYER else "ENEMY"
-	print("[BATTLE-SESSION-ENDED-SINK] reason=%s world_faction=%s defeated_packs=%d anim_count=%d anim_queue=%d" % [
-		reason_name, faction_tag, defeated_packs.size(), _battle_anim_count, _battle_anim_queue.size()
-	])
 	# 入口 2 MVP 2.1 议题 5（2026-05-10 跑测调整）：COMA 分支与其他分支的动画清理时机不同
 	#
 	# COMA 分支：先 await 致命一击的攻击 / 死亡动画跑完，玩家能看到完整因果，再清理 + 黑屏
@@ -2911,7 +2874,7 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 
 	# 4. 兜底队员阵亡评估（队长跌阈值的极端情况已在战斗中走 COMA 路径，不走到此处）
 	# _evaluate_party_state 返回 true 表示已触发昏迷 / 失败遮罩，无需再走收尾流程
-	if _evaluate_party_state("battle_session_ended_fallback"):
+	if _evaluate_party_state():
 		_battle_session = null
 		return
 
@@ -2938,6 +2901,18 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 ##
 ## 切到下一单位 / 切敌方回合都由 BattleSession.advance_to_next_player_unit 处理
 ## 敌方回合启动后由 _step_enemy_turn_loop 串行驱动
+##
+## 时序修复 B（2026-05-11）：玩家攻击 / 跳过 anim 还在跑时，
+## 直接 advance → 敌方 step 会让"敌方逻辑判定 + COMA 检测"先于玩家攻击动画完成
+## 玩家观感：攻击完毕立刻 COMA 黑屏，看不到敌方反击的因果
+##
+## 修复：在 advance 前 await 当前 anim 队列空（含玩家攻击三段 anim + 死亡 anim）
+## 效果：玩家攻击动画完整播完 → 敌方 step → 敌方攻击动画 → COMA 黑屏（如果命中）
+##
+## 调用方（_handle_battle_click / _on_battle_hud_attack_pressed / _on_battle_hud_skip_pressed）
+## fire-and-forget 即可，不必 await 本函数；
+## await 期间玩家点击被 _handle_battle_click 内 _battle_anim_count > 0 守卫拦截，
+## 按钮被 _begin_battle_anim 内 set_actions_enabled(false) 锁住，无并发风险
 func _post_player_action_check() -> void:
 	if _battle_session == null or _battle_session.is_ended():
 		return
@@ -2945,11 +2920,20 @@ func _post_player_action_check() -> void:
 		return
 	var actor: BattleUnit = _battle_session.current_actor()
 	if actor == null or actor.has_attacked:
-		print("[WORLD-BATTLE-SINK] _post_player_action_check → advance（actor 完成）")
-		_battle_session.advance_to_next_player_unit()
-		# 切到敌方回合 → 串行驱动敌方单位行动
-		if _battle_session.is_enemy_turn():
-			_run_enemy_turn_async()
+		# 关键 await：等当前 anim 队列空，让玩家攻击 anim 完整播完
+		await _await_battle_anims_finished()
+		# await 期间状态可能变化（理论 VICTORY 由 try_player_attack 内同步触发；
+		# 此处仍做防御性校验，避免 await 期间被外部代码意外结束 session）
+		if _battle_session == null or _battle_session.is_ended():
+			return
+		if not _battle_session.is_player_turn():
+			return
+		var actor2: BattleUnit = _battle_session.current_actor()
+		if actor2 == null or actor2.has_attacked:
+			_battle_session.advance_to_next_player_unit()
+			# 切到敌方回合 → 串行驱动敌方单位行动
+			if _battle_session.is_enemy_turn():
+				_run_enemy_turn_async()
 
 
 ## 敌方回合串行驱动（异步推进 + 等动画完成才推下一个）
@@ -2967,7 +2951,6 @@ func _run_enemy_turn_async() -> void:
 		return
 	if not _battle_session.is_enemy_turn():
 		return
-	print("[WORLD-BATTLE-SINK] _run_enemy_turn_async → step_enemy_turn 启动")
 	var has_more: bool = _battle_session.step_enemy_turn()
 	if _battle_session == null or _battle_session.is_ended():
 		return
@@ -3262,7 +3245,7 @@ func _apply_player_damages(result: BattleResolver.BattleResult) -> bool:
 				if ch.troop.is_defeated():
 					ch.clear_troop()
 			troop_index += 1
-	return _evaluate_party_state("apply_player_damages_legacy_battleui")
+	return _evaluate_party_state()
 
 ## 从敌方部队快照中随机抽取 1 支，转为 TROOP 道具加入背包
 ## 背包已满时直接丢弃
@@ -3304,7 +3287,7 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 
 	# B 重生周期 MVP：先评估队伍状态（队员阵亡移除 / 队长昏迷阈值）
 	# 返回 true 表示已进入昏迷过渡或失败遮罩，中断后续流程；强制战斗时通知敌方阶段收场
-	if _evaluate_party_state("post_battle_settlement_legacy_battleui"):
+	if _evaluate_party_state():
 		if was_forced:
 			_enemy_movement.finish_phase()
 		return
@@ -3406,7 +3389,7 @@ func _on_equip_troop(character: CharacterData, item: ItemData) -> void:
 	# 刷新面板
 	_manage_ui.refresh()
 	# B 重生周期 MVP：装配换部队后队长 max_hp / current_hp 比例可能跌到阈值（如把高 hp 旧部队换成低 hp 新部队）
-	_evaluate_party_state("equip_troop")
+	_evaluate_party_state()
 
 ## 使用道具操作回调（经验道具、兵力恢复道具）
 func _on_use_item(character: CharacterData, item: ItemData) -> void:
@@ -3425,7 +3408,7 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	_manage_ui.refresh()
 	# B 重生周期 MVP：道具使用后队长状态可能改变（HP_RESTORE 仅会脱离阈值，不会触发昏迷；
 	# 但 EXP 升级品质后 max_hp 会刷新，理论上有跨阈值可能。统一调用以保持入口对齐）
-	_evaluate_party_state("use_item")
+	_evaluate_party_state()
 
 # ─────────────────────────────────────────
 # 击退冷却管理
@@ -3733,14 +3716,7 @@ func _has_any_troop() -> bool:
 ##
 ## 触发挂点：_apply_player_damages / _post_battle_settlement / _on_use_item / _on_equip_troop 末尾。
 ## 守卫：_is_in_coma / _game_finished 时直接返回 true，避免重入。
-##
-## caller 参数仅用于诊断打印，识别究竟是哪条非战斗路径触发 COMA
-##  - "battle_session_ended" 新战斗系统兜底（队长不该跌阈值，否则走 EndReason.COMA 路径）
-##  - "use_item"             使用道具后（EXP 升级品质改 max_hp 时 ratio 可能变化）
-##  - "equip_troop"          装配部队后（旧部队 → 新部队的 hp/max 比例可能跌阈值）
-##  - "apply_player_damages" 旧 BattleUI 击退/击败路径（新系统下不应走到）
-##  - "post_battle_settle"   旧 BattleUI 战斗结算
-func _evaluate_party_state(caller: String = "?") -> bool:
+func _evaluate_party_state() -> bool:
 	if _game_finished or _is_in_coma:
 		return true
 	# 1. 队员阵亡 → 从队伍移除（倒序避免索引漂移）
@@ -3757,12 +3733,10 @@ func _evaluate_party_state(caller: String = "?") -> bool:
 	# 2. 队长检查
 	if _characters.is_empty():
 		# 极端态：连队长都没了 → 走兜底重生 / 失败分支
-		print("[EVAL-COMA] caller=%s reason=队长_characters_为空" % caller)
 		_trigger_coma_or_lose()
 		return true
 	var leader: CharacterData = _characters[0]
 	if leader == null or not leader.has_troop():
-		print("[EVAL-COMA] caller=%s reason=队长无部队" % caller)
 		_trigger_coma_or_lose()
 		return true
 	var troop: TroopData = leader.troop
@@ -3772,9 +3746,6 @@ func _evaluate_party_state(caller: String = "?") -> bool:
 		return false
 	var ratio: float = float(troop.current_hp) / float(troop.max_hp)
 	if ratio <= _coma_hp_threshold_ratio:
-		print("[EVAL-COMA] caller=%s reason=队长跌阈值 hp=%d/%d ratio=%.3f threshold=%.3f" % [
-			caller, troop.current_hp, troop.max_hp, ratio, _coma_hp_threshold_ratio
-		])
 		_trigger_coma_or_lose()
 		return true
 	return false
@@ -3796,28 +3767,6 @@ func _evaluate_party_state(caller: String = "?") -> bool:
 func _trigger_coma_or_lose() -> void:
 	if _is_in_coma or _game_finished:
 		return
-	# 诊断打印：识别 COMA 触发时的世界态（current_faction / 是否战斗中 / 队长 HP / 剩余命数）
-	# print_stack() 输出完整调用链，定位是哪条路径（战斗 sink / 装备道具 / 装配 / 战斗 start 兜底）
-	var faction_tag: String = "?"
-	if _turn_manager != null:
-		faction_tag = "PLAYER" if _turn_manager.current_faction == Faction.PLAYER else "ENEMY"
-	var leader_info: String = "无队长"
-	if not _characters.is_empty() and _characters[0] != null and _characters[0].has_troop():
-		var t: TroopData = _characters[0].troop
-		var ratio_str: String = "n/a"
-		if t.max_hp > 0:
-			ratio_str = "%.3f" % (float(t.current_hp) / float(t.max_hp))
-		leader_info = "%d/%d ratio=%s" % [t.current_hp, t.max_hp, ratio_str]
-	var battle_phase_tag: String = "无战斗"
-	if _battle_session != null:
-		var phase_names: Array = ["PLAYER_TURN", "ENEMY_TURN", "ENDED"]
-		var ph: int = _battle_session.current_phase
-		var ph_name: String = phase_names[ph] if ph < 3 else "?"
-		battle_phase_tag = "战斗_phase=%s_round=%d" % [ph_name, _battle_session.battle_round]
-	print("[COMA-TRIGGER] world_faction=%s in_battle=%s %s leader=%s threshold=%.3f respawns_left=%d" % [
-		faction_tag, _is_in_battle(), battle_phase_tag, leader_info, _coma_hp_threshold_ratio, RunState.respawns_left()
-	])
-	print_stack()
 	if RunState.respawns_left() > 0:
 		_is_in_coma = true
 		_reachable_tiles = {}
@@ -4210,9 +4159,10 @@ func _apply_cycle_config(map_cfg: Dictionary) -> void:
 		return
 
 	# 用 cycle row 覆盖 map_cfg 中对应字段（后续 _load_pcg 读 map_cfg 拿到本周期值）
+	# persistent_total_count 不在此列表 —— 由 core(1) + town + village 自动推导避免配置错位
 	var override_keys: Array[String] = [
 		"map_width", "map_height", "start_x", "start_y", "end_x", "end_y",
-		"persistent_total_count", "persistent_town_count", "persistent_village_count",
+		"persistent_town_count", "persistent_village_count",
 	]
 	for key in override_keys:
 		if cycle_row.has(key):
@@ -4221,6 +4171,22 @@ func _apply_cycle_config(map_cfg: Dictionary) -> void:
 	# has_enemy_core 推导 persistent_core_count（数据层始终生成 1 个，视觉 / 判定由 has_enemy_core 控制）
 	# 当前 MVP：始终 1（has_enemy_core=false 时仅视觉走普通 TOWN + VictoryJudge cycle 过滤拦截胜利）
 	map_cfg["persistent_core_count"] = "1"
+
+	# P0 第二阶段（跑测 BUG 修复 2026-05-11）：persistent_total_count 由 1 + town + village 自动推导
+	# 原因：csv 中 total 与 town/village 是冗余双写，用户手动调整时极易错位（如 cycle_config
+	# 调整地图大小时改了 total 忘改 town/village），导致 PCG 校验失败
+	# cycle_config.csv 中 persistent_total_count 字段保留作"目标参考"（编辑时可见目标总数），
+	# 但 PCG 实际用推导值；字段值与推导值不一致时 push_warning 提示
+	var derived_town: int = int(map_cfg.get("persistent_town_count", "7"))
+	var derived_village: int = int(map_cfg.get("persistent_village_count", "18"))
+	var derived_total: int = 1 + derived_town + derived_village
+	if cycle_row.has("persistent_total_count"):
+		var declared_total: int = int(cycle_row.get("persistent_total_count", "0"))
+		if declared_total != derived_total:
+			push_warning("WorldMap: cycle_config[%d].persistent_total_count=%d 与 1+town(%d)+village(%d)=%d 不一致；以推导值 %d 为准" % [
+				current_cycle, declared_total, derived_town, derived_village, derived_total, derived_total
+			])
+	map_cfg["persistent_total_count"] = str(derived_total)
 
 	# 缓存周期级字段
 	# initial_enemy_pack_count: 钳制 ≥ 0（0 = 本周期不预置初始 pack，合理边界）
