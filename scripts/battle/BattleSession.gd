@@ -159,6 +159,9 @@ func start(
 	current_phase = Phase.PLAYER_TURN
 	current_actor_index = 0
 	battle_round = 1
+	print("[BATTLE-START] BattleSession.start player_pos=%s packs=%d arena_range=%d" % [
+		player_pos, packs.size(), arena_range
+	])
 
 	# 战场 Rect2i = 玩家中心 ±arena_range 与地图边界交集
 	arena = _compute_arena(player_pos, arena_range, schema)
@@ -181,7 +184,7 @@ func start(
 	# 战斗 start 后立即检查 COMA —— 防止队长带病上场（HP 已 ≤ 阈值但因
 	# 上场战斗 _evaluate_party_state 兜底失效 / 装备道具改 max_hp 未触发判定路径而进入新战斗）
 	# 玩家"第一次 action 才触发 COMA"的体验问题在此处兜底为"start 即触发"
-	_check_battle_end_after_action()
+	_check_battle_end_after_action("start")
 
 
 ## 结束战斗会话；触发 on_battle_ended sink
@@ -190,6 +193,8 @@ func start(
 ##                 手动退出时传空数组（敌方残余保留）
 ##                 COMA 时不关心（场景 reload 后 BattleSession 销毁）
 func end(reason: EndReason, defeated_packs: Array[LevelSlot]) -> void:
+	var reason_name: String = ["VICTORY", "MANUAL_EXIT", "COMA"][reason] if reason >= 0 and reason < 3 else "UNKNOWN"
+	print("[BATTLE-END] reason=%s defeated_packs=%d round=%d" % [reason_name, defeated_packs.size(), battle_round])
 	current_phase = Phase.ENDED
 	if on_battle_ended.is_valid():
 		on_battle_ended.call(reason, defeated_packs)
@@ -280,6 +285,9 @@ func try_player_move(target_pos: Vector2i) -> bool:
 	var from_pos: Vector2i = actor.battle_position
 	actor.battle_position = target_pos
 	actor.has_moved = true
+	print("[BATTLE-ACT] try_player_move actor_idx=%d %s → %s round=%d" % [
+		current_actor_index, from_pos, target_pos, battle_round
+	])
 	_emit_unit_moved(actor, from_pos, target_pos)
 	_request_redraw()
 	return true
@@ -309,15 +317,20 @@ func try_player_attack(target: BattleUnit) -> Dictionary:
 	if _manhattan(actor.battle_position, target.battle_position) > actor.attack_range:
 		return {"success": false, "damage": 0}
 	var damage: int = _calc_attack_damage(actor, target)
+	var hp_before: int = target.troop.current_hp
 	target.troop.take_damage(damage)
 	actor.has_attacked = true
+	print("[BATTLE-ACT] try_player_attack actor@%s → enemy@%s damage=%d hp:%d→%d round=%d" % [
+		actor.battle_position, target.battle_position, damage,
+		hp_before, target.troop.current_hp, battle_round
+	])
 	# 入口 1.2：先 emit 攻击事件，再 emit 死亡事件（顺序保证视觉层先播伤害飘字、后播死亡渐隐）
 	_emit_unit_attacked(actor, target, damage)
 	if not target.is_alive():
 		_emit_unit_died(target)
 	_request_redraw()
 	# 胜利 / 昏迷自动结束判定
-	_check_battle_end_after_action()
+	_check_battle_end_after_action("player_attack")
 	return {"success": true, "damage": damage}
 
 
@@ -328,6 +341,9 @@ func skip_current_unit() -> void:
 		return
 	actor.has_moved = true
 	actor.has_attacked = true
+	print("[BATTLE-ACT] skip_current_unit actor_idx=%d @%s round=%d" % [
+		current_actor_index, actor.battle_position, battle_round
+	])
 	_emit_unit_skipped(actor)
 
 
@@ -339,7 +355,11 @@ func skip_current_unit() -> void:
 func advance_to_next_player_unit() -> void:
 	if not is_player_turn():
 		return
+	var prev_idx: int = current_actor_index
 	current_actor_index = _find_next_actor_index(player_units, current_actor_index + 1)
+	print("[BATTLE-ADV] advance_to_next_player_unit prev_idx=%d new_idx=%d round=%d" % [
+		prev_idx, current_actor_index, battle_round
+	])
 	if current_actor_index < 0:
 		# 玩家全员完成 → 切敌方回合
 		_start_enemy_turn()
@@ -391,6 +411,9 @@ func _start_enemy_turn() -> void:
 		unit.reset_turn_flags()
 	# 寻找第一个可行动的敌方单位
 	current_actor_index = _find_next_actor_index(enemy_units, 0)
+	print("[BATTLE-TURN] _start_enemy_turn round=%d first_actor_idx=%d enemy_count=%d" % [
+		battle_round, current_actor_index, enemy_units.size()
+	])
 	_emit_phase_changed(Phase.ENEMY_TURN)
 	_request_redraw()
 
@@ -409,8 +432,12 @@ func step_enemy_turn() -> bool:
 		return false
 	var actor: BattleUnit = current_actor()
 	if actor == null:
+		print("[BATTLE-ACT] step_enemy_turn round=%d → 无 actor 切回玩家回合" % battle_round)
 		_start_player_turn()
 		return false
+	print("[BATTLE-ACT] step_enemy_turn round=%d actor_idx=%d @%s" % [
+		battle_round, current_actor_index, actor.battle_position
+	])
 	var decision: Dictionary = BattleAI.decide(
 		actor, player_units, arena, schema, _build_occupied()
 	)
@@ -436,7 +463,15 @@ func step_enemy_turn() -> bool:
 			var target: BattleUnit = decision["target"] as BattleUnit
 			if target != null and target.is_active and target.is_alive():
 				var damage: int = _calc_attack_damage(actor, target)
+				var hp_before: int = target.troop.current_hp
 				target.troop.take_damage(damage)
+				# 打印敌方攻击命中玩家方的 HP 变化（仅玩家方目标），便于追溯 COMA 因果
+				if target.owner_faction == 1:
+					var is_leader_tag: String = " [队长]" if (not player_units.is_empty() and target == player_units[0]) else ""
+					print("[BATTLE-DMG] enemy@%s → player@%s%s damage=%d hp:%d→%d max=%d" % [
+						actor.battle_position, target.battle_position, is_leader_tag,
+						damage, hp_before, target.troop.current_hp, target.troop.max_hp
+					])
 				_emit_unit_attacked(actor, target, damage)
 				if not target.is_alive():
 					_emit_unit_died(target)
@@ -446,7 +481,13 @@ func step_enemy_turn() -> bool:
 			_emit_unit_skipped(actor)
 
 	# 胜利 / 昏迷判定（敌方攻击后队长可能跌阈值）
-	_check_battle_end_after_action()
+	# action 名称用于 COMA 诊断打印识别敌方具体动作（MOVE / ATTACK / SKIP）
+	var action_tag: String = "enemy_step_unknown"
+	match action:
+		BattleAI.Action.MOVE: action_tag = "enemy_step_move"
+		BattleAI.Action.ATTACK: action_tag = "enemy_step_attack"
+		BattleAI.Action.SKIP: action_tag = "enemy_step_skip"
+	_check_battle_end_after_action(action_tag)
 	if is_ended():
 		return false
 
@@ -467,6 +508,9 @@ func _start_player_turn() -> void:
 		unit.reset_turn_flags()
 	current_actor_index = _find_next_actor_index(player_units, 0)
 	battle_round += 1
+	print("[BATTLE-TURN] _start_player_turn new_round=%d first_actor_idx=%d player_count=%d" % [
+		battle_round, current_actor_index, player_units.size()
+	])
 	# 入口 1.2：emit on_phase_changed + on_round_started（顺序：先阶段切换、再轮次）
 	_emit_phase_changed(Phase.PLAYER_TURN)
 	_emit_round_started(battle_round)
@@ -483,11 +527,35 @@ func _start_player_turn() -> void:
 ##                     按 COMA 处理（玩家本局结束）；视作队长牺牲换胜利的极端剧情
 ##
 ## 已结束（current_phase == ENDED）时直接返回，避免重复 end
-func _check_battle_end_after_action() -> void:
+##
+## caller 参数仅用于 COMA 触发时的诊断打印，识别究竟是哪条调用链导致触发
+##  - "start"            战斗 start 后兜底检查
+##  - "player_attack"    玩家攻击后检查（理论不应触发 COMA：玩家攻击只伤害敌方）
+##  - "enemy_step_*"     敌方 step 后检查（正常 COMA 触发路径）
+func _check_battle_end_after_action(caller: String = "?") -> void:
 	if is_ended():
 		return
 	# 1. 队长昏迷判定
 	if _is_leader_in_coma():
+		var leader_info: String = "无队长"
+		if not player_units.is_empty() and player_units[0] != null and player_units[0].troop != null:
+			var t: TroopData = player_units[0].troop
+			var ratio_str: String = "n/a"
+			if t.max_hp > 0:
+				ratio_str = "%.3f" % (float(t.current_hp) / float(t.max_hp))
+			leader_info = "%d/%d ratio=%s" % [t.current_hp, t.max_hp, ratio_str]
+		var actor_tag: String = "无 actor"
+		var actor_v: BattleUnit = current_actor()
+		if actor_v != null:
+			var fac_name: String = "PLAYER" if actor_v.owner_faction == 1 else "ENEMY"
+			var troop_name: String = "?"
+			if actor_v.troop != null:
+				troop_name = TroopData.TROOP_TYPE_NAMES.get(actor_v.troop.troop_type, "?") as String
+			actor_tag = "%s/%s@%s" % [fac_name, troop_name, actor_v.battle_position]
+		var phase_name: String = ["PLAYER_TURN", "ENEMY_TURN", "ENDED"][current_phase] if current_phase < 3 else "?"
+		print("[COMA-DETECT] caller=%s phase=%s actor=%s leader_hp=%s threshold=%.3f round=%d" % [
+			caller, phase_name, actor_tag, leader_info, coma_hp_threshold_ratio, battle_round
+		])
 		end(EndReason.COMA, [])
 		return
 	# 2. 胜利判定：上场敌方全部死亡（未上场敌方 troop 由 VICTORY 路径在 WorldMap 收尾时一并消灭）
