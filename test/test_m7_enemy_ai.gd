@@ -23,7 +23,6 @@ func _init() -> void:
 	_test_full_entry_via_faction_signal()
 	_test_dynamic_target_selection()
 	_test_pathfinder_blocked_destination_contract()
-	_test_dynamic_target_adjacent_forced_battle()
 	_test_movable_levels_faction_whitelist()
 	_test_target_switch_range_threshold()
 	_test_display_id_assignment_stability()
@@ -212,39 +211,48 @@ func _test_full_entry_via_faction_signal() -> void:
 	world.queue_free()
 
 
-## 7. 动态目标选择（M8 扩展）
+## 7. 动态目标选择（P0 第二阶段）
 ##    EnemyMovement._pick_target_for / _min_target_distance：
-##    按 min(dist_to_core, dist_to_player) 选 target；相等时偏向核心
+##    PERCEIVE_RANGE 内有非己方持久 slot → 选 slot；无候选 → 追玩家。
 func _test_dynamic_target_selection() -> void:
 	print("-- 动态目标选择")
+	var schema: MapSchema = MapSchema.new()
+	schema.init(12, 12)
+
 	var em: EnemyMovement = EnemyMovement.new()
-	em._target_pos = Vector2i(0, 0)      # 核心在左上
-	em._player_pos = Vector2i(10, 10)    # 玩家在右下
+	em._schema = schema
+	em._player_pos = Vector2i(10, 10)
 
-	# 场景 1：pack 靠近核心（距核心 3，距玩家 17）→ target = 核心
-	var near_core: LevelSlot = LevelSlot.new()
-	near_core.position = Vector2i(2, 1)
-	var t1: Vector2i = em._pick_target_for(near_core)
-	_assert(t1 == em._target_pos, "距核心近的 pack 选核心")
-	_assert(em._min_target_distance(near_core.position) == 3,
-		"min 距离取到核心（3）")
+	# 场景 1：近域内有非己方 slot → 优先占领该 slot。
+	var target_slot: PersistentSlot = _make_persistent_slot(
+		Vector2i(4, 3), PersistentSlot.Type.VILLAGE, Faction.PLAYER
+	)
+	schema.persistent_slots.clear()
+	schema.persistent_slots.append(target_slot)
+	var near_slot: LevelSlot = LevelSlot.new()
+	near_slot.position = Vector2i(2, 3)
+	var t1: Vector2i = em._pick_target_for(near_slot)
+	_assert(t1 == target_slot.position, "近域内有非己方 slot → 选 slot")
+	_assert(em._min_target_distance(near_slot.position) == 2, "min 距离取到 slot 距离 2")
 
-	# 场景 2：pack 靠近玩家（距玩家 2，距核心 18）→ target = 玩家
+	# 场景 2：无任何近域 slot → 追玩家当前位置。
+	schema.persistent_slots.clear()
 	var near_player: LevelSlot = LevelSlot.new()
 	near_player.position = Vector2i(9, 9)
 	var t2: Vector2i = em._pick_target_for(near_player)
-	_assert(t2 == em._player_pos, "距玩家近的 pack 选玩家")
-	_assert(em._min_target_distance(near_player.position) == 2,
-		"min 距离取到玩家（2）")
+	_assert(t2 == em._player_pos, "无近域 slot → 追玩家")
+	_assert(em._min_target_distance(near_player.position) == 2, "min 距离取到玩家距离 2")
 
-	# 场景 3：相等距离 → 偏向核心（战略目标兜底）
-	em._target_pos = Vector2i(0, 0)
-	em._player_pos = Vector2i(10, 0)
-	var middle: LevelSlot = LevelSlot.new()
-	middle.position = Vector2i(5, 0)     # 距两者均为 5
-	var t3: Vector2i = em._pick_target_for(middle)
-	_assert(t3 == em._target_pos,
-		"距离相等时偏向核心（避免所有部队一窝蜂围玩家）")
+	# 场景 3：近域内只有己方 slot → 忽略己方，仍追玩家。
+	var own_slot: PersistentSlot = _make_persistent_slot(
+		Vector2i(8, 9), PersistentSlot.Type.TOWN, Faction.ENEMY_1
+	)
+	schema.persistent_slots.clear()
+	schema.persistent_slots.append(own_slot)
+	var near_own: LevelSlot = LevelSlot.new()
+	near_own.position = Vector2i(7, 9)
+	var t3: Vector2i = em._pick_target_for(near_own)
+	_assert(t3 == em._player_pos, "近域内己方 slot 被忽略 → 追玩家")
 
 	em.queue_free()
 
@@ -274,45 +282,6 @@ func _test_pathfinder_blocked_destination_contract() -> void:
 
 
 ## 9. E4 退化回归：pack 与玩家相邻时 forced_battle_triggered **不再 emit**
-##    旧逻辑：pack 在玩家邻接 → 直接 emit forced_battle_triggered
-##    E4 后：保护区机制取代该路径——保护区把 dist < trigger_range 的格全 blocked，pack 不可能进保护区
-##           即使停在 dist == range 边缘也不再 emit；被动战斗由 _on_enemy_phase_finished 末尾统一扫描
-##    本用例验证 emit 路径已废弃（防御性回归——防止后续误重新 emit）
-func _test_dynamic_target_adjacent_forced_battle() -> void:
-	print("-- E4 退化：pack 邻玩家 forced_battle_triggered 不 emit")
-	var schema: MapSchema = MapSchema.new()
-	schema.init(10, 10)
-	schema.terrain_costs = {MapSchema.TerrainType.FLATLAND: 1.0}
-
-	var em: EnemyMovement = EnemyMovement.new()
-	em.tile_size = 48
-
-	# 构造 LevelSlot 在 (4,5)；玩家在 (5,5)；核心在 (0,0)
-	var pack: LevelSlot = LevelSlot.new()
-	pack.position = Vector2i(4, 5)
-	pack.state = LevelSlot.State.UNCHALLENGED
-	pack.faction = Faction.ENEMY_1
-
-	# 信号捕获：累积 emit 次数（E4 后期望恒为 0）
-	var fired: Array[LevelSlot] = []
-	em.forced_battle_triggered.connect(func(lv: LevelSlot) -> void: fired.append(lv))
-
-	em.start_phase(
-		schema,
-		{pack.position: pack},
-		Vector2i(5, 5),    # player_pos
-		Vector2i(0, 0),    # target_pos (core)
-		6,                 # movement_points
-		{},                # original_slot_types
-		false              # game_over
-	)
-
-	# E4 退化：emit 路径已删除，预期 0 次（被动战斗由 _on_enemy_phase_finished 统一扫描）
-	_assert(fired.is_empty(), "E4 后 forced_battle_triggered 不再 emit")
-
-	em.queue_free()
-
-
 ## 10. 可移动 pack 阵营白名单（审查 P2 收紧）
 ##     注释写"仅 ENEMY_1 + NONE legacy"，实现也须按此白名单（不能只排除 PLAYER）
 ##     未来扩展势力（ENEMY_2 / 中立可移动势力等）不应被误收入敌方移动队列
@@ -354,68 +323,40 @@ func _test_movable_levels_faction_whitelist() -> void:
 	em.queue_free()
 
 
-## 11. 阈值切换（M8 扩展）
-##     默认 R=10；玩家在阈值外即使比核心更近也不追玩家
-##     场景矩阵：distance vs threshold × d_player vs d_core
+## 11. PERCEIVE_RANGE 边界
+##     默认感知半径 = 3；距离 3 可占领，距离 4 不可占领并回退追玩家。
 func _test_target_switch_range_threshold() -> void:
-	print("-- AI 追玩家阈值切换")
+	print("-- AI slot 感知半径边界")
+	var schema: MapSchema = MapSchema.new()
+	schema.init(12, 12)
 	var em: EnemyMovement = EnemyMovement.new()
-	em._target_switch_range = 10    # 显式指定，默认也是 10
+	em._schema = schema
+	em._player_pos = Vector2i(11, 11)
 
-	# 场景 A：玩家在阈值内（d=5）且比核心近 → 追玩家
-	em._target_pos = Vector2i(0, 0)
-	em._player_pos = Vector2i(20, 0)
+	# 场景 A：slot 距离刚好等于 PERCEIVE_RANGE → 可占领。
+	var edge_slot: PersistentSlot = _make_persistent_slot(
+		Vector2i(6, 3), PersistentSlot.Type.VILLAGE, Faction.PLAYER
+	)
+	schema.persistent_slots.clear()
+	schema.persistent_slots.append(edge_slot)
 	var p_a: LevelSlot = LevelSlot.new()
-	p_a.position = Vector2i(15, 0)    # d_player=5, d_core=15
-	_assert(em._pick_target_for(p_a) == em._player_pos, "d_player=5≤10 且 <15 → 追玩家")
+	p_a.position = Vector2i(3, 3)
+	_assert(em._pick_target_for(p_a) == edge_slot.position, "距离 3 命中感知边界 → 选 slot")
+	_assert(em._min_target_distance(p_a.position) == EnemyMovement.PERCEIVE_RANGE,
+		"边界命中时 min_dist = PERCEIVE_RANGE")
 
-	# 场景 B：玩家在阈值外（d=11）即使比核心近也推核心
-	em._player_pos = Vector2i(25, 0)
+	# 场景 B：slot 距离超出 PERCEIVE_RANGE 1 格 → 不占领，改追玩家。
+	var out_slot: PersistentSlot = _make_persistent_slot(
+		Vector2i(7, 3), PersistentSlot.Type.VILLAGE, Faction.PLAYER
+	)
+	schema.persistent_slots.clear()
+	schema.persistent_slots.append(out_slot)
 	var p_b: LevelSlot = LevelSlot.new()
-	p_b.position = Vector2i(14, 0)    # d_player=11, d_core=14
-	_assert(em._pick_target_for(p_b) == em._target_pos,
-		"d_player=11>10（阈值外）即使 <d_core=14 也推核心")
-
-	# 场景 C：阈值边界内（d=10）+ 比核心近 → 追玩家
-	em._player_pos = Vector2i(20, 0)
-	var p_c: LevelSlot = LevelSlot.new()
-	p_c.position = Vector2i(10, 0)    # d_player=10, d_core=10
-	# 注意：d_player=10<=10 但 d_player<d_core 为 10<10 false → 推核心
-	_assert(em._pick_target_for(p_c) == em._target_pos,
-		"d_player=10=d_core=10（tie）→ 推核心（兜底）")
-
-	var p_c2: LevelSlot = LevelSlot.new()
-	p_c2.position = Vector2i(10, 1)    # d_player=11, d_core=11
-	_assert(em._pick_target_for(p_c2) == em._target_pos, "d_player=11>10 → 推核心")
-
-	# 场景 D：阈值内 + 严格小于核心距离 → 追玩家
-	var p_d: LevelSlot = LevelSlot.new()
-	p_d.position = Vector2i(11, 0)    # d_player=9, d_core=11
-	_assert(em._pick_target_for(p_d) == em._player_pos,
-		"d_player=9≤10 且 <11 → 追玩家（边界内典型场景）")
-
-	# 场景 E：玩家贴在核心附近（d_core=2, d_player=15）→ 推核心（保证集火推核心压力）
-	em._player_pos = Vector2i(2, 0)
-	var p_e: LevelSlot = LevelSlot.new()
-	p_e.position = Vector2i(15, 0)   # d_player=13, d_core=15
-	_assert(em._pick_target_for(p_e) == em._target_pos,
-		"玩家贴核心 + pack 远（d_player=13>10）→ 推核心")
-
-	# min_target_distance 与 pick 同口径（新建 em 隔离上下文）
-	var em2: EnemyMovement = EnemyMovement.new()
-	em2._target_switch_range = 10
-	em2._target_pos = Vector2i(0, 0)
-	em2._player_pos = Vector2i(25, 0)
-	# pos_far_player: d_player=11（阈值外）→ min 取核心距 14
-	_assert(em2._min_target_distance(Vector2i(14, 0)) == 14,
-		"阈值外时 min_dist 取核心距离（=14）")
-	# pos_near_player: d_player=5, d_core=20 → min 取玩家距 5
-	em2._player_pos = Vector2i(20, 0)
-	_assert(em2._min_target_distance(Vector2i(15, 0)) == 5,
-		"追玩家场景 min_dist 取玩家距离（=5）")
+	p_b.position = Vector2i(3, 3)
+	_assert(em._pick_target_for(p_b) == em._player_pos, "距离 4 超出感知 → 追玩家")
+	_assert(em._min_target_distance(p_b.position) == 16, "超界时 min_dist 回退为玩家距离")
 
 	em.queue_free()
-	em2.queue_free()
 
 
 ## 12. display_id 全局唯一分配（v2）
@@ -583,6 +524,7 @@ func _make_world_mock(core_pos: Vector2i, core_range: int) -> Node:
 	world._level_slots = {}
 	world._original_slot_types = {}
 	world._unit = unit
+	world._enemy_core_origin_pos = core_pos
 	world._world_rng = RandomNumberGenerator.new()
 	world._world_rng.seed = 42
 	# EnemyTroopGenerator：用真实配置
@@ -618,6 +560,10 @@ class _MockWorld extends Node:
 	var _original_slot_types: Dictionary = {}
 	## 玩家单位（UnitData 或 null）
 	var _unit
+	## 敌方核心 PCG 原始位置（P0 第二阶段缓存，EnemyReinforcement.spawn_batch 用作 spawn 锚）
+	var _enemy_core_origin_pos: Vector2i = Vector2i(-1, -1)
+	## 敌方 tier 配比配置行（P0 第二阶段，EnemyReinforcement.spawn_batch 按 cycle 抽 tier 用）
+	var _enemy_tier_ratio_rows: Array = []
 	## 共享 RNG
 	var _world_rng: RandomNumberGenerator = null
 	## EnemyTroopGenerator 实例

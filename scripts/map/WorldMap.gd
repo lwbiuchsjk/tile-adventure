@@ -30,7 +30,6 @@ const CONFIG_SLOT: String = "res://assets/config/slot_config.csv"
 const CONFIG_PCG: String = "res://assets/config/pcg_config.csv"
 const CONFIG_UNIT: String = "res://assets/config/unit_config.csv"
 const CONFIG_BATTLE: String = "res://assets/config/battle_config.csv"
-const CONFIG_ROUND: String = "res://assets/config/round_config.csv"
 const CONFIG_COUNTER: String = "res://assets/config/counter_matrix.csv"
 const CONFIG_ENEMY_POOL: String = "res://assets/config/enemy_troop_pool.csv"
 const CONFIG_ENEMY_SPAWN: String = "res://assets/config/enemy_spawn_config.csv"
@@ -41,8 +40,6 @@ const CONFIG_QUALITY_UPGRADE: String = "res://assets/config/quality_upgrade_conf
 const CONFIG_DIFFICULTY: String = "res://assets/config/difficulty_config.csv"
 const CONFIG_LEVEL_REWARD_POOL: String = "res://assets/config/level_reward_pool.csv"
 const CONFIG_LEVEL_REWARD: String = "res://assets/config/level_reward_config.csv"
-const CONFIG_ROUND_REWARD_POOL: String = "res://assets/config/round_reward_pool.csv"
-const CONFIG_ROUND_REWARD: String = "res://assets/config/round_reward_config.csv"
 const CONFIG_TURN_REWARD_POOL: String = "res://assets/config/turn_reward_pool.csv"
 const CONFIG_TURN_REWARD: String = "res://assets/config/turn_reward_config.csv"
 const CONFIG_HP_RATIO: String = "res://assets/config/hp_ratio_config.csv"
@@ -212,9 +209,6 @@ const LEVEL_BADGE_FONT_SIZE: int = 14
 ## 单位逐格移动动画耗时（秒/格）
 const MOVE_STEP_DURATION: float = 0.1
 
-## 轮次过渡提示显示时长（秒）
-const ROUND_HINT_DURATION: float = 1.5
-
 ## 醒目提示显示时长（秒）
 const NOTICE_DURATION: float = 2.5
 
@@ -323,7 +317,6 @@ class FogSignalNode extends Node2D:
 @onready var _camera: Camera2D = $Camera2D
 
 ## HUD 分区标签
-@onready var _hud_round: Label = $UILayer/HudBar/HBox/RoundInfo
 @onready var _hud_troop: Label = $UILayer/HudBar/HBox/TroopInfo
 @onready var _hud_keys: Label = $UILayer/HudBar/HBox/KeyHints
 
@@ -432,9 +425,6 @@ var _level_slots: Dictionary = {}
 
 ## 战斗配置（从 battle_config.csv 加载）
 var _battle_config: Dictionary = {}
-
-## 轮次管理器
-var _round_manager: RoundManager = null
 
 ## 敌方部队生成器
 var _enemy_generator: EnemyTroopGenerator = null
@@ -600,12 +590,6 @@ var _level_reward_pool_rows: Array = []
 var _level_reward_count_min: int = 1
 var _level_reward_count_max: int = 2
 
-## 轮次奖励池原始行数据
-var _round_reward_pool_rows: Array = []
-
-## 轮次奖励数量
-var _round_reward_count: int = 2
-
 ## 回合奖励池原始行数据
 var _turn_reward_pool_rows: Array = []
 
@@ -643,7 +627,6 @@ func _ready() -> void:
 	var slot_rows: Array = ConfigLoader.load_csv(CONFIG_SLOT)
 	var unit_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_UNIT)
 	_battle_config = ConfigLoader.load_csv_kv(CONFIG_BATTLE)
-	var round_rows: Array = ConfigLoader.load_csv(CONFIG_ROUND)
 	var counter_rows: Array = ConfigLoader.load_csv(CONFIG_COUNTER)
 	var enemy_pool_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_POOL)
 	var enemy_spawn_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_ENEMY_SPAWN)
@@ -658,10 +641,6 @@ func _ready() -> void:
 	var level_reward_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_LEVEL_REWARD)
 	_level_reward_count_min = int(level_reward_cfg.get("reward_count_min", "1"))
 	_level_reward_count_max = int(level_reward_cfg.get("reward_count_max", "2"))
-
-	_round_reward_pool_rows = ConfigLoader.load_csv(CONFIG_ROUND_REWARD_POOL)
-	var round_reward_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_ROUND_REWARD)
-	_round_reward_count = int(round_reward_cfg.get("reward_count", "2"))
 
 	_turn_reward_pool_rows = ConfigLoader.load_csv(CONFIG_TURN_REWARD_POOL)
 	var turn_reward_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_TURN_REWARD)
@@ -829,12 +808,6 @@ func _ready() -> void:
 	# 供 EnemyReinforcement.spawn_batch 用作 spawn 锚（不查 owner，避免玩家占领后失效）
 	_cache_enemy_core_origin_pos()
 
-	# 初始化轮次管理器
-	_round_manager = RoundManager.new()
-	_round_manager.init_from_config(round_rows)
-	_round_manager.round_started.connect(_on_round_started)
-	_round_manager.all_rounds_cleared.connect(_on_all_rounds_cleared)
-
 	# 设置 Camera 边界限制（不超出地图像素范围）
 	_setup_camera_limits()
 
@@ -909,14 +882,11 @@ func _ready() -> void:
 	_setup_fog_signal_layer()
 	set_process(true)
 
-	# 启动第一轮（触发 _on_round_started → 生成资源点 + 预生成轮次奖励；M7 后不再生成敌方关卡）
-	_round_manager.start_current_round()
-
 	# 初始化地图标签字体：使用顶部 const MAIN_FONT（preload 形式，编辑期校验路径）
 	_label_font = MAIN_FONT
 
 	# M7：开局预置 5 支敌方部队包（在敌方核心影响范围内随机空地）
-	# 必须在 start_current_round 之后（资源点已铺好、避免位置冲突）+ 首个玩家回合开始之前
+	# 必须在资源点铺好之后、首个玩家回合开始之前，避免位置冲突。
 	_deploy_initial_enemy_packs()
 
 	# M7：启动首个玩家回合（TickRegistry 跑 M4/M5 tick → emit faction_turn_started(PLAYER)
@@ -1730,24 +1700,6 @@ func _update_hud() -> void:
 	if _unit == null or _turn_manager == null:
 		return
 
-	# 左区：轮次 / 关卡 / 回合 / 补给
-	var round_parts: Array[String] = []
-	if _round_manager != null:
-		round_parts.append("轮次 %d/%d" % [
-			_round_manager.get_current_round() + 1,
-			_round_manager.get_total_rounds()
-		])
-		round_parts.append("关卡 %d/%d" % [
-			_round_manager.get_cleared_count(),
-			_round_manager.get_current_level_count()
-		])
-	round_parts.append("回合 %d" % _turn_manager.player_faction_turn_count)
-	round_parts.append("补给 %d" % _supply)
-	# M5: 石料数字（玩家侧）
-	round_parts.append("石料 %d" % get_stone(Faction.PLAYER))
-	if _hud_round != null:
-		_hud_round.text = "  ".join(round_parts)
-
 	# 中区：部队状态
 	if _hud_troop != null:
 		_hud_troop.text = _get_all_troops_display()
@@ -1794,17 +1746,6 @@ func _get_score_text() -> String:
 		_total_hp_lost,
 		float(result["survival"]) * 100.0,
 	]
-
-## 显示流程胜利提示（含评分）
-func _show_victory_text() -> void:
-	if _finish_label == null or _turn_manager == null:
-		return
-	var total_rounds: int = _round_manager.get_total_rounds() if _round_manager != null else 1
-	_finish_label.text = "全部 %d 轮通关！流程胜利（回合 %d）\n%s" % [
-		total_rounds, _turn_manager.player_faction_turn_count, _get_score_text()
-	]
-	if _notice_bar != null:
-		_notice_bar.visible = true
 
 ## 显示流程失败提示（含评分）
 func _show_defeat_text() -> void:
@@ -2402,10 +2343,9 @@ func _on_turn_end_settlement() -> void:
 	if _game_finished or _check_defeat():
 		return
 	# 发放回合奖励
-	if _reward_generator != null and _round_manager != null:
-		var round_id: int = _round_manager.get_current_round() + 1
+	if _reward_generator != null:
 		var rewards: Array[ItemData] = _reward_generator.generate_rewards(
-			_turn_reward_pool_rows, round_id, _turn_reward_count
+			_turn_reward_pool_rows, 1, _turn_reward_count
 		)
 		if not rewards.is_empty():
 			_inventory.add_items(rewards)
@@ -2698,7 +2638,7 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 		_battle_config,
 		_terrain_altitude_step,
 		_coma_hp_threshold_ratio,
-		_round_manager.get_current_round() if _round_manager != null else 0,
+		0,
 		_damage_increment
 	)
 	# 入口 2 MVP 2.1 codex review P0-1 修复（2026-05-10）：
@@ -2745,7 +2685,7 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		_battle_config,
 		_terrain_altitude_step,
 		_coma_hp_threshold_ratio,
-		_round_manager.get_current_round() if _round_manager != null else 0,
+		0,
 		_damage_increment
 	)
 	# 入口 2 MVP 2.1 codex review P0-1 修复（2026-05-10）：与 _start_battle_session 同因
@@ -3186,7 +3126,6 @@ func _sync_world_unit_from_battle_leader() -> void:
 ## 三分支处理：
 ##   VICTORY     —— 收集每个 defeated_pack 的关卡 / 部队奖励 → 合并 _push_battle_victory_event
 ##                  → 清理 _level_slots / 恢复 schema slot
-##                  → _round_manager.on_level_cleared 推进
 ##                  → _evaluate_party_state 兜底队员阵亡（队长不会跌阈值，否则走 COMA）
 ##   MANUAL_EXIT —— 不发奖励，敌方残余保留；_evaluate_party_state 兜底
 ##   COMA        —— 走 B MVP 重生分支（_trigger_coma_or_lose）
@@ -3269,19 +3208,6 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 		# P0 第二阶段：兜底胜利检查 —— 敌方 pack 被清空时玩家胜利
 		# 所有 cycle 都生效；reinforcement 离散 spawn 让通常不可达
 		VictoryJudge.check_enemy_packs_clear(_level_slots)
-
-		# 3. 轮次计数累加（仅 HUD"已清 X/Y"展示用）
-		# P0 第一阶段重设计后（2026-05-09 跑测发现）：
-		#   - 整局胜负锚点 = 队长命数 + 攻占敌方 CORE_TOWN（VictoryJudge）
-		#   - 轮次完成的弹板 / 奖励 / 提示（_grant_round_rewards / _show_round_hint / advance_round）已废弃
-		#     这些是 B MVP 时代的"消灭关卡数 = 轮次推进 = 整局进度"逻辑，与 P0 新设计冲突
-		#   - 仅保留 on_level_cleared 累加，让 HUD 计数同步；不再触发任何弹板 / 奖励 / 推进
-		#   - 轮次系统未来重设计 / 完全拆除入待跟踪 P3
-		if _round_manager != null:
-			for pack_v in defeated_packs:
-				if pack_v as LevelSlot == null:
-					continue
-				_round_manager.on_level_cleared()
 
 	# MANUAL_EXIT：不发奖励，敌方残余保留；走通用收尾
 
@@ -3491,61 +3417,6 @@ func _get_level_at(pos: Vector2i) -> LevelSlot:
 	if _level_slots.has(pos):
 		return _level_slots[pos] as LevelSlot
 	return null
-
-# ─────────────────────────────────────────
-# 轮次管理
-# ─────────────────────────────────────────
-
-## 轮次开始回调（M7 重构）
-## M7 前：每轮生成若干敌方关卡（按 _enemy_tier_ratio_rows 档位比例）+ 资源点
-## M7 后：敌方生成迁到"开局预置 + 每 5 敌方回合增援"（见 _deploy_initial_enemy_packs / EnemyReinforcement）；
-##        本函数只保留资源点的轮次刷新 + 轮次奖励预生成
-##
-## 轮次概念保留做玩家通关进度标记（多轮次通关可扩展为胜利条件之一）；
-## 当前 RoundManager.current_level_count 继承 round_config.csv 配置，击败敌方部队包时仍会触发 on_level_cleared
-func _on_round_started(round_index: int) -> void:
-	# 清除上一轮的一次性资源点（保留持久资源点）
-	_clear_onetime_resource_slots()
-
-	# 生成本轮资源点
-	_generate_resource_slots()
-
-	# 预生成轮次胜利奖励
-	var round_id: int = round_index + 1
-	if _reward_generator != null:
-		var round_rewards: Array[ItemData] = _reward_generator.generate_rewards(
-			_round_reward_pool_rows, round_id, _round_reward_count
-		)
-		_round_manager.set_round_rewards(round_rewards)
-
-	queue_redraw()
-
-## 所有轮次通关回调
-## B 重生周期 MVP：原"流程胜利"语义降级——单轮配置下"所有关卡通关"只是周期内里程碑，
-## 不再触发整局胜利。整局胜利仅由 VictoryJudge（攻占敌方核心）触发。
-## 这里只显示一条"本周期关卡全部清完"提示，不切 _game_finished、不弹遮罩。
-func _on_all_rounds_cleared() -> void:
-	_show_notice("本周期关卡全部清完")
-
-## 显示轮次过渡提示（短暂显示后自动隐藏）
-func _show_round_hint() -> void:
-	if _finish_label == null or _round_manager == null:
-		return
-	_finish_label.text = "第 %d 轮开始！" % (_round_manager.get_current_round() + 1)
-	if _notice_bar != null:
-		_notice_bar.visible = true
-	# 延时隐藏提示文字
-	var timer: SceneTreeTimer = get_tree().create_timer(ROUND_HINT_DURATION)
-	timer.timeout.connect(_on_round_hint_timeout)
-
-## 轮次提示超时回调：清除提示文字，刷新可达范围
-func _on_round_hint_timeout() -> void:
-	if _finish_label != null:
-		_finish_label.text = ""
-		if _notice_bar != null:
-			_notice_bar.visible = false
-	_update_hud()
-	_refresh_reachable()
 
 ## 为我方部队应用伤害（从 BattleResult 中提取 damages），同时追踪累计损兵
 ##
@@ -4067,21 +3938,6 @@ func _get_active_troops() -> Array[TroopData]:
 # ─────────────────────────────────────────
 # 奖励辅助方法
 # ─────────────────────────────────────────
-
-## 发放轮次胜利奖励
-## F MVP：轮次通关奖励合并展示在一条事件中
-func _grant_round_rewards() -> void:
-	if _round_manager == null:
-		return
-	var rewards: Array[ItemData] = _round_manager.get_round_rewards()
-	if rewards.is_empty():
-		return
-	_inventory.add_items(rewards)
-	var reward_text: String = _format_rewards_text(rewards)
-	_event_panel.push_event(_build_reward_event(
-		"轮次通关", "通关本轮，获得：%s" % reward_text
-	))
-
 
 ## 格式化奖励列表为显示文本
 func _format_rewards_text(rewards: Array[ItemData]) -> String:

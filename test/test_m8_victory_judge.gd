@@ -24,11 +24,13 @@ func _init() -> void:
 	_test_finished_gate_once_per_game()
 	_test_clear_sink()
 	_test_sink_last_write_wins()
+	_test_core_slot_first_two_cycles_do_not_trigger()
 	_test_occupation_system_integration_player_flip()
 	_test_occupation_system_integration_enemy_flip()
 	_test_same_faction_occupy_no_trigger()
 	_test_non_core_occupy_no_trigger()
 	_test_invalid_sink_does_not_lock_finished()
+	_test_enemy_packs_clear_fallback()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -128,6 +130,23 @@ func _test_sink_last_write_wins() -> void:
 	_assert(_captured.size() == 1,       "新 sink 收到")
 
 
+## 7. 前两周期占领核心不触发主胜利路径
+func _test_core_slot_first_two_cycles_do_not_trigger() -> void:
+	print("-- 前两周期核心翻转不触发")
+	_reset()
+	RunState._cycle_index = 0
+	var core_cycle_0: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
+	VictoryJudge.check_on_slot_owner_changed(core_cycle_0)
+	_assert(_captured.is_empty(), "周期 0 不触发胜利")
+	_assert(not VictoryJudge.is_finished(), "周期 0 不封盘")
+
+	RunState._cycle_index = 1
+	var core_cycle_1: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
+	VictoryJudge.check_on_slot_owner_changed(core_cycle_1)
+	_assert(_captured.is_empty(), "周期 1 不触发胜利")
+	_assert(not VictoryJudge.is_finished(), "周期 1 不封盘")
+
+
 ## 7. OccupationSystem.try_occupy 翻转核心城镇（PLAYER 攻敌方核心）→ sink PLAYER
 func _test_occupation_system_integration_player_flip() -> void:
 	print("-- OccupationSystem 集成：玩家翻敌方核心")
@@ -195,6 +214,28 @@ func _test_invalid_sink_does_not_lock_finished() -> void:
 		"sink 无效时 _finished 保持 false，避免永久封盘")
 
 
+## 12. 敌方部队包全清时触发兜底胜利
+func _test_enemy_packs_clear_fallback() -> void:
+	print("-- 敌方包全清兜底胜利")
+	_reset()
+	var enemy_pack: LevelSlot = LevelSlot.new()
+	enemy_pack.position = Vector2i(1, 1)
+	enemy_pack.faction = Faction.ENEMY_1
+	var alive_slots: Dictionary = {enemy_pack.position: enemy_pack}
+	VictoryJudge.check_enemy_packs_clear(alive_slots)
+	_assert(_captured.is_empty(), "仍有 ENEMY_1 pack 时不触发")
+	_assert(not VictoryJudge.is_finished(), "仍有敌方包时不封盘")
+
+	var player_pack: LevelSlot = LevelSlot.new()
+	player_pack.position = Vector2i(2, 2)
+	player_pack.faction = Faction.PLAYER
+	var cleared_slots: Dictionary = {player_pack.position: player_pack}
+	VictoryJudge.check_enemy_packs_clear(cleared_slots)
+	_assert(_captured.size() == 1 and _captured[0] == Faction.PLAYER,
+		"敌方包全清 → PLAYER 兜底胜利")
+	_assert(VictoryJudge.is_finished(), "兜底胜利后封盘")
+
+
 ## 10. 非核心 slot 经 OccupationSystem.try_occupy 翻转不触发 sink
 func _test_non_core_occupy_no_trigger() -> void:
 	print("-- 非核心 slot 翻转不触发 sink")
@@ -219,6 +260,8 @@ func _reset() -> void:
 	VictoryJudge.clear_sink()
 	_captured = []
 	VictoryJudge.register_sink(_on_sink)
+	RunState._max_cycles = 3
+	RunState._cycle_index = 2
 
 
 ## sink 捕获回调
