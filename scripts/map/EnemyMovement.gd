@@ -1,7 +1,7 @@
 class_name EnemyMovement
 extends Node
 ## 敌方关卡移动子系统
-## 管理移动队列、寻路、逐格动画和强制战斗触发。
+## 管理移动队列、寻路、逐格动画；被动战斗触发由 WorldMap 在敌方阶段末尾扫描保护区。
 ## 作为 WorldMap 子节点运行以使用 Tween 动画。
 
 ## 移动阶段完成（队列清空或被中断）
@@ -51,7 +51,7 @@ var _move_tween: Tween = null
 
 var _schema: MapSchema = null
 var _level_slots: Dictionary = {}
-## 玩家单位当前位置（用于强制战斗触发；敌方进入玩家曼哈顿距离 ≤ _forced_battle_range 时触发战斗）
+## 玩家单位当前位置（用于 _pick_target_for 追玩家分支 + 保护区中心）
 var _player_pos: Vector2i = Vector2i.ZERO
 ## 敌方部队寻路目的地战略目标位置
 ##
@@ -65,14 +65,10 @@ var _game_over: bool = false
 ## P0 第二阶段后已废弃：_pick_target_for 改用 PERCEIVE_RANGE 常量（默认 3）
 ## 保留字段作 start_phase 签名兼容；当前 MVP 内无任何代码读取
 var _target_switch_range: int = 10
-## A 基线收束 MVP：强制战斗触发距离（曼哈顿）
-## pack 移动后到玩家距离 ≤ 该值 时触发战斗
-## 默认 3（与 battle_config.forced_battle_range 同值）；start_phase 注入实际值
-##
-## E4 旧路径退化：旧 forced_battle_triggered.emit 路径已被保护区机制取代——
-## 保护区把 dist < trigger_range 的格全部 blocked，pack 永远停在 dist ≥ range 处；
-## 即使停在 dist == range 边缘也不再 emit forced_battle（被动战斗在敌方阶段末尾统一扫描）
-## 字段保留供 push_warning 兜底参考，E5 跑测稳定后可删
+## 玩家保护区半径（曼哈顿距离）
+## 保护区把 dist < _forced_battle_range 的格全部 blocked，pack 永远停在 dist ≥ range 处。
+## 被动战斗由 _on_enemy_phase_finished 末尾统一扫描保护区内是否有敌方包（设计 §3.2）。
+## 默认 3（与 battle_config.forced_battle_range 同值）；start_phase 注入实际值。
 var _forced_battle_range: int = 3
 
 ## E 战斗就地展开 MVP §2.3：玩家保护区半径（曼哈顿）
@@ -105,10 +101,10 @@ func get_moving_level() -> LevelSlot:
 ##
 ## 参数：
 ##   target_pos —— 战略目标（P0 X-A 后 = 玩家 spawn 锚 _start_pos；X-A 前 = 玩家方 CORE_TOWN）；寻路目的地的一个候选
-##   player_pos —— 玩家单位位置；用于强制战斗触发 + 动态目标的另一候选 + 保护区中心
+##   player_pos —— 玩家单位位置；用于 _pick_target_for 追玩家分支 + 保护区中心
 ##   target_switch_range —— 追玩家阈值（默认 10）；pack 到玩家 ≤ 该值才可能追玩家
 ##     传 -1 或 0 时退化为"永远推核心"（测试 / 调试用）
-##   forced_battle_range —— 强制战斗触发距离（默认 3）；E4 后已不再 emit，保留参数兼容
+##   forced_battle_range —— 保护区半径（默认 3）；保护区内格 blocked + 被动战斗扫描半径
 ##   protected_zone_range —— E MVP 玩家保护区半径（曼哈顿）；保护区内格 cost = INF
 ##     默认 0 = 关闭保护区（向后兼容 / 调试）；正常路径下 WorldMap 注入 _battle_trigger_range
 func start_phase(schema: MapSchema, level_slots: Dictionary,
@@ -138,7 +134,7 @@ func resume_after_battle() -> void:
 	_process_next_move()
 
 
-## 中断并结束移动阶段（游戏结束或轮次通关时调用）
+## 中断并结束移动阶段（游戏结束或胜负判定时调用）
 func finish_phase() -> void:
 	_is_moving = false
 	_moving_level = null
@@ -287,9 +283,9 @@ func _process_next_move() -> void:
 	if pack_target != _player_pos:
 		blocked[_player_pos] = true
 
-	# E4 旧早退路径 1 已废弃：保护区把 dist < _battle_trigger_range（默认 3）的格全部 blocked，
+	# 保护区把 dist < _battle_trigger_range（默认 3）的格全部 blocked，
 	# pack 不可能停在 dist == 1 的玩家相邻格；即使 pack 起始就在相邻格（极端时序，玩家上轮才出现）
-	# 也由保护区 blocked 让寻路自然把 pack 推到边缘。emit forced_battle 路径在 E4 整体废弃，
+	# 也由保护区 blocked 让寻路自然把 pack 推到边缘。
 	# 被动战斗在 _on_enemy_phase_finished 末尾统一扫描
 
 	# E4 保护区追玩家纠正：pack_target == _player_pos 时 _player_pos 已被保护区 blocked，
@@ -508,11 +504,9 @@ func _is_path_entirely_off_screen(path: Array[Vector2i], rect: Rect2) -> bool:
 
 ## 移动动画完成回调
 ##
-## E4 旧 forced_battle_triggered emit 路径已删除：
-##   - pack 不可能停在保护区内（dist < _battle_trigger_range），保护区机制保证
-##   - dist == _battle_trigger_range（边缘）也不再 emit；由 _on_enemy_phase_finished 末尾
-##     统一扫描保护区内有敌方包 → 触发被动战斗（设计 §3.2）
-##   - forced_battle_triggered 信号本身保留供 push_warning 兜底（理论不应再触发）
+## 被动战斗触发由 _on_enemy_phase_finished 末尾统一扫描保护区内是否有敌方包；
+## 保护区机制保证 pack 不可能停在 dist < _forced_battle_range 内（被 blocked），
+## 但允许停在 dist == _forced_battle_range 边缘（设计 §3.2）。
 func _on_move_finished() -> void:
 	if _moving_level == null:
 		_process_next_move()

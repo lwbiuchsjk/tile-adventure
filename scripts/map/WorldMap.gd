@@ -13,8 +13,7 @@ extends Node2D
 ## 道具与背包：关卡/轮次/回合奖励发放，装配管理 UI。
 ##
 ## 子系统拆分：
-##   EnemyMovement — 敌方关卡移动（队列/寻路/动画/强制战斗触发）
-##   BattleUI — 战斗确认面板（预览/按钮/信号）
+##   EnemyMovement — 敌方关卡移动（队列/寻路/动画）
 ##   ManageUI — 装配管理面板（角色状态/背包/操作卡片）
 
 # ─────────────────────────────────────────
@@ -1924,13 +1923,8 @@ func _on_move_finished() -> void:
 	if _check_defeat():
 		return
 
-	# E5 旧路径退化：玩家走到敌格触发 BattleUI 弹板的逻辑已移除
-	# 设计 §3.1 主动战斗只走 [F] 键；玩家在敌格相邻格（dist ≤ _battle_trigger_range）按 F 进战
-	# UNCHALLENGED 敌方 LevelSlot 已被 _get_blocked_positions 加进阻挡，玩家走不到敌格上，
-	# 这里不再需要 BattleUI 触发分支。极端时序下若玩家仍意外停在敌格上：
-	#   - level.is_interactable() 仍 true，但下方 _try_player_occupy_at 是 noop（LevelSlot 不是 PersistentSlot）
-	#   - 玩家可主动按 F 入战（dist == 0 ≤ trigger_range）
-	# 无需在此触发 BattleUI
+	# 设计 §3.1 主动战斗只走 [F] 键：UNCHALLENGED 敌方 LevelSlot 由 _get_blocked_positions
+	# 加进玩家阻挡，玩家走不到敌格；战斗入口统一由 _handle_f_key 触发，本路径不再分流战斗。
 
 	# M4: 无战斗分支 —— 若停留格有持久 slot，尝试占据（§6.5 边界：格上无敌方单位）
 	_try_player_occupy_at(_unit.position)
@@ -1961,8 +1955,8 @@ func _get_blocked_positions() -> Dictionary:
 	var blocked: Dictionary = {}
 	for pos in _level_slots:
 		var lv: LevelSlot = _level_slots[pos] as LevelSlot
-		# E5 旧路径退化：UNCHALLENGED 敌方 LevelSlot 也加进玩家阻挡
-		# 设计 §3.1 主动战斗只走 [F]，玩家不能再"走到敌格上"触发旧 BattleUI 弹板
+		# 设计 §3.1 主动战斗只走 [F]：UNCHALLENGED 敌方 LevelSlot 也加进玩家阻挡，
+		# 玩家不能"走到敌格上"。
 		# REPELLED 保留阻挡（击退冷却中不可通行）
 		if lv.state == LevelSlot.State.UNCHALLENGED or lv.is_repelled():
 			blocked[pos] = true
@@ -2508,8 +2502,9 @@ func _get_enemy_target_pos() -> Vector2i:
 ## 防御（P2 审查）：仅在 current_faction == ENEMY_1 时切换；若被误调在玩家回合中，直接返回避免错误双 start
 ##
 ## B 重生周期 MVP：昏迷过渡期间（_is_in_coma=true）也直接 return——
-## 强制战斗触发昏迷时 _post_battle_settlement 会调 _enemy_movement.finish_phase()
-## 让 phase_finished 信号发出，但本回调若切回 PLAYER 回合会跑额外 tick / HUD 刷新，
+## 战斗结算时若触发昏迷，BattleSession 走 COMA 退出，由 _on_battle_session_ended
+## 处理 _enemy_movement.finish_phase()。让 phase_finished 信号发出后本回调若切回
+## PLAYER 回合会跑额外 tick / HUD 刷新，
 ## 1.5s 后 reload 时这些状态被覆盖，但中间存在时序风险（如 tick 触发新增建造）
 func _on_enemy_phase_finished() -> void:
 	if _game_finished:
@@ -2563,7 +2558,7 @@ func _is_in_battle() -> bool:
 ## 扫描指定坐标曼哈顿距离 ≤ range 内的敌方关卡（LevelSlot）
 ## 用于 [F] 主动战斗触发候选 + 后续 E4 被动战斗保护区扫描复用
 ##
-## 命中条件（与 _on_forced_battle_triggered 旧路径语义一致）：
+## 命中条件：
 ##   - 在距离阈值内
 ##   - level.is_interactable() = true（UNCHALLENGED 且非冷却）
 func _get_packs_in_range(origin: Vector2i, search_range: int) -> Array[LevelSlot]:
@@ -2707,8 +2702,7 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 ##   - 候选 == 0 → 无响应
 ##   - _supply == 0 → notice 提示，不入战
 ##   - 候选 == 1 → 直接确认
-##   - 候选 > 1 → MVP 简化：选最近的包（曼哈顿距离最小）；
-##                P1 待跟踪：用 BattleUI 退化为"目标选择"列表
+##   - 候选 > 1 → MVP 简化：选最近的包（曼哈顿距离最小）
 ##
 ## 不放在 _start_battle_session 内是因为被动战斗（E4）会有不同的候选取舍逻辑
 func _try_trigger_active_battle() -> void:
@@ -3189,7 +3183,7 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 			combined.append_array(_grant_troop_reward(pack.troops))
 		_push_battle_victory_event(combined)
 
-		# 2. 清理 _level_slots + 恢复 schema slot 标记（与 _post_battle_settlement 对齐）
+		# 2. 清理 _level_slots + 恢复 schema slot 标记
 		# 显式 mark_defeated + remove_defeated_troops：保证仍持引用的旁路系统看到一致状态
 		for pack_v in defeated_packs:
 			var pack: LevelSlot = pack_v as LevelSlot
@@ -3348,7 +3342,7 @@ func _on_battle_hud_exit_pressed() -> void:
 #
 # M7 前：轮次切换时整批清理敌方关卡 + 整批生成新关卡
 # M7 后：敌方生成走 EnemyReinforcement（初始预置 + 每 5 回合增援）；
-#        击败的敌方部队包在 _post_battle_settlement 就地从 _level_slots 删除 + 恢复 schema slot
+#        击败的敌方部队包在 _on_battle_session_ended VICTORY 分支就地从 _level_slots 删除 + 恢复 schema slot
 #
 # 原 _clear_level_slots / _generate_level_slots / _get_tier_plan_for_round 已无调用方，M7 重构时删除
 
@@ -3829,7 +3823,7 @@ func _has_any_troop() -> bool:
 ##
 ## 返回 true 表示已触发昏迷态或失败遮罩，调用方应中断后续流程。
 ##
-## 触发挂点：_apply_player_damages / _post_battle_settlement / _on_use_item / _on_equip_troop 末尾。
+## 触发挂点：_apply_player_damages / _on_use_item / _on_equip_troop 末尾。
 ## 守卫：_is_in_coma / _game_finished 时直接返回 true，避免重入。
 func _evaluate_party_state() -> bool:
 	if _game_finished or _is_in_coma:
@@ -4108,7 +4102,7 @@ func _passes_explore_action_guards() -> bool:
 ## E MVP [F] 键 sink：探索态触发主动战斗 / 战斗态尝试手动退出
 ##
 ## 探索态守卫覆盖（防止在错位时序入战）：
-##   _is_moving / _battle_ui.is_pending / _manage_ui.is_open / _is_camping / _build_panel_ui.is_open
+##   _is_moving / _manage_ui.is_open / _is_camping / _build_panel_ui.is_open
 ##   _is_in_coma（昏迷过渡，B MVP）/ _enemy_movement.is_moving（敌方移动阶段）
 ##   非 PLAYER 回合（敌方阶段不可主动入战）
 ##

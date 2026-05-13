@@ -12,10 +12,6 @@ extends RefCounted
 ##      - signal faction_turn_started(faction) / faction_turn_ended(faction)
 ##      - 语义：双方阵营各占一个回合；start 内部先 TickRegistry.run_ticks 后 emit
 ##      - 这套接口与 TickRegistry 配合，作为后续所有倒计时类系统的统一挂点
-##
-## 与 RoundManager 的关系：
-##   RoundManager 管理"轮次 = 多关卡"语义，与"阵营回合"正交，不冲突。
-##   一个完整大回合 = 玩家阵营 1 轮 + 敌方阵营 1 轮；轮次跨越多个大回合。
 
 # ─────────────────────────────────────────
 # 旧"流程性回合计数"接口（保留）

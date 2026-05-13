@@ -6,7 +6,7 @@ extends RefCounted
 ##   tile-advanture-design/探索体验实装/B_重生周期主框架_MVP.md
 ##
 ## 职责：
-##   - 维护周期编号 / 重生保护剩余次数（替代 RoundManager 多轮关卡作整局时间轴）
+##   - 维护周期编号 / 重生保护剩余次数（作整局时间轴）
 ##   - 英雄池抽取（draw_new_leader 从未使用池里挑一个标 used 后返回）
 ##   - 累积扎营里程碑（数据结构在本期定义；实际填写由 [[C_扎营里程碑入队_MVP]] 完成）
 ##   - 重生事件占位标志（_pending_respawn_intro 由新场景 _ready 消费做"新指挥官接过指挥权"提示）

@@ -15,7 +15,7 @@ extends Node
 ##   - 与 ManageUI / BuildPanelUI 等 UI 同 ui_layer，挂载顺序保证渲染在它们之上
 ##   - 低于 VictoryUI（胜负覆盖事件面板），由 _init_subsystems 中挂载顺序保证
 ##
-## 程序化创建，对齐项目既有 UI 子系统（BattleUI / ManageUI / BuildPanelUI / VictoryUI）
+## 程序化创建，对齐项目既有 UI 子系统（ManageUI / BuildPanelUI / VictoryUI）
 ## 不使用 .tscn
 
 

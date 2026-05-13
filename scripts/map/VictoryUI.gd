@@ -10,11 +10,10 @@ extends Node
 ##   - 重开按钮点击 → emit restart_pressed（由 WorldMap 路由到 reload_current_scene）
 ##
 ## 约定：
-##   本 UI 只承担 M8 核心城镇翻转的胜负展示；
-##   原有 `_show_victory_text` / `_show_defeat_text`（轮次通关 / 部队全灭 / 放弃）保留不动，
-##   避免扩大 M8 影响面；两套提示并存，显示顺序由 WorldMap 控制（MVP 不会同时触发）。
+##   本 UI 承担核心城镇翻转的胜负展示；
+##   `_show_defeat_text`（部队全灭 / 放弃路径）走 NoticeBar 文案 + 评分，由 WorldMap 直接路由。
 ##
-## 程序化创建，对齐项目既有 UI 子系统（BuildPanelUI / ManageUI / BattleUI）
+## 程序化创建，对齐项目既有 UI 子系统（BuildPanelUI / ManageUI）
 ## 不使用 .tscn（M8 设计文档示意用的 .tscn 与项目实际约定不一致，此处按项目约定落地）
 
 
