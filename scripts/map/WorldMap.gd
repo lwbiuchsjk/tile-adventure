@@ -340,9 +340,6 @@ class FogSignalNode extends Node2D:
 ## 敌方移动子系统
 var _enemy_movement: EnemyMovement = null
 
-## 战斗确认面板子系统
-var _battle_ui: BattleUI = null
-
 ## 装配管理面板子系统
 var _manage_ui: ManageUI = null
 
@@ -451,10 +448,6 @@ var _reward_generator: RewardGenerator = null
 ## 难度配置：每轮增加的 base_damage 值
 var _damage_increment: float = 0.0
 
-## 击退倍率配置
-var _repel_player_damage_rate: float = 0.6
-var _repel_enemy_damage_rate: float = 0.6
-
 ## 补给系统（MVP 玩家全局补给数值；HUD 显示、移动消耗、扎营恢复均读写此字段）
 ## 语义偏差备忘（M6 审查 P2）：设计《持久slot基础功能设计》§"部队资源通道"要求补给
 ## 按扎营部队隔离；MVP 仅一个玩家单位，全局字段语义成立。后续若扩展多部队 / 多单位，
@@ -484,9 +477,6 @@ var _resource_slots: Dictionary = {}
 
 ## 资源点配置行数据（缓存）
 var _resource_slot_config_rows: Array = []
-
-## 击退冷却回合数配置
-var _repel_cooldown_turns: int = 3
 
 ## 敌方移动开关（从配置读取）
 var _enemy_movement_enabled: bool = false
@@ -726,11 +716,6 @@ func _ready() -> void:
 	# 加载难度配置
 	_damage_increment = float(difficulty_cfg.get("damage_increment", "10"))
 
-	# 加载击退/击败配置
-	_repel_player_damage_rate = float(_battle_config.get("repel_player_damage_rate", "0.6"))
-	_repel_enemy_damage_rate = float(_battle_config.get("repel_enemy_damage_rate", "0.6"))
-	_repel_cooldown_turns = int(_battle_config.get("repel_cooldown_turns", "3"))
-
 	# 加载敌方移动配置
 	_enemy_movement_enabled = int(_battle_config.get("enemy_movement_enabled", "0")) == 1
 	_enemy_movement_points = int(_battle_config.get("enemy_movement_points", "6"))
@@ -904,9 +889,6 @@ func _ready() -> void:
 	# M7 迁移后：WorldMap 完全走 start_faction_turn，TickRegistry 自动分发；无需手动 run_ticks
 	TickRegistry.register(_on_faction_tick)
 
-	# M7: REPELLED 冷却 tick（仅 ENEMY_1 回合生效，内部 faction 过滤）
-	TickRegistry.register(_tick_repelled_cooldowns)
-
 	# Camera 初始位置直接设到单位位置（首帧不需要平滑）
 	_camera.position = _unit_visual_pos
 	# 入口 4 MVP（2026-05-09 跑测补丁）：Camera offset 向下偏 RESERVE/2
@@ -987,7 +969,6 @@ func _deploy_initial_enemy_packs() -> void:
 func _exit_tree() -> void:
 	TickRegistry.unregister(_on_faction_tick)
 	TickRegistry.unregister(_on_build_tick)
-	TickRegistry.unregister(_tick_repelled_cooldowns)
 	VictoryJudge.clear_sink()
 	# D MVP：清理昼夜监听 + sink，避免跨场景残留 connect / 悬空 Callable
 	DayNightState.clear_sinks()
@@ -1017,18 +998,7 @@ func _init_subsystems() -> void:
 	_enemy_movement._camera = _camera
 	add_child(_enemy_movement)
 	_enemy_movement.phase_finished.connect(_on_enemy_phase_finished)
-	_enemy_movement.forced_battle_triggered.connect(_on_forced_battle_triggered)
 	_enemy_movement.redraw_requested.connect(queue_redraw)
-
-	# 战斗确认面板子系统
-	_battle_ui = BattleUI.new()
-	_battle_ui.name = "BattleUI"
-	add_child(_battle_ui)
-	_battle_ui.init_config(_repel_player_damage_rate, _repel_enemy_damage_rate)
-	_battle_ui.create_ui(ui_layer)
-	_battle_ui.repel_chosen.connect(_on_battle_repel_chosen)
-	_battle_ui.defeat_chosen.connect(_on_battle_defeat_chosen)
-	_battle_ui.cancelled.connect(_on_battle_cancelled)
 
 	# 装配管理面板子系统
 	_manage_ui = ManageUI.new()
@@ -1215,7 +1185,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 动画播放中、战斗确认中、敌方移动中、管理 / 建造 / 事件面板打开中、扎营中、昏迷过渡中或流程结束时锁定所有输入
 	# 事件面板（F MVP）：玩家未确认事件前禁止地图点击 / 空格扎营，避免叠加触发
 	# 昏迷过渡（B MVP）：_is_in_coma=true 期间 reload 场景已排队，不允许任何操作
-	if _game_finished or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open or _is_in_coma:
+	if _game_finished or _is_moving or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open or _is_in_coma:
 		return
 
 	# 鼠标左键点击：移动单位（需要补给 > 0）
@@ -2186,7 +2156,7 @@ func _on_build_tick(faction: int) -> void:
 ## 默认 false 即"按 [B] 不弹板"，给一行 notice 说明，避免玩家不知道键失效。
 func _open_build_panel() -> void:
 	# E MVP：战斗态守卫——_is_in_battle 期间不允许打开建造面板（设计 §2.10）
-	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open or _is_in_coma or _is_in_battle():
+	if _game_finished or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open or _is_in_coma or _is_in_battle():
 		return
 	if not _build_upgrade_enabled:
 		_show_notice("当前阶段不可手动升级")
@@ -2242,7 +2212,7 @@ func _get_player_persistent_slots() -> Array[PersistentSlot]:
 ## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
 func _start_camp() -> void:
 	# E MVP：战斗态守卫——_is_in_battle 期间不允许扎营（设计 §2.10）
-	if _game_finished or _is_moving or _battle_ui.is_pending or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open or _is_in_coma or _is_in_battle():
+	if _game_finished or _is_moving or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open or _is_in_coma or _is_in_battle():
 		return
 	_is_camping = true
 	_camp_count += 1
@@ -2627,23 +2597,6 @@ func _on_enemy_phase_finished() -> void:
 	_turn_manager.current_faction = Faction.PLAYER
 	_turn_manager.start_faction_turn(Faction.PLAYER)
 
-## 强制战斗触发回调（敌方到达玩家相邻格）
-##
-## E5 旧路径退化：被动战斗已切到 _on_enemy_phase_finished 末尾扫描保护区机制（设计 §3.2）
-## EnemyMovement 自 E4 起不再 emit forced_battle_triggered；此回调理论不应触发
-##
-## 仍保留连接以防：
-##   - EnemyMovement 极端时序下从绕道路径走出 emit（保护区机制兜底失败）
-##   - 未清理的旧 connect 仍触达本回调
-##
-## 走到这里属于异常态：push_warning 标记 + 调 resume_after_battle 让队列继续，
-## 不调用旧 BattleUI 弹板（避免新旧战斗系统并发卡死）
-func _on_forced_battle_triggered(level: LevelSlot) -> void:
-	push_warning("WorldMap._on_forced_battle_triggered: E5 后旧强制战斗路径理论不应触发，level=%s；恢复敌方移动队列" % [level.position if level != null else Vector2i(-1, -1)])
-	if _enemy_movement != null:
-		_enemy_movement.resume_after_battle()
-
-
 # ─────────────────────────────────────────
 # E 战斗就地展开 MVP — 战斗会话 helper / sink
 # ─────────────────────────────────────────
@@ -2657,8 +2610,6 @@ func _on_forced_battle_triggered(level: LevelSlot) -> void:
 #
 # 不在 E2/E3 范围（留 E4 / E5）：
 #   - 被动战斗（_on_enemy_phase_finished 改造留 E4）
-#   - 旧强制战斗路径清理（_on_forced_battle_triggered 仍走旧 BattleUI 弹板，E5 才清理）
-#
 # 守卫语义：_is_in_battle() = true 期间锁定所有面板 / 输入分流；_battle_session sink 退出后清空
 
 
@@ -3596,98 +3547,6 @@ func _on_round_hint_timeout() -> void:
 	_update_hud()
 	_refresh_reachable()
 
-# ─────────────────────────────────────────
-# 战斗结算（BattleUI 信号处理）
-# ─────────────────────────────────────────
-
-## 击退选择回调
-func _on_battle_repel_chosen() -> void:
-	var level: LevelSlot = _battle_ui.pending_level
-	var full_result: BattleResolver.BattleResult = _battle_ui.pending_full_result
-	var was_forced: bool = _battle_ui.is_forced
-	_battle_ui.hide()
-
-	# 按击退倍率缩放伤害
-	var result: BattleResolver.BattleResult = full_result.apply_damage_rate(
-		_repel_player_damage_rate, _repel_enemy_damage_rate
-	)
-
-	# 保存敌方部队快照（扣血前），用于抽取部队奖励
-	var troop_snapshot: Array[TroopData] = level.troops.duplicate()
-
-	# 我方扣血；命中昏迷 / 失败时立即中断，避免在过渡期间发战斗胜利事件 / 推奖励
-	# 强制战斗路径需要主动结束敌方阶段；非强制场景直接 return 等场景 reload
-	if _apply_player_damages(result):
-		if was_forced:
-			_enemy_movement.finish_phase()
-		return
-
-	# 敌方扣血
-	level.apply_enemy_damages(result.enemy_damages)
-	var all_wiped: bool = level.remove_defeated_troops()
-
-	if all_wiped:
-		# 击退但全灭 → 转为击败，发放奖励
-		# F MVP：关卡奖励 + 部队奖励合并到一条战斗胜利事件中展示
-		level.mark_defeated()
-		var battle_rewards: Array[ItemData] = []
-		battle_rewards.append_array(_grant_level_rewards_for(level))
-		battle_rewards.append_array(_grant_troop_reward(troop_snapshot))
-		_push_battle_victory_event(battle_rewards)
-	else:
-		# 标记为击退，设置冷却
-		level.mark_repelled(_repel_cooldown_turns)
-
-	# 后处理
-	_post_battle_settlement(level, was_forced)
-
-## 击败选择回调
-## 击退即可全灭时按击退倍率结算（低损耗全灭），否则按 100% 结算
-func _on_battle_defeat_chosen() -> void:
-	var level: LevelSlot = _battle_ui.pending_level
-	var full_result: BattleResolver.BattleResult = _battle_ui.pending_full_result
-	var was_forced: bool = _battle_ui.is_forced
-	_battle_ui.hide()
-
-	# 判断是否击退即可全灭，决定使用哪套倍率
-	var repel_result: BattleResolver.BattleResult = full_result.apply_damage_rate(
-		_repel_player_damage_rate, _repel_enemy_damage_rate
-	)
-	var repel_wipes: bool = BattleResolver.would_wipe_enemies(
-		level.troops, repel_result.enemy_damages
-	)
-	var result: BattleResolver.BattleResult = repel_result if repel_wipes else full_result
-
-	# 保存敌方部队快照（扣血前），用于抽取部队奖励
-	var troop_snapshot: Array[TroopData] = level.troops.duplicate()
-
-	# 我方扣血；命中昏迷 / 失败时立即中断（同 _on_battle_repel_chosen 处理）
-	if _apply_player_damages(result):
-		if was_forced:
-			_enemy_movement.finish_phase()
-		return
-
-	# 敌方扣血
-	level.apply_enemy_damages(result.enemy_damages)
-	level.remove_defeated_troops()
-
-	# 标记为击败
-	level.mark_defeated()
-
-	# F MVP：发放关卡奖励 + 部队奖励，合并到一条战斗胜利事件中展示
-	var battle_rewards: Array[ItemData] = []
-	battle_rewards.append_array(_grant_level_rewards_for(level))
-	battle_rewards.append_array(_grant_troop_reward(troop_snapshot))
-	_push_battle_victory_event(battle_rewards)
-
-	# 后处理
-	_post_battle_settlement(level, was_forced)
-
-## 战斗取消回调：关闭弹板，恢复输入
-func _on_battle_cancelled() -> void:
-	_battle_ui.hide()
-	_refresh_reachable()
-
 ## 为我方部队应用伤害（从 BattleResult 中提取 damages），同时追踪累计损兵
 ##
 ## B 重生周期 MVP：返回 _evaluate_party_state() 的结果
@@ -3739,66 +3598,6 @@ func _grant_level_rewards_for(level: LevelSlot) -> Array[ItemData]:
 	_inventory.add_items(level.rewards)
 	return level.rewards.duplicate()
 
-## 战斗后共用处理：更新 HUD、失败判定、轮次推进
-## 若处于敌方移动阶段的强制战斗，结算后继续处理移动队列
-## M7 迁移：原"首次战斗后激活敌方"逻辑移除，敌方 AI 开局即活跃（初始预置 5 支 + 每 5 回合增援）
-func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
-
-	_update_hud()
-	queue_redraw()
-
-	# B 重生周期 MVP：先评估队伍状态（队员阵亡移除 / 队长昏迷阈值）
-	# 返回 true 表示已进入昏迷过渡或失败遮罩，中断后续流程；强制战斗时通知敌方阶段收场
-	if _evaluate_party_state():
-		if was_forced:
-			_enemy_movement.finish_phase()
-		return
-	# 兜底：极端态下队伍数组完全空（理论已被 _evaluate_party_state 接管）
-	if _check_defeat():
-		if was_forced:
-			_enemy_movement.finish_phase()
-		return
-
-	# 击败时才通知轮次管理器（击退不算通关进度）
-	var defeated: bool = level != null and level.is_defeated()
-
-	# M4: 战斗胜利后玩家原地尝试占据持久 slot
-	# was_forced 场景：敌方走到玩家相邻格触发战斗，玩家未移动，不触发占据
-	# 非 forced 场景：玩家主动进入敌格战斗，victory 后单位停留在敌格位置
-	if defeated and not was_forced:
-		_try_player_occupy_at(_unit.position)
-
-	# M7: 击败的敌方部队包从 _level_slots 字典移除 + 恢复 MapSchema slot 标记
-	# M7 前由 _on_round_started → _clear_level_slots 整批清理；M7 后逐个即时清理
-	# 注意：REPELLED 状态保留，冷却递减由 _tick_repelled_cooldowns 管理
-	if defeated and level != null:
-		var lvpos: Vector2i = level.position
-		if _level_slots.has(lvpos):
-			_level_slots.erase(lvpos)
-		if _schema != null:
-			var orig_type: int = _original_slot_types.get(lvpos, MapSchema.SlotType.NONE) as int
-			_schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
-			_original_slot_types.erase(lvpos)
-	# P0 重设计后：轮次完成弹板 / 奖励 / 提示已废弃，仅保留 on_level_cleared 计数同步
-	# 详见 _on_battle_session_ended VICTORY 分支同样简化处的注释
-	# 注：本函数（_post_battle_settlement）走旧 BattleUI 击退/击败路径，E5 重构后已不被调用
-	#     保留代码与 _on_battle_session_ended 一致，避免 BattleUI 路径未来复活时漏改
-	if defeated and _round_manager != null:
-		_round_manager.on_level_cleared()
-		_update_hud()
-
-	# P0 第二阶段：兜底胜利检查（保留代码与 _on_battle_session_ended 一致，避免 BattleUI 复活时漏改）
-	if defeated:
-		VictoryJudge.check_enemy_packs_clear(_level_slots)
-
-	# 敌方移动阶段中，继续处理下一个关卡
-	if was_forced:
-		_enemy_movement.resume_after_battle()
-	else:
-		# 战斗结束后重置移动力，允许继续移动（消耗补给）
-		_unit.current_movement = _unit.max_movement
-		_refresh_reachable()
-
 # ─────────────────────────────────────────
 # 装配管理信号处理
 # ─────────────────────────────────────────
@@ -3806,7 +3605,7 @@ func _post_battle_settlement(level: LevelSlot, was_forced: bool) -> void:
 ## 打开装配管理面板（非扎营模式，仅允许替换）
 func _open_manage_panel() -> void:
 	# E MVP：战斗态守卫——_is_in_battle 期间不允许装配 / 用道具（设计 §2.10）
-	if _game_finished or _battle_ui.is_pending or _is_moving or _is_camping or _event_panel.is_open or _is_in_coma or _is_in_battle():
+	if _game_finished or _is_moving or _is_camping or _event_panel.is_open or _is_in_coma or _is_in_battle():
 		return
 	_manage_ui.open(_characters, _inventory, false)
 
@@ -3871,23 +3670,6 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	# B 重生周期 MVP：道具使用后队长状态可能改变（HP_RESTORE 仅会脱离阈值，不会触发昏迷；
 	# 但 EXP 升级品质后 max_hp 会刷新，理论上有跨阈值可能。统一调用以保持入口对齐）
 	_evaluate_party_state()
-
-# ─────────────────────────────────────────
-# 击退冷却管理
-# ─────────────────────────────────────────
-
-## REPELLED 冷却 tick（M7 迁移为 TickRegistry handler）
-## 由 TurnManager.start_faction_turn(ENEMY_1) 自动触发
-## 只在敌方自阵营回合开始时递减冷却（§7.1 步骤 1）
-## 语义：击退的敌方部队包在自己阵营下一回合开始时冷却 -1，归零恢复 UNCHALLENGED
-func _tick_repelled_cooldowns(faction: int) -> void:
-	if faction != Faction.ENEMY_1:
-		return
-	for pos in _level_slots:
-		var lv: LevelSlot = _level_slots[pos] as LevelSlot
-		if lv.is_repelled():
-			lv.tick_cooldown()
-	queue_redraw()
 
 # ─────────────────────────────────────────
 # 玩家初始化
@@ -4319,7 +4101,7 @@ func _format_rewards_text(rewards: Array[ItemData]) -> String:
 func _on_abandon() -> void:
 	# B 重生周期 MVP：昏迷过渡期间锁 Q 键放弃，避免在 OverlayTransitionUI 黑屏过渡中触发整局失败
 	# E MVP：战斗态期间锁 Q 键放弃（设计 §2.10）；战斗结束才允许整局放弃
-	if _game_finished or _battle_ui.is_pending or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open or _is_in_coma or _is_in_battle():
+	if _game_finished or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open or _is_in_coma or _is_in_battle():
 		return
 	_game_finished = true
 	_reachable_tiles = {}
@@ -4450,8 +4232,6 @@ func _passes_explore_action_guards() -> bool:
 		return false
 	if _game_finished or _is_moving or _is_in_coma or _is_camping:
 		return false
-	if _battle_ui != null and _battle_ui.is_pending:
-		return false
 	if _manage_ui != null and _manage_ui.is_open:
 		return false
 	if _build_panel_ui != null and _build_panel_ui.is_open:
@@ -4486,7 +4266,7 @@ func _handle_f_key() -> void:
 		_on_battle_hud_attack_pressed()
 		return
 	# 探索态：补给 / 候选 / 触发由 _try_trigger_active_battle 内部判定
-	if _game_finished or _is_in_coma or _is_moving or _battle_ui.is_pending or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:
+	if _game_finished or _is_in_coma or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:
 		return
 	if _enemy_movement != null and _enemy_movement.is_moving():
 		return

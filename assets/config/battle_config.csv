@@ -3,12 +3,8 @@ base_damage,500
 quality_k,0.2
 quality_min_factor,0.5
 default_battle_rounds,3
-repel_player_damage_rate,0.1
-repel_enemy_damage_rate,2
-repel_cooldown_turns,3
 enemy_movement_enabled,1
 enemy_movement_points,6
-enemy_target_switch_range,10
 forced_battle_range,3
 battle_trigger_range,3
 battle_arena_range,6

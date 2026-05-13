@@ -6,8 +6,6 @@ extends Node
 
 ## 移动阶段完成（队列清空或被中断）
 signal phase_finished
-## 强制战斗触发（敌方进入玩家曼哈顿距离 ≤ _forced_battle_range 范围；A 基线收束 MVP 起从硬编码"相邻格"扩展为可配置范围）
-signal forced_battle_triggered(level: LevelSlot)
 ## 请求父节点重绘（动画帧更新）
 signal redraw_requested
 
