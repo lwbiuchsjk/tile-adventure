@@ -341,6 +341,9 @@ var _build_panel_ui: BuildPanelUI = null
 ## 敌方 AI（M7）
 var _enemy_ai: EnemyAI = null
 
+## 世界视图 facade（MVP-β）—— EnemyAI / EnemyReinforcement 访问世界的唯一入口
+var _world_view: WorldView = null
+
 ## 胜负遮罩 UI（M8）—— 核心城镇翻转时显示胜利 / 失败 + 重开按钮
 var _victory_ui: VictoryUI = null
 
@@ -983,6 +986,10 @@ func _init_subsystems() -> void:
 	ui_layer.add_child(_build_panel_ui)
 	_build_panel_ui.closed.connect(_on_build_panel_closed)
 	_build_panel_ui.upgrade_requested.connect(_on_upgrade_requested)
+
+	# 世界视图 facade（MVP-β）—— 先于 EnemyAI 构造，作为 AI 模块访问世界的唯一入口
+	_world_view = WorldView.new()
+	_world_view.init(self)
 
 	# 敌方 AI（M7）
 	_enemy_ai = EnemyAI.new()
