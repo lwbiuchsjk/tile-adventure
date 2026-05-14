@@ -1,5 +1,5 @@
 class_name BattleHUD
-extends Node
+extends Control
 ## 战斗内 HUD（探索体验·E MVP）
 ##
 ## 设计原文：
@@ -16,7 +16,8 @@ extends Node
 ##   - BattleSession.on_redraw_requested → WorldMap → BattleHUD.refresh(session)
 ##   - BattleHUD 按钮按下 → emit 信号 → WorldMap 路由到 BattleSession 接口
 ##
-## 程序化创建（不使用 .tscn），对齐项目既有 UI 风格（EventPanelUI / VictoryUI）
+## 预制件化（MVP-α.5 / 2026-05-14）：节点结构在 res://scenes/ui/BattleHUD.tscn；
+## 根 Control 自身 mouse_filter = IGNORE 让点击穿透到地图，仅 PanelContainer 子节点拦截。
 
 
 # ─────────────────────────────────────
@@ -43,21 +44,13 @@ var is_open: bool = false
 
 
 # ─────────────────────────────────────
-# 节点引用
+# 节点引用（@onready 从预制件结构拿）
 # ─────────────────────────────────────
 
-## 全屏根容器（不拦截点击；战斗中地图点击仍要透传到 WorldMap）
-var _root: Control = null
-
-## 顶部状态栏
-var _top_panel: PanelContainer = null
-var _status_label: Label = null
-
-## 底部行动栏
-var _bottom_panel: PanelContainer = null
-var _attack_btn: Button = null
-var _skip_btn: Button = null
-var _exit_btn: Button = null
+@onready var _status_label: Label = $BattleStatusPanel/StatusLabel
+@onready var _attack_btn: Button = $BattleActionPanel/HBox/AttackButton
+@onready var _skip_btn: Button = $BattleActionPanel/HBox/SkipButton
+@onready var _exit_btn: Button = $BattleActionPanel/HBox/ExitButton
 
 ## 入口 1.2：战斗动画期间锁输入（设计 §5 改动 6）
 ## true 时所有行动按钮强制 disabled，覆盖 refresh 中按 session 状态算出的可用性
@@ -71,99 +64,15 @@ var _session_ref: BattleSession = null
 # 初始化
 # ─────────────────────────────────────
 
-## 程序化构建 UI 并挂到 ui_layer；调用方 = WorldMap._init_subsystems
-##
-## 初始 hidden；战斗启动时由 show_hud(session) 切显示
-func create_ui(ui_layer: CanvasLayer) -> void:
-	# 全屏 root：mouse_filter = IGNORE，让点击穿透到地图（玩家点格移动 / 攻击）
-	# 仅"按钮区"自身 STOP 拦截
-	_root = Control.new()
-	_root.name = "BattleHUDOverlay"
-	_root.visible = false
-	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui_layer.add_child(_root)
-
-	# 顶部状态栏：横幅式，锚定屏幕顶部居中
-	_top_panel = PanelContainer.new()
-	_top_panel.name = "BattleStatusPanel"
-	_top_panel.anchor_left = 0.5
-	_top_panel.anchor_right = 0.5
-	_top_panel.anchor_top = 0.0
-	_top_panel.anchor_bottom = 0.0
-	_top_panel.offset_top = 8
-	# 拦截点击避免误触地图
-	_top_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	# 应用样式
-	var top_sb: StyleBoxFlat = _make_panel_style()
-	_top_panel.add_theme_stylebox_override("panel", top_sb)
-	_root.add_child(_top_panel)
-
-	_status_label = Label.new()
-	_status_label.name = "StatusLabel"
-	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_status_label.add_theme_font_size_override("font_size", 14)
-	_status_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.65, 1.0))
-	_top_panel.add_child(_status_label)
-
-	# 居中横向布局：通过设置 size + 锚点偏移让 Panel 自身居中
-	# Godot 4 中 PanelContainer 的最小宽由内容决定，这里靠 status_label 的文本宽自适应
-	# 用 size_flags_horizontal = SHRINK_CENTER 让其在 anchor_left=0.5 锚点附近居中
-	_top_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	# 通过 offset_left / offset_right 配合 grow_horizontal 实现居中
-	_top_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-
-	# 底部行动栏：HBox，3 按钮，锚定屏幕底部居中
-	_bottom_panel = PanelContainer.new()
-	_bottom_panel.name = "BattleActionPanel"
-	_bottom_panel.anchor_left = 0.5
-	_bottom_panel.anchor_right = 0.5
-	_bottom_panel.anchor_top = 1.0
-	_bottom_panel.anchor_bottom = 1.0
-	_bottom_panel.offset_bottom = -8
-	_bottom_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	var bottom_sb: StyleBoxFlat = _make_panel_style()
-	_bottom_panel.add_theme_stylebox_override("panel", bottom_sb)
-	_root.add_child(_bottom_panel)
-	_bottom_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_bottom_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-
-	var hbox: HBoxContainer = HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 12)
-	_bottom_panel.add_child(hbox)
-
-	_attack_btn = _make_button("攻击 [F]", "attack")
-	hbox.add_child(_attack_btn)
-	_skip_btn = _make_button("结束行动 [Space]", "skip")
-	hbox.add_child(_skip_btn)
-	_exit_btn = _make_button("退出战斗", "exit")
-	hbox.add_child(_exit_btn)
-
-
-## 通用面板样式：深棕半透 + 浅棕描边，对齐 EventPanelUI
-func _make_panel_style() -> StyleBoxFlat:
-	var sb: StyleBoxFlat = StyleBoxFlat.new()
-	sb.bg_color = Color(0.15, 0.10, 0.05, 0.92)
-	sb.border_width_left = 1
-	sb.border_width_right = 1
-	sb.border_width_top = 1
-	sb.border_width_bottom = 1
-	sb.border_color = Color(0.45, 0.30, 0.15, 1.0)
-	sb.content_margin_left = 14
-	sb.content_margin_right = 14
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	return sb
-
-
-## 构造单个按钮 + 接信号
-## 用 Callable.bind 绑定语义化字符串，避免 lambda 捕获散乱
-func _make_button(label: String, kind: String) -> Button:
-	var btn: Button = Button.new()
-	btn.text = label
-	btn.custom_minimum_size = Vector2(96, 32)
-	btn.pressed.connect(_on_button_pressed.bind(kind))
-	return btn
+## 预制件挂到 ui_layer 后自动调用；接按钮信号 + 默认隐藏
+func _ready() -> void:
+	visible = false
+	is_open = false
+	# 根 Control mouse_filter = IGNORE 让点击穿透到地图（.tscn 已设但兜底）
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_attack_btn.pressed.connect(_on_button_pressed.bind("attack"))
+	_skip_btn.pressed.connect(_on_button_pressed.bind("skip"))
+	_exit_btn.pressed.connect(_on_button_pressed.bind("exit"))
 
 
 # ─────────────────────────────────────
@@ -172,10 +81,7 @@ func _make_button(label: String, kind: String) -> Button:
 
 ## 战斗启动：显示 HUD + 拉首帧状态
 func show_hud(session: BattleSession) -> void:
-	if _root == null:
-		push_warning("BattleHUD.show_hud: create_ui 未调用，忽略")
-		return
-	_root.visible = true
+	visible = true
 	is_open = true
 	# 战斗启动时清除残留锁定（防止上一场战斗结束时仍在锁动画状态）
 	_actions_locked = false
@@ -184,8 +90,7 @@ func show_hud(session: BattleSession) -> void:
 
 ## 战斗结束：隐藏 HUD
 func hide_hud() -> void:
-	if _root != null:
-		_root.visible = false
+	visible = false
 	is_open = false
 	_actions_locked = false
 	_session_ref = null

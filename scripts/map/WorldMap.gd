@@ -1004,15 +1004,14 @@ func _init_subsystems() -> void:
 	# 修复 BUG：补给 0 时踩即时 slot 触发事件，关闭事件面板后扎营按钮未显示
 	_event_panel.closed.connect(_on_event_panel_closed)
 
-	# E 战斗就地展开 MVP：战斗内 HUD
+	# E 战斗就地展开 MVP：战斗内 HUD —— MVP-α.5：切预制件实例化
 	# 挂载位置：EventPanelUI 之后、VictoryUI 之前
 	#   战斗态时高于 EventPanelUI（战斗中事件面板被冻结，理论不会同时弹出）
 	#   低于 VictoryUI（极端时序下战斗失败 + 末周期失败可能并发，胜负遮罩压顶）
 	# 与 _battle_session 同生命周期；HUD 节点常驻但只在战斗态可见
-	_battle_hud = BattleHUD.new()
+	_battle_hud = preload("res://scenes/ui/BattleHUD.tscn").instantiate()
 	_battle_hud.name = "BattleHUD"
-	add_child(_battle_hud)
-	_battle_hud.create_ui(ui_layer)
+	ui_layer.add_child(_battle_hud)
 	_battle_hud.attack_pressed.connect(_on_battle_hud_attack_pressed)
 	_battle_hud.skip_pressed.connect(_on_battle_hud_skip_pressed)
 	_battle_hud.exit_pressed.connect(_on_battle_hud_exit_pressed)

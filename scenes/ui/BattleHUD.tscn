@@ -1,0 +1,73 @@
+[gd_scene load_steps=3 format=3 uid="uid://b8mvp5battlehud"]
+
+[ext_resource type="Script" path="res://scripts/map/BattleHUD.gd" id="1_script"]
+
+[sub_resource type="StyleBoxFlat" id="hud_panel_style"]
+content_margin_left = 14.0
+content_margin_top = 8.0
+content_margin_right = 14.0
+content_margin_bottom = 8.0
+bg_color = Color(0.15, 0.1, 0.05, 0.92)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.45, 0.3, 0.15, 1)
+
+[node name="BattleHUD" type="Control"]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("1_script")
+
+[node name="BattleStatusPanel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_top = 8.0
+grow_horizontal = 2
+size_flags_horizontal = 4
+theme_override_styles/panel = SubResource("hud_panel_style")
+
+[node name="StatusLabel" type="Label" parent="BattleStatusPanel"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.92, 0.65, 1)
+theme_override_font_sizes/font_size = 14
+horizontal_alignment = 1
+
+[node name="BattleActionPanel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_styles/panel = SubResource("hud_panel_style")
+
+[node name="HBox" type="HBoxContainer" parent="BattleActionPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="AttackButton" type="Button" parent="BattleActionPanel/HBox"]
+custom_minimum_size = Vector2(96, 32)
+layout_mode = 2
+text = "攻击 [F]"
+
+[node name="SkipButton" type="Button" parent="BattleActionPanel/HBox"]
+custom_minimum_size = Vector2(96, 32)
+layout_mode = 2
+text = "结束行动 [Space]"
+
+[node name="ExitButton" type="Button" parent="BattleActionPanel/HBox"]
+custom_minimum_size = Vector2(96, 32)
+layout_mode = 2
+text = "退出战斗"
