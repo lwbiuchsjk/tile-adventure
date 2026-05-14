@@ -1,5 +1,5 @@
 class_name EventPanelUI
-extends Node
+extends Control
 ## 事件面板 UI（探索体验·F MVP）
 ##
 ## 设计原文：
@@ -7,7 +7,6 @@ extends Node
 ##
 ## 职责：
 ##   - 维护事件 FIFO 队列；面板未打开时直接显示队首
-##   - 程序化构建 Control 树：半透明遮罩 + 居中面板（标题 / 叙事文本 / 动态按钮）
 ##   - 玩家点 action → 调 result_callback → 出队 → 队列非空显示下一条；空则关闭面板
 ##
 ## 复用 / 隔离：
@@ -15,8 +14,9 @@ extends Node
 ##   - 与 ManageUI / BuildPanelUI 等 UI 同 ui_layer，挂载顺序保证渲染在它们之上
 ##   - 低于 VictoryUI（胜负覆盖事件面板），由 _init_subsystems 中挂载顺序保证
 ##
-## 程序化创建，对齐项目既有 UI 子系统（ManageUI / BuildPanelUI / VictoryUI）
-## 不使用 .tscn
+## 预制件化（MVP-α.5 / 2026-05-14）：节点结构在 res://scenes/ui/EventPanelUI.tscn；
+## 根类型 Node → Control（与 VictoryUI 同步调整）；按钮容器（ButtonBox）内的 Button
+## 仍按 event.actions 动态生成 / 销毁。
 
 
 ## 对外暴露：面板是否正在显示
@@ -76,23 +76,17 @@ var _current_event: Dictionary = {}
 
 
 # ─────────────────────────────────────
-# 节点引用（程序化构建）
+# 节点引用（@onready 拿预制件子节点）
 # ─────────────────────────────────────
 
-## 全屏根容器（吸收点击防止穿透到地图 / 下层 UI）
-var _root: Control = null
-
-## 中心面板
-var _panel: PanelContainer = null
-
 ## 标题 Label
-var _title_label: Label = null
+@onready var _title_label: Label = $Center/EventPanel/VBox/TitleLabel
 
 ## 叙事文本 Label（自动换行）
-var _narrative_label: Label = null
+@onready var _narrative_label: Label = $Center/EventPanel/VBox/NarrativeLabel
 
 ## 按钮容器（动态按 actions 重建）
-var _button_box: HBoxContainer = null
+@onready var _button_box: HBoxContainer = $Center/EventPanel/VBox/ButtonBox
 
 ## 入口 2 MVP 2.2（2026-05-10）：fade in 状态
 ## _is_fading_in == true 时屏蔽所有"确认"输入(SPACE / 按钮点击 / SHIFT+SPACE 批量)
@@ -105,92 +99,12 @@ var _fade_tween: Tween = null
 # 初始化
 # ─────────────────────────────────────
 
-## 程序化创建 UI 并挂载到 ui_layer
-## 调用方：WorldMap._init_subsystems
-## 挂载顺序需在 ManageUI / BuildPanelUI 之后、VictoryUI 之前——
-## 同 CanvasLayer 内 z_index 相同时按子节点顺序渲染，后挂者在上
-func create_ui(ui_layer: CanvasLayer) -> void:
-	_root = Control.new()
-	_root.name = "EventPanelOverlay"
-	_root.visible = false
-	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	# STOP 拦截输入；面板打开时阻止地图 / 其他 UI 穿透点击
-	_root.mouse_filter = Control.MOUSE_FILTER_STOP
-	ui_layer.add_child(_root)
-
-	# 半透明黑色遮罩（按 F MVP §2 视觉规格 0.55 alpha）
-	var dim: ColorRect = ColorRect.new()
-	dim.name = "Dim"
-	dim.color = Color(0.0, 0.0, 0.0, 0.55)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(dim)
-
-	# 居中容器（锚定屏幕中心）
-	var center: CenterContainer = CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(center)
-
-	# 中央面板：360×220，暖金描边 + 圆角 + 阴影（入口 2 MVP 2.2 视觉规格升级 2026-05-10）
-	_panel = PanelContainer.new()
-	_panel.name = "EventPanel"
-	_panel.custom_minimum_size = PANEL_MIN_SIZE
-	var sb: StyleBoxFlat = StyleBoxFlat.new()
-	sb.bg_color = PANEL_BG_COLOR
-	# 暖金描边(2px)
-	sb.border_width_left = PANEL_BORDER_WIDTH
-	sb.border_width_right = PANEL_BORDER_WIDTH
-	sb.border_width_top = PANEL_BORDER_WIDTH
-	sb.border_width_bottom = PANEL_BORDER_WIDTH
-	sb.border_color = PANEL_BORDER_COLOR
-	# 圆角(8px)
-	sb.corner_radius_top_left = PANEL_CORNER_RADIUS
-	sb.corner_radius_top_right = PANEL_CORNER_RADIUS
-	sb.corner_radius_bottom_left = PANEL_CORNER_RADIUS
-	sb.corner_radius_bottom_right = PANEL_CORNER_RADIUS
-	# 阴影(黑色 alpha 0.5 / 8px / 向下偏 4px)
-	sb.shadow_color = PANEL_SHADOW_COLOR
-	sb.shadow_size = PANEL_SHADOW_SIZE
-	sb.shadow_offset = PANEL_SHADOW_OFFSET
-	# 内边距(更"空气感")
-	sb.content_margin_left = PANEL_CONTENT_MARGIN_H
-	sb.content_margin_right = PANEL_CONTENT_MARGIN_H
-	sb.content_margin_top = PANEL_CONTENT_MARGIN_V
-	sb.content_margin_bottom = PANEL_CONTENT_MARGIN_V
-	_panel.add_theme_stylebox_override("panel", sb)
-	center.add_child(_panel)
-
-	# 内层 VBox：标题 / 叙事 / 按钮三段
-	var vbox: VBoxContainer = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 12)
-	_panel.add_child(vbox)
-
-	# 标题（顶部，18pt 米色 — MVP 2.2 视觉规格 2026-05-10）
-	_title_label = Label.new()
-	_title_label.name = "TitleLabel"
-	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title_label.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
-	_title_label.add_theme_color_override("font_color", TITLE_FONT_COLOR)
-	vbox.add_child(_title_label)
-
-	# 叙事文本（中央，14pt，自动换行 — MVP 2.2 视觉规格 2026-05-10）
-	# custom_minimum_size 配合 panel 的 content_margin 留出 320px 文字宽
-	_narrative_label = Label.new()
-	_narrative_label.name = "NarrativeLabel"
-	_narrative_label.add_theme_font_size_override("font_size", NARRATIVE_FONT_SIZE)
-	_narrative_label.add_theme_color_override("font_color", NARRATIVE_FONT_COLOR)
-	_narrative_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_narrative_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_narrative_label.custom_minimum_size = Vector2(NARRATIVE_LABEL_WIDTH, 0)
-	vbox.add_child(_narrative_label)
-
-	# 按钮容器（底部居中；MVP 通常仅 1 项"确认"，预留 ≥1 按钮的 HBox）
-	_button_box = HBoxContainer.new()
-	_button_box.name = "ButtonBox"
-	_button_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	_button_box.add_theme_constant_override("separation", 12)
-	vbox.add_child(_button_box)
+## 预制件挂到 ui_layer 后自动调用；兜底默认隐藏 + STOP 输入拦截
+## 调用方：WorldMap._init_subsystems 切换至 preload + instantiate
+func _ready() -> void:
+	visible = false
+	is_open = false
+	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 # ─────────────────────────────────────
@@ -211,9 +125,6 @@ func create_ui(ui_layer: CanvasLayer) -> void:
 ##     "result_callback": Callable,       # func(result: String, payload: Dictionary) -> void；可选
 ##   }
 func push_event(event: Dictionary) -> void:
-	if _root == null:
-		push_warning("EventPanelUI.push_event: create_ui 未调用，事件丢弃")
-		return
 	if not is_open:
 		_show_event(event)
 	else:
@@ -243,7 +154,7 @@ func _show_event(event: Dictionary) -> void:
 			var result: String = action_dict.get("result", "confirm") as String
 			_add_action_button(label, result)
 
-	_root.visible = true
+	visible = true
 	is_open = true
 
 	# 入口 2 MVP 2.2（2026-05-10）：整段 fade in 0.4s
@@ -254,7 +165,7 @@ func _show_event(event: Dictionary) -> void:
 		_fade_tween.kill()
 	_is_fading_in = true
 	_fade_tween = UIFadeHelper.fade_in(
-		_root,
+		self,
 		UIFadeHelper.DEFAULT_FADE_IN_DURATION,
 		_on_fade_in_finished
 	)
@@ -267,8 +178,7 @@ func _on_fade_in_finished() -> void:
 
 ## 隐藏面板（仅在队列已空时调用）
 func _hide_panel() -> void:
-	if _root != null:
-		_root.visible = false
+	visible = false
 	is_open = false
 	_current_event = {}
 	_clear_action_buttons()

@@ -995,14 +995,13 @@ func _init_subsystems() -> void:
 	# build_config.csv 的 enemy_reinforcement_interval 此后不再生效（cycle 级配置优先）
 	_enemy_ai.reinforcement_interval = _current_cycle_reinforcement_interval
 
-	# 事件面板 UI（探索体验·F MVP）
+	# 事件面板 UI（探索体验·F MVP）—— MVP-α.5：切预制件实例化
 	# 挂载位置：所有交互面板之后、VictoryUI 之前——
 	#   层级覆盖 ManageUI / BuildPanelUI（玩家先确认事件再操作其他面板），
 	#   但低于 VictoryUI（胜负遮罩可覆盖未确认的事件）
-	_event_panel = EventPanelUI.new()
+	_event_panel = preload("res://scenes/ui/EventPanelUI.tscn").instantiate()
 	_event_panel.name = "EventPanelUI"
-	add_child(_event_panel)
-	_event_panel.create_ui(ui_layer)
+	ui_layer.add_child(_event_panel)
 	# 入口 4 MVP（2026-05-09 BUG 修复）：事件面板关闭时刷新探索态行动按钮
 	# 修复 BUG：补给 0 时踩即时 slot 触发事件，关闭事件面板后扎营按钮未显示
 	_event_panel.closed.connect(_on_event_panel_closed)
