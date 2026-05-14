@@ -969,11 +969,10 @@ func _init_subsystems() -> void:
 	_enemy_movement.phase_finished.connect(_on_enemy_phase_finished)
 	_enemy_movement.redraw_requested.connect(queue_redraw)
 
-	# 装配管理面板子系统
-	_manage_ui = ManageUI.new()
+	# 装配管理面板子系统 —— MVP-α.5：切预制件实例化
+	_manage_ui = preload("res://scenes/ui/ManageUI.tscn").instantiate()
 	_manage_ui.name = "ManageUI"
-	add_child(_manage_ui)
-	_manage_ui.create_ui(ui_layer)
+	ui_layer.add_child(_manage_ui)
 	_manage_ui.closed.connect(_on_manage_closed)
 	_manage_ui.equip_requested.connect(_on_equip_troop)
 	_manage_ui.use_item_requested.connect(_on_use_item)

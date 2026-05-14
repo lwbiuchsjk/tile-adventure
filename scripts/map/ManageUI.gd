@@ -1,8 +1,12 @@
 class_name ManageUI
-extends Node
+extends PanelContainer
 ## 装配管理面板子系统
-## 负责管理面板的创建、刷新、操作卡片生成。
-## 装配/使用操作通过信号通知 WorldMap 处理实际逻辑。
+##
+## 负责管理面板的刷新、操作卡片生成；装配/使用操作通过信号通知 WorldMap 处理实际逻辑。
+##
+## 预制件化（MVP-α.5 / 2026-05-14）：节点结构在 res://scenes/ui/ManageUI.tscn；
+## 根类型 Node → PanelContainer（自身即面板，由 anchor PRESET_CENTER 居中）；
+## CharArea / InventoryArea 内的角色按钮 / 道具按钮仍按数据动态生成。
 
 ## 面板关闭
 signal closed
@@ -14,9 +18,6 @@ signal use_item_requested(character: CharacterData, item: ItemData)
 # ─────────────────────────────────────
 # 状态
 # ─────────────────────────────────────
-
-## 管理面板引用
-var _panel: PanelContainer = null
 
 ## 是否正在显示面板
 var is_open: bool = false
@@ -31,11 +32,11 @@ var _camp_mode: bool = false
 ## 当前选中的角色索引（-1 = 未选中）
 var _selected_char_index: int = -1
 
-## 角色区和背包区节点缓存（create_ui 时赋值，避免 find_child 查找）
-var _title_label: Label = null
-var _char_area: VBoxContainer = null
-var _inv_area: VBoxContainer = null
-var _btn_close: Button = null
+## 角色区和背包区节点缓存（@onready 从预制件结构拿）
+@onready var _title_label: Label = $VBox/TitleLabel
+@onready var _char_area: VBoxContainer = $VBox/CharArea
+@onready var _inv_area: VBoxContainer = $VBox/ScrollContainer/InventoryArea
+@onready var _btn_close: Button = $VBox/CloseButton
 
 ## 入口 2 MVP 2.2（2026-05-11）：fade in 状态(与 EventPanelUI 共用 UIFadeHelper)
 ## 屏蔽 close 路径:防玩家在过渡内按 SPACE / 点关闭按钮立即跳过仪式感
@@ -47,64 +48,11 @@ var _fade_tween: Tween = null
 # 初始化
 # ─────────────────────────────────────
 
-## 程序化创建装配管理面板，挂载到指定 CanvasLayer
-func create_ui(ui_layer: CanvasLayer) -> void:
-	_panel = PanelContainer.new()
-	_panel.name = "ManagePanel"
-	_panel.visible = false
-	_panel.set_anchors_and_offsets_preset(
-		Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE
-	)
-	_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_panel.custom_minimum_size = Vector2(420, 560)
-
-	# 外层 VBox
-	var outer_vbox: VBoxContainer = VBoxContainer.new()
-	outer_vbox.add_theme_constant_override("separation", 8)
-
-	# 标题
-	_title_label = Label.new()
-	_title_label.text = "装配管理"
-	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title_label.add_theme_font_size_override("font_size", 18)
-	_title_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.30))
-	outer_vbox.add_child(_title_label)
-
-	outer_vbox.add_child(_make_separator())
-
-	# 上区：角色选择（固定，不滚动）
-	_char_area = VBoxContainer.new()
-	_char_area.name = "CharArea"
-	_char_area.add_theme_constant_override("separation", 4)
-	outer_vbox.add_child(_char_area)
-
-	outer_vbox.add_child(_make_separator())
-
-	# 下区：背包道具（可垂直滚动，占满剩余高度）
-	var scroll: ScrollContainer = ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-
-	_inv_area = VBoxContainer.new()
-	_inv_area.name = "InventoryArea"
-	_inv_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_inv_area.add_theme_constant_override("separation", 4)
-	scroll.add_child(_inv_area)
-	outer_vbox.add_child(scroll)
-
-	outer_vbox.add_child(_make_separator())
-
-	# 底部确认/关闭按钮
-	_btn_close = Button.new()
-	_btn_close.text = "关闭 [M]"
-	_btn_close.custom_minimum_size = Vector2(0, 32)
-	_btn_close.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-	_btn_close.add_theme_color_override("font_hover_color", Color(0.75, 0.75, 0.75))
+## 预制件挂到 ui_layer 后自动调用；接关闭按钮信号 + 默认隐藏
+func _ready() -> void:
+	visible = false
+	is_open = false
 	_btn_close.pressed.connect(_on_close_pressed)
-	outer_vbox.add_child(_btn_close)
-
-	_panel.add_child(outer_vbox)
-	ui_layer.add_child(_panel)
 
 # ─────────────────────────────────────
 # 打开 / 关闭
@@ -122,15 +70,15 @@ func open(characters: Array[CharacterData], inventory: Inventory, camp_mode: boo
 	# 入口 4 MVP（2026-05-09）：扎营态绑 SPACE 快捷键，按钮文字带 [Space] 标识
 	_btn_close.text = "确认结束 [Space]" if camp_mode else "关闭 [M]"
 	refresh()
-	_panel.visible = true
+	visible = true
 
 	# 入口 2 MVP 2.2（2026-05-11）：整段 fade in 0.4s,与 EventPanelUI 共用 UIFadeHelper
-	# panel.modulate 沿层级穿透,标题 / 角色区 / 背包区 / 按钮整体淡入
+	# self.modulate 沿层级穿透,标题 / 角色区 / 背包区 / 按钮整体淡入
 	if _fade_tween != null and _fade_tween.is_valid():
 		_fade_tween.kill()
 	_is_fading_in = true
 	_fade_tween = UIFadeHelper.fade_in(
-		_panel,
+		self,
 		UIFadeHelper.DEFAULT_FADE_IN_DURATION,
 		_on_fade_in_finished
 	)
@@ -148,8 +96,7 @@ func _on_fade_in_finished() -> void:
 func close() -> void:
 	if _is_fading_in:
 		return
-	if _panel != null:
-		_panel.visible = false
+	visible = false
 	is_open = false
 	# 清理 fade in 状态
 	if _fade_tween != null and _fade_tween.is_valid():
@@ -166,8 +113,6 @@ func is_camp_mode() -> bool:
 
 ## 刷新面板内容（装配/使用后调用）
 func refresh() -> void:
-	if _panel == null:
-		return
 	_rebuild_char_area()
 	_rebuild_inventory_interactive()
 
@@ -315,12 +260,6 @@ func _make_item_button(item: ItemData, enabled: bool) -> Button:
 	else:
 		btn.add_theme_color_override("font_color", Color(0.40, 0.40, 0.40))
 	return btn
-
-## 创建分隔线
-func _make_separator() -> HSeparator:
-	var sep: HSeparator = HSeparator.new()
-	sep.add_theme_constant_override("separation", 4)
-	return sep
 
 # ─────────────────────────────────────
 # 内部回调
