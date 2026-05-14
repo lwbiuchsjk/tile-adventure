@@ -1099,12 +1099,13 @@ func _init_subsystems() -> void:
 	_explore_action_bar.add_child(_explore_camp_btn)
 	_explore_camp_btn.pressed.connect(_on_explore_camp_pressed)
 
-	# 胜负遮罩 UI（M8）
+	# 胜负遮罩 UI（M8）—— MVP-α.5：从 .new() + create_ui() 改为预制件实例化
 	# 挂载顺序放在所有 UI 面板之后，保证遮罩渲染在最上层（吸收点击）
-	_victory_ui = VictoryUI.new()
+	# 父节点从 self(Node2D) 调整为 ui_layer(CanvasLayer)：因根类型已改 extends Control，
+	# Control 锚定到 CanvasLayer 的视口；逻辑等价，节点结构扁平
+	_victory_ui = preload("res://scenes/ui/VictoryUI.tscn").instantiate()
 	_victory_ui.name = "VictoryUI"
-	add_child(_victory_ui)
-	_victory_ui.create_ui(ui_layer)
+	ui_layer.add_child(_victory_ui)
 	_victory_ui.restart_pressed.connect(_on_restart_pressed)
 
 	# M8：注册胜负回调；OccupationSystem.try_occupy 翻转核心城镇时触发
