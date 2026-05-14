@@ -1,4 +1,4 @@
-[gd_resource type="Theme" load_steps=10 format=3]
+[gd_resource type="Theme" load_steps=11 format=3]
 
 ; 入口 4 MVP（2026-05-10 HTML 跑测）：default_font 改用 main_font.tres（FontVariation）
 ; main_font 内部已配置 SourceHanSansSC + NotoColorEmoji fallback，让所有 HUD/Button 自动支持 emoji
@@ -102,6 +102,11 @@ content_margin_bottom = 6.0
 
 [sub_resource type="StyleBoxEmpty" id="label_normal"]
 
+; MVP-α.5（2026-05-14）：补 Separator 默认风格，6 UI 共用，避免每处手动覆盖
+[sub_resource type="StyleBoxLine" id="sep_line"]
+color = Color(0.55, 0.45, 0.20, 0.5)
+thickness = 1
+
 [resource]
 default_font = ExtResource("1")
 default_font_size = 16
@@ -121,4 +126,22 @@ Button/colors/font_disabled_color = Color(0.45, 0.45, 0.45, 1.0)
 
 Label/styles/normal = SubResource("label_normal")
 Label/colors/font_color = Color(0.88, 0.86, 0.82, 1.0)
+Label/colors/font_outline_color = Color(0, 0, 0, 0.6)
+Label/constants/outline_size = 1
 Label/font_sizes/font_size = 15
+
+; MVP-α.5：Label 变体 —— UI 标题（VictoryUI 胜利/失败大字、面板标题等）
+Title/base_type = &"Label"
+Title/font_sizes/font_size = 24
+Title/colors/font_color = Color(1.0, 0.92, 0.70, 1.0)
+
+; MVP-α.5：Label 变体 —— UI 副标题
+Subtitle/base_type = &"Label"
+Subtitle/font_sizes/font_size = 18
+Subtitle/colors/font_color = Color(0.85, 0.82, 0.75, 1.0)
+
+; MVP-α.5：VSeparator / HSeparator 默认 —— 6 UI 内分组分隔
+VSeparator/styles/separator = SubResource("sep_line")
+VSeparator/constants/separation = 12
+HSeparator/styles/separator = SubResource("sep_line")
+HSeparator/constants/separation = 12
