@@ -924,7 +924,7 @@ func _deploy_initial_enemy_packs() -> void:
 		var force_tier: int = -1
 		if _current_cycle_has_enemy_core and i == 0:
 			force_tier = 3
-		var pack: LevelSlot = EnemyReinforcement.spawn_batch(self, force_tier)
+		var pack: LevelSlot = EnemyReinforcement.spawn_batch(_world_view, force_tier)
 		if pack != null:
 			placed += 1
 	if placed < target_count:
@@ -995,7 +995,7 @@ func _init_subsystems() -> void:
 	_enemy_ai = EnemyAI.new()
 	_enemy_ai.name = "EnemyAI"
 	add_child(_enemy_ai)
-	_enemy_ai.init(self, _turn_manager)
+	_enemy_ai.init(_world_view, _turn_manager)
 	# P0 第二阶段：从 cycle_config 注入当前周期的 reinforcement_interval（覆盖 EnemyAI 默认值）
 	# build_config.csv 的 enemy_reinforcement_interval 此后不再生效（cycle 级配置优先）
 	_enemy_ai.reinforcement_interval = _current_cycle_reinforcement_interval

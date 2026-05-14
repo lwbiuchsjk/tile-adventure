@@ -72,7 +72,7 @@ func _test_reinforcement_spawn() -> void:
 
 	var world_mock: Node = _make_world_mock(Vector2i(10, 10), 3)
 
-	var pack: LevelSlot = EnemyReinforcement.spawn_batch(world_mock)
+	var pack: LevelSlot = EnemyReinforcement.spawn_batch(_wrap_world(world_mock))
 	_assert(pack != null, "生成 LevelSlot 成功")
 	if pack != null:
 		_assert(pack.faction == Faction.ENEMY_1,         "部队包归属 ENEMY_1")
@@ -161,7 +161,7 @@ func _test_greedy_upgrade_exhaust_stone() -> void:
 	world._schema = _make_schema_stub([town_l0, village_l0, village_l1])
 
 	var ai: EnemyAI = EnemyAI.new()
-	ai._world_map = world
+	ai._world_view = _wrap_world(world)
 	ai._step_greedy_upgrade()
 
 	_assert(town_l0.active_build != null,    "城镇 L0 启动升级（cost=4，石料够）")
@@ -189,7 +189,7 @@ func _test_full_entry_via_faction_signal() -> void:
 
 	var ai: EnemyAI = EnemyAI.new()
 	# 测试场景下 SceneTree 不能 add_child，直接 init；signal connect 不依赖 tree
-	ai.init(world, tm)
+	ai.init(_wrap_world(world), tm)
 
 	# 跑 3 个敌方回合
 	for i in range(3):
@@ -489,12 +489,20 @@ func _make_slot(type: int, level: int) -> PersistentSlot:
 	return s
 
 
-## 构造一个最小 MapSchema mock：有 persistent_slots / is_passable / set_slot / get_slot
-## 用 RefCounted 包装更合适
-func _make_schema_stub(persistent_slots: Array) -> _SchemaStub:
-	var s: _SchemaStub = _SchemaStub.new()
+## 构造一个 MapSchema：贪心升级 / 信号链测试只需 persistent_slots 属性
+## MVP-β：WorldView.get_schema() 强类型返回 MapSchema，故须用真实 MapSchema（替身会被类型转换变 null）
+func _make_schema_stub(persistent_slots: Array[PersistentSlot]) -> MapSchema:
+	var s: MapSchema = MapSchema.new()
 	s.persistent_slots = persistent_slots
 	return s
+
+
+## MVP-β：把 _MockWorld 包进真 WorldView 再注入 AI / spawn_batch
+## WorldView 内部用 .get()/.call() 动态访问，_MockWorld 提供同名字段/方法即可
+func _wrap_world(mock: Object) -> WorldView:
+	var wv: WorldView = WorldView.new()
+	wv.init(mock)
+	return wv
 
 
 ## 构造一个"EnemyReinforcement"可用的 world mock
@@ -549,8 +557,9 @@ func _assert(cond: bool, msg: String) -> void:
 # Mock 类
 # ─────────────────────────────────────────
 
-## Mock WorldMap：提供 EnemyAI / EnemyReinforcement 所需的字段 + try_spend_stone / add_stone 方法
-## 用 Node 子类实现，便于 EnemyAI 直接属性/方法访问（_world_map._schema / .add_stone() 等）
+## Mock WorldMap：提供 WorldView facade 转发所需的字段 + try_spend_stone / add_stone 方法
+## MVP-β：测试中包进真 WorldView（_wrap_world）再注入 EnemyAI / spawn_batch；
+## WorldView 内部用 .get()/.call() 动态访问，故 mock 不必继承 WorldMap
 class _MockWorld extends Node:
 	## MapSchema 替身或真实实例
 	var _schema
@@ -591,8 +600,3 @@ class _MockWorld extends Node:
 	## 启动敌方移动阶段的 stub（完整入口测试中计次，不做实际移动）
 	func start_enemy_move_phase() -> void:
 		start_enemy_move_phase_call_count += 1
-
-
-## 最小 MapSchema 替身（用于贪心升级测试，只需 persistent_slots 属性）
-class _SchemaStub extends RefCounted:
-	var persistent_slots: Array = []

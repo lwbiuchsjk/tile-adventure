@@ -13,33 +13,31 @@ extends RefCounted
 ##   - 数量：MVP 一批 1 个 LevelSlot
 ##   - 随机池：复用 enemy_troop_pool.csv（通过 EnemyTroopGenerator.generate_troops）
 ##
-## 静态纯函数；所有状态通过 WorldMap 引用读写
+## 静态纯函数；所有状态通过 WorldView facade 读写（MVP-β）
 
 
-## 生成一批增援并注入 WorldMap 的 _level_slots 字典
-## world_map: WorldMap 实例（强类型；重命名字段时编译期可报错 —— P2 审查项）
-##   为兼容测试注入自定义 mock，接受 Object 类型（WorldMap 也是 Object）；
-##   运行时仍可用 get()/属性访问来保持对 mock 的鸭类型友好
+## 生成一批增援并注入 WorldView 暴露的 _level_slots 字典
+## world_view: WorldView facade（强类型，访问点编译期可校验 —— MVP-β）
 ## force_tier: -1（默认）= 按 cycle 加权抽 tier；≥ 0 = 强制使用指定 tier（跳过抽样）
 ##             用于 P1-1a 修复：末周期 initial deploy 第 1 个 pack 强制 tier=3 保证最强敌人出现
 ## 返回：实际 spawn 的 LevelSlot；未找到空地 / 配置缺失时返回 null
 ##
 ## P0 第二阶段（整局节奏重设计）：
-##   - spawn 锚改为 world_map._enemy_core_origin_pos（PCG 缓存的原始位置，不查 owner）
+##   - spawn 锚改为 world_view.get_enemy_core_origin_pos()（PCG 缓存的原始位置，不查 owner）
 ##     原因：玩家占领前两周期 CORE_TOWN 后 owner 翻转，按 owner 查找会失效；用原始位置保证 spawn 持续
-##   - tier 按当前 cycle 从 world_map._enemy_tier_ratio_rows 加权抽样（默认路径）
+##   - tier 按当前 cycle 从 world_view.get_enemy_tier_ratio_rows() 加权抽样（默认路径）
 ##   - force_tier ≥ 0 时跳过权重抽样直接使用（initial deploy 末周期强制 tier 3）
-static func spawn_batch(world_map: Object, force_tier: int = -1) -> LevelSlot:
-	if world_map == null:
+static func spawn_batch(world_view: WorldView, force_tier: int = -1) -> LevelSlot:
+	if world_view == null:
 		return null
 
-	var schema = world_map.get("_schema")
+	var schema: MapSchema = world_view.get_schema()
 	if schema == null:
 		push_warning("EnemyReinforcement.spawn_batch: _schema 未初始化")
 		return null
 
 	# P0 第二阶段：用 WorldMap 缓存的 PCG 原始位置作 spawn 锚（不查 owner）
-	var core_origin: Vector2i = world_map.get("_enemy_core_origin_pos") as Vector2i
+	var core_origin: Vector2i = world_view.get_enemy_core_origin_pos()
 	if core_origin.x < 0 or core_origin.y < 0:
 		push_warning("EnemyReinforcement.spawn_batch: _enemy_core_origin_pos 未缓存（PCG 后应有效），跳过本次")
 		return null
@@ -52,10 +50,9 @@ static func spawn_batch(world_map: Object, force_tier: int = -1) -> LevelSlot:
 		return null
 
 	# 收集影响范围内的可用空地
-	var level_slots: Dictionary = world_map.get("_level_slots") as Dictionary
-	var resource_slots_raw = world_map.get("_resource_slots")
-	var resource_slots: Dictionary = resource_slots_raw if resource_slots_raw != null else {}
-	var unit = world_map.get("_unit")
+	var level_slots: Dictionary = world_view.get_level_slots()
+	var resource_slots: Dictionary = world_view.get_resource_slots()
+	var unit: UnitData = world_view.get_unit()
 	var unit_pos: Vector2i = unit.position if unit != null else Vector2i(-1, -1)
 
 	var candidates: Array[Vector2i] = _find_passable_empty_tiles(
@@ -67,7 +64,7 @@ static func spawn_batch(world_map: Object, force_tier: int = -1) -> LevelSlot:
 		return null
 
 	# 随机选一格
-	var rng = world_map.get("_world_rng")
+	var rng: RandomNumberGenerator = world_view.get_world_rng()
 	var idx: int = 0
 	if rng != null:
 		idx = rng.randi_range(0, candidates.size() - 1)
@@ -76,7 +73,7 @@ static func spawn_batch(world_map: Object, force_tier: int = -1) -> LevelSlot:
 	var spawn_pos: Vector2i = candidates[idx]
 
 	# 生成部队数据
-	var generator = world_map.get("_enemy_generator")
+	var generator: EnemyTroopGenerator = world_view.get_enemy_generator()
 	if generator == null:
 		push_warning("EnemyReinforcement.spawn_batch: EnemyTroopGenerator 未初始化")
 		return null
@@ -87,7 +84,7 @@ static func spawn_batch(world_map: Object, force_tier: int = -1) -> LevelSlot:
 	if force_tier >= 0:
 		tier = force_tier
 	else:
-		var tier_rows: Array = world_map.get("_enemy_tier_ratio_rows") as Array
+		var tier_rows: Array = world_view.get_enemy_tier_ratio_rows()
 		tier = _pick_tier_for_cycle(tier_rows, RunState.cycle_index(), rng)
 
 	var pack: LevelSlot = LevelSlot.new()
@@ -103,7 +100,7 @@ static func spawn_batch(world_map: Object, force_tier: int = -1) -> LevelSlot:
 	level_slots[spawn_pos] = pack
 
 	# 更新 MapSchema slot 标记（以便渲染识别为敌方格）
-	var original_types: Dictionary = world_map.get("_original_slot_types") as Dictionary
+	var original_types: Dictionary = world_view.get_original_slot_types()
 	if not original_types.has(spawn_pos):
 		original_types[spawn_pos] = schema.get_slot(spawn_pos.x, spawn_pos.y)
 	schema.set_slot(spawn_pos.x, spawn_pos.y, MapSchema.SlotType.FUNCTION)
