@@ -59,9 +59,10 @@ func get_level_slots() -> Dictionary:
 	return _wm.get("_level_slots") as Dictionary
 
 
-## 资源 slot 字典
+## 资源 slot 字典（null 兜底为空字典，与旧 EnemyReinforcement 实现保持严格等价）
 func get_resource_slots() -> Dictionary:
-	return _wm.get("_resource_slots") as Dictionary
+	var raw: Variant = _wm.get("_resource_slots")
+	return raw if raw != null else {}
 
 
 ## 玩家单位

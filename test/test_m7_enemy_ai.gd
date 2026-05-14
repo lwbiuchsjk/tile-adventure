@@ -134,28 +134,7 @@ func _test_greedy_upgrade_exhaust_stone() -> void:
 	var village_l1: PersistentSlot = _make_slot(PersistentSlot.Type.VILLAGE, 1)
 	village_l1.owner_faction = Faction.ENEMY_1
 
-	var schema_mock: Node = Node.new()
-	schema_mock.set_meta("persistent_slots", [town_l0, village_l0, village_l1])
-	# 包装成对象：EnemyAI 从 world_map.get("_schema") 读 schema；schema.persistent_slots 访问
-	# 这里简化：直接在 world_mock 上挂一个 Dictionary 模拟 schema
-	# 但 GDScript 的 get() 对 Dictionary vs Node 语义不同；用最小 Node 包装
-	var schema: Object = _make_schema_stub([town_l0, village_l0, village_l1])
-
-	var world_mock: Node = Node.new()
-	world_mock.set("_schema", schema)
-	# 石料账本：初始 5
-	var stone: Array[int] = [5]
-	var try_spend: Callable = func(_faction: int, amount: int) -> bool:
-		if stone[0] < amount:
-			return false
-		stone[0] -= amount
-		return true
-	# _step_greedy_upgrade 通过 has_method("try_spend_stone") + call 调用
-	# Node 没有动态添加方法的原生支持；用一个子类手写
-	world_mock.queue_free()
-	schema_mock.queue_free()
-
-	# 改用自定义 Node 子类实现 try_spend_stone
+	# 用自定义 Node 子类 _MockWorld 实现 try_spend_stone（测试中包进真 WorldView 注入）
 	var world: _MockWorld = _MockWorld.new()
 	world.stone = 5
 	world._schema = _make_schema_stub([town_l0, village_l0, village_l1])
