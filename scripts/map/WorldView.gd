@@ -107,3 +107,93 @@ func try_spend_stone(faction: int, amount: int) -> bool:
 ## 启动敌方移动阶段
 func start_enemy_move_phase() -> void:
 	_wm.call("start_enemy_move_phase")
+
+
+# ─────────────────────────────────────────
+# 渲染读访问（MVP-γ 阶段 2 追加）—— 转发 WorldMap 私有字段
+# 供 WorldMapRenderer 在 _draw 入口缓存热路径成员；WorldView 升格为
+# "世界读取的唯一入口"（AI 与渲染层共用一套只读视图）。
+# ─────────────────────────────────────────
+
+## 探索态可达高亮格集合
+func get_reachable_tiles() -> Dictionary:
+	return _wm.get("_reachable_tiles") as Dictionary
+
+
+## 玩家单位插值绘制位置（像素）
+func get_unit_visual_pos() -> Vector2:
+	return _wm.get("_unit_visual_pos")
+
+
+## 敌方移动子系统（绘制移动标记 / 查询移动态用）
+func get_enemy_movement() -> EnemyMovement:
+	return _wm.get("_enemy_movement") as EnemyMovement
+
+
+## 文字标签字体
+func get_label_font() -> Font:
+	return _wm.get("_label_font") as Font
+
+
+## 当前周期是否含敌方核心（持久 slot 绘制分支）
+func is_current_cycle_has_enemy_core() -> bool:
+	return _wm.get("_current_cycle_has_enemy_core")
+
+
+## 主动 / 被动战斗触发 + 玩家保护区半径（敌方威胁区绘制用）
+func get_battle_trigger_range() -> int:
+	return _wm.get("_battle_trigger_range")
+
+
+## 战斗态是否强制白昼（关卡 slot / 移动标记昼夜分支）
+func is_battle_force_day() -> bool:
+	return _wm.get("_battle_force_day")
+
+
+## 当前战斗会话（战斗叠加层绘制用；非战斗态为 null）
+func get_battle_session() -> BattleSession:
+	return _wm.get("_battle_session") as BattleSession
+
+
+## 战场暗角遮罩是否激活
+func is_battle_zoom_active() -> bool:
+	return _wm.get("_battle_zoom_active")
+
+
+## 战场半径（玩家中心 ±N）
+func get_battle_arena_range() -> int:
+	return _wm.get("_battle_arena_range")
+
+
+## 战场中心格（暗角遮罩挖空中心）
+func get_battle_center_grid() -> Vector2i:
+	return _wm.get("_battle_center_grid")
+
+
+# ─────────────────────────────────────────
+# 渲染辅助方法转发（MVP-γ 阶段 2 追加）—— 转发 WorldMap 方法
+# ─────────────────────────────────────────
+
+## 是否处于战斗态
+func is_in_battle() -> bool:
+	return _wm.call("_is_in_battle")
+
+
+## 世界像素坐标是否落在浓雾内
+func is_in_fog(world_pos: Vector2) -> bool:
+	return _wm.call("_is_in_fog", world_pos)
+
+
+## 取指定格的 LevelSlot（无则 null）
+func get_level_at(pos: Vector2i) -> LevelSlot:
+	return _wm.call("_get_level_at", pos) as LevelSlot
+
+
+## 指定格的敌方包是否正在战斗中
+func is_pack_in_battle(pos: Vector2i) -> bool:
+	return _wm.call("_is_pack_in_battle", pos)
+
+
+## 格坐标 → 像素中心
+func grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
+	return _wm.call("_grid_to_pixel_center", grid_pos)
