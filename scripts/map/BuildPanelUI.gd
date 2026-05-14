@@ -1,5 +1,5 @@
 class_name BuildPanelUI
-extends Node
+extends PanelContainer
 ## 建造面板 UI（M5）
 ##
 ## 设计原文：
@@ -13,6 +13,9 @@ extends Node
 ##
 ## 与 ManageUI 的关系：
 ##   独立面板，职责正交；UI 互斥通过 `is_open` 字段对外暴露
+##
+## 预制件化（MVP-α.5 / 2026-05-14）：节点结构在 res://scenes/ui/BuildPanelUI.tscn；
+## 根类型 Node → PanelContainer（与 ManageUI 同步）；SlotList 内的升级按钮按数据动态生成。
 ##
 ## MVP 限制：
 ##   - 槽位恒 1（PersistentSlot.build_slot_count）
@@ -29,9 +32,6 @@ signal upgrade_requested(slot: PersistentSlot)
 # 状态
 # ─────────────────────────────────────
 
-## 面板根节点
-var _panel: PanelContainer = null
-
 ## 对外暴露：是否正在显示
 var is_open: bool = false
 
@@ -39,73 +39,22 @@ var is_open: bool = false
 var _slots: Array[PersistentSlot] = []
 var _stone_amount: int = 0
 
-## 节点缓存
-var _title_label: Label = null
-var _stone_label: Label = null
-var _list_area: VBoxContainer = null
-var _btn_close: Button = null
+## 节点缓存（@onready 从预制件结构拿）
+@onready var _title_label: Label = $VBox/TitleLabel
+@onready var _stone_label: Label = $VBox/StoneLabel
+@onready var _list_area: VBoxContainer = $VBox/ScrollContainer/SlotList
+@onready var _btn_close: Button = $VBox/CloseButton
 
 
 # ─────────────────────────────────────
 # 初始化
 # ─────────────────────────────────────
 
-## 程序化创建面板并挂载到 CanvasLayer
-func create_ui(ui_layer: CanvasLayer) -> void:
-	_panel = PanelContainer.new()
-	_panel.name = "BuildPanel"
-	_panel.visible = false
-	_panel.set_anchors_and_offsets_preset(
-		Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE
-	)
-	_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_panel.custom_minimum_size = Vector2(460, 560)
-
-	var outer_vbox: VBoxContainer = VBoxContainer.new()
-	outer_vbox.add_theme_constant_override("separation", 8)
-
-	# 标题
-	_title_label = Label.new()
-	_title_label.text = "建造"
-	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title_label.add_theme_font_size_override("font_size", 18)
-	_title_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.30))
-	outer_vbox.add_child(_title_label)
-
-	# 石料数字（顶部，居中）
-	_stone_label = Label.new()
-	_stone_label.text = "石料 0"
-	_stone_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_stone_label.add_theme_font_size_override("font_size", 14)
-	_stone_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.80))
-	outer_vbox.add_child(_stone_label)
-
-	outer_vbox.add_child(_make_separator())
-
-	# slot 列表（可滚动）
-	var scroll: ScrollContainer = ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_list_area = VBoxContainer.new()
-	_list_area.name = "SlotList"
-	_list_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_list_area.add_theme_constant_override("separation", 4)
-	scroll.add_child(_list_area)
-	outer_vbox.add_child(scroll)
-
-	outer_vbox.add_child(_make_separator())
-
-	# 底部关闭按钮
-	_btn_close = Button.new()
-	_btn_close.text = "关闭 [B]"
-	_btn_close.custom_minimum_size = Vector2(0, 32)
-	_btn_close.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-	_btn_close.add_theme_color_override("font_hover_color", Color(0.75, 0.75, 0.75))
+## 预制件挂到 ui_layer 后自动调用；接关闭按钮信号 + 默认隐藏
+func _ready() -> void:
+	visible = false
+	is_open = false
 	_btn_close.pressed.connect(_on_close_pressed)
-	outer_vbox.add_child(_btn_close)
-
-	_panel.add_child(outer_vbox)
-	ui_layer.add_child(_panel)
 
 
 # ─────────────────────────────────────
@@ -120,21 +69,18 @@ func open(slots: Array[PersistentSlot], stone: int) -> void:
 	_stone_amount = stone
 	is_open = true
 	refresh(_slots, _stone_amount)
-	_panel.visible = true
+	visible = true
 
 
 ## 关闭面板
 func close() -> void:
-	if _panel != null:
-		_panel.visible = false
+	visible = false
 	is_open = false
 	closed.emit()
 
 
 ## 刷新：重建列表项
 func refresh(slots: Array[PersistentSlot], stone: int) -> void:
-	if _panel == null:
-		return
 	_slots = slots
 	_stone_amount = stone
 
@@ -250,15 +196,8 @@ func _make_slot_row(slot: PersistentSlot, stone: int) -> Control:
 
 
 # ─────────────────────────────────────
-# 工具
+# 内部回调
 # ─────────────────────────────────────
-
-## 构造面板分隔线（复用 ManageUI 同款风格）
-func _make_separator() -> HSeparator:
-	var sep: HSeparator = HSeparator.new()
-	sep.add_theme_constant_override("separation", 4)
-	return sep
-
 
 ## 底部关闭按钮点击回调：仅关闭面板，不做其他处理
 func _on_close_pressed() -> void:

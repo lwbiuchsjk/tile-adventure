@@ -977,11 +977,10 @@ func _init_subsystems() -> void:
 	_manage_ui.equip_requested.connect(_on_equip_troop)
 	_manage_ui.use_item_requested.connect(_on_use_item)
 
-	# 建造面板子系统（M5）
-	_build_panel_ui = BuildPanelUI.new()
+	# 建造面板子系统（M5）—— MVP-α.5：切预制件实例化
+	_build_panel_ui = preload("res://scenes/ui/BuildPanelUI.tscn").instantiate()
 	_build_panel_ui.name = "BuildPanelUI"
-	add_child(_build_panel_ui)
-	_build_panel_ui.create_ui(ui_layer)
+	ui_layer.add_child(_build_panel_ui)
 	_build_panel_ui.closed.connect(_on_build_panel_closed)
 	_build_panel_ui.upgrade_requested.connect(_on_upgrade_requested)
 
