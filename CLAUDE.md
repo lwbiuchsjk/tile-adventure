@@ -213,6 +213,69 @@ Godot 4.6，GDScript，Git 版本控制
 
 桌面验证未通过期间发现问题可 `git reset --hard HEAD~1` 撤回；已 push 后则需 `git revert HEAD` + 重新推送，多一步操作。
 
+## 测试与 Godot 调用
+
+扩展共享 CLAUDE.md「测试流程」节，给出本项目具体的跑测命令。Godot 可执行路径硬编码在 `tools/run_godot.ps1` 内（`E:\Godot\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64_console.exe`），对应 WSL 路径 `/mnt/e/Godot/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe`。
+
+### 1. 桌面 / 编辑器场景
+
+用户在 Windows 端跑：
+```powershell
+tools/run_godot.ps1 [godot 参数...]
+```
+
+### 2. WSL headless / agent 委派场景
+
+agent 不能调用 `.ps1`（bash 解析失败 / `powershell.exe` 在 WSL 下 `interop socket 错误`），需要**直接调用 Windows .exe** + **传 Windows 风格路径**给 `--path`：
+
+```bash
+GODOT_EXE="/mnt/e/Godot/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe"
+
+# headless parse 验证（启动到 _ready 检查 GDScript 编译 + 初始化）
+"$GODOT_EXE" --headless --path "E:\Godot\project\tile-adventure" --quit
+
+# 跑单个测试套件
+"$GODOT_EXE" --headless --path "E:\Godot\project\tile-adventure" -s "test/test_mX.gd"
+```
+
+**关键约束**：
+- `--path` 必须传 **Windows 路径**（`E:\Godot\project\tile-adventure`），不是 Linux 路径（`/mnt/e/...`）—— Godot.exe 不识别 mount 路径
+- WSL 下走 `interop socket 错误` 时，**不要试 `powershell.exe -File ...`**，直接调 .exe 是稳定路径
+
+### 3. headless parse 通过判据
+
+启动后 stdout 出现 `[WorldMap] 自动 seed = NNNN` 即代表 parse + `_ready` 跑通；`WARNING: ObjectDB instances leaked at exit` 是退出时的资源释放警告，与本次改动无关，可忽略。
+
+### 4. 测试套件清单（当前）
+
+`test/` 下共 8 个测试套件，全部 `extends SceneTree`，独立可跑：
+
+- `test_m1_data_layer.gd` —— M1 数据层（配置加载 / 字段校验）
+- `test_m2_map_gen.gd` —— M2 PCG 地图生成
+- `test_m3_turn_framework.gd` —— M3 回合框架（TurnManager + TickRegistry）
+- `test_m4_occupation.gd` —— M4 占据系统
+- `test_m5_build.gd` —— M5 升级建造
+- `test_m6_production.gd` —— M6 产出 / 背包
+- `test_m7_enemy_ai.gd` —— M7 敌方 AI（含 P0 第二阶段重写后的 _pick_target_for）
+- `test_m8_victory_judge.gd` —— M8 胜负判定（含 cycle 守卫 + check_enemy_packs_clear 兜底胜利）
+
+**测试覆盖说明**：M1-M8 是城建锚实装阶段遗留的命名，对应当时的模块拆分；本项目演进后实际覆盖面已超出原 M1-M8 范畴（如 BattleHUD / DayNightState / RunState 等无独立测试）。后续 MVP-ε 规范扫尾时可考虑补 headless 测试（见 [[../tile-advanture-design/代码健康度回看/03_规范维度报告#P3]]）。
+
+### 5. 跑测命令模板（验证链 4 步使用）
+
+```bash
+# 步骤 2: Headless parse
+"$GODOT_EXE" --headless --path "E:\Godot\project\tile-adventure" --quit 2>&1 | tail -5
+
+# 步骤 3: 测试套件回归（M1-M8 全套，一次循环）
+for t in test_m1_data_layer test_m2_map_gen test_m3_turn_framework test_m4_occupation \
+         test_m5_build test_m6_production test_m7_enemy_ai test_m8_victory_judge; do
+  RESULT=$("$GODOT_EXE" --headless --path "E:\Godot\project\tile-adventure" -s "test/$t.gd" 2>&1 \
+           | grep -E "全部通过|项失败" | tail -1)
+  printf "%-30s %s\n" "$t" "$RESULT"
+done
+```
+
 # 当前进度
 
 > 进度详情维护在 `tile-advanture-design/进度/` 子目录；本节仅保留索引行（每条 ≤20 字状态摘要）。
