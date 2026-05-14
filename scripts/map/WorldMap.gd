@@ -1584,11 +1584,19 @@ func _apply_phase_alpha_to_shader() -> void:
 ##   force：是否强制启动（force-day fade in/out 用 true 跳过守卫）
 ##
 ## 同值守卫：当前 alpha 与目标差 < 0.001 时跳过（避免重复 Tween）；force=true 时不守卫
+##
+## BUG 修复（2026-05-13）：先 kill 旧 tween，再判断 early return；否则 in-flight tween
+## 会绕过守卫继续跑。复现场景：被动战斗夜晚胜利时 _resync 启动 tween_to_NIGHT（force=true，
+## create_tween 异步未 step），紧接切回合触发 _on_day_night_phase_changed(DAY) 调本函数
+## (force=false)，此时 _phase_alpha 仍是 0（force-day fade 终态），target=0，diff < 0.001
+## → 早 return → 漏 kill tween_to_NIGHT → 玩家看到夜晚遮罩 fade in 后永不消失。
 func _fade_phase_alpha(target: float, duration: float, force: bool) -> void:
-	if not force and absf(_phase_alpha - target) < 0.001:
-		return
+	# 先 kill 旧 tween：避免 in-flight tween 绕过守卫继续把 _phase_alpha 推向旧 target
 	if _phase_alpha_tween != null and _phase_alpha_tween.is_valid():
 		_phase_alpha_tween.kill()
+	# 同值守卫（kill 之后判断）：当前 alpha 已经 == target 且 force=false → 不创建新 tween
+	if not force and absf(_phase_alpha - target) < 0.001:
+		return
 	_phase_alpha_tween = create_tween()
 	_phase_alpha_tween.tween_method(_set_phase_alpha_value, _phase_alpha, target, duration) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
