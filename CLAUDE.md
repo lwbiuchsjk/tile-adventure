@@ -283,7 +283,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 已落地（α.5 = 6 UI 预制件化 + Theme 扩展，2026-05-14，7 阶段 commit），后续 β/γ/δ/ε 4 批待启动
+- [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 / β 已落地（β = WorldView facade，EnemyAI/EnemyReinforcement 字符串穿透清零，2026-05-14，3 commit），后续 γ/δ/ε 3 批待启动
 
 ## 预启动（方向已认可，等启动时机）
 
