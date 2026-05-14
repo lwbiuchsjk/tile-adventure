@@ -10,7 +10,12 @@ extends CanvasLayer
 ## 若组件挂在 WorldMap 下会被一起销毁；autoload 让组件跨场景持久存在，
 ## 黑屏 phase 期间正好覆盖 reload 的全部加载耗时。
 ##
-## 节点结构（_ready 内代码构造，不依赖 .tscn）：
+## 预制件化（MVP-α.5 / 2026-05-14）：节点结构在 res://scenes/ui/OverlayTransitionUI.tscn；
+## project.godot autoload 路径从 .gd 改 .tscn（脚本附在 CanvasLayer 根上，行为等价）；
+## 关键时序保留：_ready 内 _blackout.modulate.a = 1.0 仍能在 main_scene 第一帧前生效，
+## 掩盖应用启动到 main_scene `_ready` 之间的加载耗时。
+##
+## 节点结构（与 .tscn 一一对应）：
 ##   self (CanvasLayer, layer=1000)
 ##   └─ Root (Control, anchor=full_rect)
 ##      ├─ BlackoutRect (ColorRect, color=Color(0,0,0,1))
@@ -68,12 +73,12 @@ const PHASE_D: int = 4   # fade out
 # 节点引用 / 状态
 # ─────────────────────────────────────
 
-var _root: Control = null
-var _blackout: ColorRect = null
-var _icon_row: HBoxContainer = null
-var _icon_label: Label = null
-var _count_label: Label = null
-var _lines_box: VBoxContainer = null
+@onready var _root: Control = $Root
+@onready var _blackout: ColorRect = $Root/BlackoutRect
+@onready var _icon_row: HBoxContainer = $Root/Center/VBox/IconRow
+@onready var _icon_label: Label = $Root/Center/VBox/IconRow/IconLabel
+@onready var _count_label: Label = $Root/Center/VBox/IconRow/CountLabel
+@onready var _lines_box: VBoxContainer = $Root/Center/VBox/Lines
 
 var _phase: int = PHASE_IDLE
 var _line_labels: Array[Label] = []
@@ -87,11 +92,14 @@ var _initial_play_done: bool = false  # 首次启动游戏时的过渡是否已�
 # 生命周期
 # ─────────────────────────────────────
 
+## autoload 加载后调用，main_scene 第一帧前置黑屏掩盖加载耗时
+##
+## 关键时序：_blackout.modulate.a = 1.0 必须在 main_scene._ready() 第一次绘制前生效。
+## autoload 加载顺序早于 main_scene，CanvasLayer layer=1000 渲染在最顶，
+## 配合 process_mode = ALWAYS 不受 pause 影响。
 func _ready() -> void:
-	layer = 1000
 	# autoload 不应被场景 pause / process_mode 影响
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	_build_ui_tree()
 	# 应用启动即黑屏起手；等首次 WorldMap.notify_world_ready 后才推进
 	# 设计意图：掩盖应用启动到首场景 _ready 之间的加载耗时
 	_root.visible = true
@@ -102,60 +110,6 @@ func _ready() -> void:
 	_lines_box.modulate.a = 1.0
 	_icon_row.modulate.a = 0.0
 	_phase = PHASE_IDLE
-
-
-## 构造节点树（与 EventPanelUI 风格一致：纯代码，不依赖 .tscn）
-func _build_ui_tree() -> void:
-	_root = Control.new()
-	_root.name = "Root"
-	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_root.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(_root)
-
-	_blackout = ColorRect.new()
-	_blackout.name = "BlackoutRect"
-	_blackout.color = Color(0, 0, 0, 1)
-	_blackout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_blackout.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(_blackout)
-
-	var center: CenterContainer = CenterContainer.new()
-	center.name = "Center"
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(center)
-
-	var vbox: VBoxContainer = VBoxContainer.new()
-	vbox.name = "VBox"
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 24)
-	center.add_child(vbox)
-
-	_icon_row = HBoxContainer.new()
-	_icon_row.name = "IconRow"
-	_icon_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	_icon_row.add_theme_constant_override("separation", 12)
-	vbox.add_child(_icon_row)
-
-	_icon_label = Label.new()
-	_icon_label.name = "IconLabel"
-	_icon_label.text = ICON_FALLBACK
-	_icon_label.add_theme_font_size_override("font_size", ICON_FONT_SIZE)
-	_icon_label.add_theme_color_override("font_color", LINE_COLOR)
-	_icon_row.add_child(_icon_label)
-
-	_count_label = Label.new()
-	_count_label.name = "CountLabel"
-	_count_label.text = "× 0"
-	_count_label.add_theme_font_size_override("font_size", COUNT_FONT_SIZE)
-	_count_label.add_theme_color_override("font_color", LINE_COLOR)
-	_icon_row.add_child(_count_label)
-
-	_lines_box = VBoxContainer.new()
-	_lines_box.name = "Lines"
-	_lines_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	_lines_box.add_theme_constant_override("separation", 12)
-	vbox.add_child(_lines_box)
 
 
 # ─────────────────────────────────────
