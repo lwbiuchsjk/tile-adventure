@@ -4099,4 +4099,3 @@ func _load_json(map_cfg: Dictionary) -> void:
 	_schema = MapLoader.load_from_file(path)
 	if _schema == null:
 		push_error("WorldMap: JSON 地图加载失败，路径：" + path)
-
