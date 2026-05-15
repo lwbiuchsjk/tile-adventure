@@ -249,64 +249,10 @@ const EXPLORE_HUD_OFFSET_PX: int = EXPLORE_HUD_BOTTOM_RESERVE_PX / 2
 ## Web 端 ThemeDB.fallback_font 仅含 ASCII，无 OS 字体回退，所有 draw_string() 直绘必须显式用本字体
 const MAIN_FONT: Font = preload("res://assets/font/main_font.tres")
 
-## 入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）：暗夜遮罩 + 视野半径 + 闪烁敌人
-## 设计文档：tile-advanture-design/夜晚视野_MVP.md
-## CanvasLayer 层数：5（介于世界 layer=0 与 UILayer=10 之间，让 HUD 不被夜晚遮罩压暗）
-const NIGHT_OVERLAY_CANVAS_LAYER: int = 5
-## 玩家队伍光源照亮半径（格数）—— 在屏幕像素空间转换时 × TILE_SIZE × camera.zoom
-const NIGHT_VISION_RADIUS_GRIDS: float = 3.5
-## 浓雾过渡带宽度（格数）—— shader smoothstep 衰减带，让光源边缘平滑而非硬切
-const NIGHT_FOG_FALLOFF_GRIDS: float = 0.75
-## 昼夜切换 fade 时长（秒）—— DAY ↔ NIGHT 平滑过渡
-const DAY_NIGHT_FADE_DURATION: float = 0.6
-## 战斗强制白天 fade 时长（秒）—— 与战斗 zoom BATTLE_ZOOM_TWEEN_DURATION 同步
-const BATTLE_FORCE_DAY_DURATION: float = 0.3
-## 浓雾外敌人闪烁参数 —— alpha = BASE + AMP * (sin(2πt/PERIOD + phase) * 0.5 + 0.5)
-## 峰值 = BASE + AMP；为保证不越界，需 BASE + AMP ≤ 1.0
-const BLINK_BASE_ALPHA: float = 0.35
-const BLINK_AMP: float = 0.45
-const BLINK_PERIOD: float = 1.6
-## 夜晚遮罩 ShaderMaterial 资源（preload 让编辑期校验路径，与 MAIN_FONT 风格一致）
-## 2026-05-11 跑测修复：shader 从 vec4[N] 多光源数组简化为单光源 UV 空间；
-##   多光源扩展接口（玩家方城建 slot 等）记入待跟踪事项索引 §十一 P3
-const NIGHT_OVERLAY_MATERIAL: ShaderMaterial = preload("res://assets/shader/night_overlay.tres")
+## MVP-δ 阶段 2：夜晚视野相关常量 + FogSignalNode 内嵌类整体迁到 NightVisionLayer.gd
+## 设计文档：tile-advanture-design/代码健康度回看/MVP-δ_拆分批2.md
+## 原区块：入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）—— 含 11 常量 + 内嵌 FogSignalNode 类
 
-## 入口 4 后段第 1 份（夜晚视野 MVP，codex P0 修复 2026-05-11）：
-## 浓雾外敌人信号图层 CanvasLayer 层数 = 6（在夜晚遮罩 layer=5 之上、UILayer=10 之下）
-## 信号菱形屏幕像素半径 = TILE_SIZE × camera.zoom.x × FOG_SIGNAL_DIAMOND_SCALE
-## 选 0.30 让信号比正常视野内菱形略小，强化"远处只是模糊信号"的语义
-const FOG_SIGNAL_CANVAS_LAYER: int = 6
-const FOG_SIGNAL_DIAMOND_SCALE: float = 0.30
-
-
-# ─────────────────────────────────────────
-# 内嵌类型：浓雾外敌人信号节点（夜晚视野 MVP codex P0 修复）
-# ─────────────────────────────────────────
-
-## 浮层节点：CanvasLayer=6 内含的 Node2D，专门画浓雾外敌人闪烁信号
-## 自己的 _draw 调回宿主 WorldMap.collect_fog_signals 拿数据 → 画屏幕空间菱形
-## 与世界层渲染解耦，绕开 CanvasLayer=5 夜晚遮罩黑幕的遮挡
-class FogSignalNode extends Node2D:
-	## 宿主 WorldMap 引用（弱引用语义；WorldMap 退出场景时整个浮层一起 free）
-	var world_map: Node = null
-
-	func _draw() -> void:
-		if world_map == null:
-			return
-		var signals: Array = world_map.collect_fog_signals()
-		for s_v in signals:
-			var s: Dictionary = s_v as Dictionary
-			var center: Vector2 = s.get("center", Vector2.ZERO) as Vector2
-			var half: float = s.get("half", 8.0) as float
-			var color: Color = s.get("color", Color.RED) as Color
-			# 屏幕空间小菱形：四顶点取 (center ± half) 的上下左右
-			var pts: PackedVector2Array = PackedVector2Array([
-				Vector2(center.x, center.y - half),
-				Vector2(center.x + half, center.y),
-				Vector2(center.x, center.y + half),
-				Vector2(center.x - half, center.y),
-			])
-			draw_colored_polygon(pts, color)
 
 # ─────────────────────────────────────────
 # 节点引用
@@ -419,8 +365,9 @@ var _is_moving: bool = false
 ## 当前移动动画 Tween 引用（用于防止重复创建）
 var _move_tween: Tween = null
 
-## 角色数据列表（多角色支持）
-var _characters: Array[CharacterData] = []
+## MVP-δ 阶段 2：玩家角色 / 队伍状态 / coma 字段全部迁到 PlayerLifecycle
+## _characters / _total_max_hp / _leader_display_name / _is_in_coma /
+## _coma_hp_threshold_ratio / _coma_duration_sec 经 _player_lifecycle 访问
 
 ## 关卡 Slot 字典 {Vector2i: LevelSlot}
 var _level_slots: Dictionary = {}
@@ -461,7 +408,7 @@ var _pending_camp_manage_open: bool = false
 ## 单局评分追踪
 var _camp_count: int = 0
 var _total_hp_lost: int = 0
-var _total_max_hp: int = 0
+## _total_max_hp 字段定义迁到 PlayerLifecycle（MVP-δ 阶段 2）
 var _score_config: Dictionary = {}
 
 ## 资源点字典 {Vector2i: ResourceSlot}
@@ -519,23 +466,13 @@ var _battle_zoom_tween: Tween = null
 ## 在 _start_battle_camera 设置；_end_battle_camera 不清——战场结束后压暗自然不画
 var _battle_center_grid: Vector2i = Vector2i.ZERO
 
-## 入口 4 后段第 1 份（夜晚视野 MVP）状态
-## 设计文档：tile-advanture-design/夜晚视野_MVP.md
-## CanvasLayer 挂在 layer=5（介于世界与 UI 之间），内含全屏 ColorRect 用 night_overlay shader
-var _night_overlay_layer: CanvasLayer = null
-var _night_overlay_rect: ColorRect = null
-## 当前 shader 的 phase_alpha 因子（0=白天 / 1=夜晚 / 中间值 = Tween 进行中）
-var _phase_alpha: float = 0.0
-## 昼夜 fade Tween 引用（任意时刻只允许一个 Tween）
-var _phase_alpha_tween: Tween = null
-## 战斗中强制白天遮罩（force-day）
-## true 期间所有 phase_changed 仅更新 _pending_post_battle_phase，不动 Tween
-var _battle_force_day: bool = false
-## 战斗中收到的最后 phase 切换（DAY=0 / NIGHT=1）；战斗结束时按此 fade 回去
-var _pending_post_battle_phase: int = 0
-## 入口 4 后段第 1 份（codex P0 修复）：浓雾外敌人信号浮层（CanvasLayer=6）+ 内含 Node2D 画屏幕空间菱形
-var _fog_signal_layer: CanvasLayer = null
-var _fog_signal_node: FogSignalNode = null
+## MVP-δ 阶段 2：夜晚视野子系统（原 6 字段 + FogSignalNode 内嵌类整体迁到 NightVisionLayer.gd）
+##
+## NightVisionLayer 是 Node 子节点（持 CanvasLayer=5 夜晚遮罩 + CanvasLayer=6 信号浮层）
+## 在 _init_subsystems 创建一次、跨周期 / 战斗复用；场景退出时 clear() 杀 Tween + 清 sink
+## 战斗开始 / 结束由 _start_battle_camera / _end_battle_camera 调 set_battle_force_day_on /
+##   resync_to_post_battle_state；浓雾像素判定经 WorldView.is_in_fog 转发到本节点
+var _night_vision: NightVisionLayer = null
 
 ## MVP-γ 阶段 1：战斗瞬时视觉态载体（3 字典：偏移 / 渐隐 / HP 补间）
 ## 由 BattleAnimDirector 写、_draw_battle_* 读；跨战斗复用，战斗结束 clear()
@@ -593,19 +530,13 @@ var _label_font: Font = null
 # ─────────────────────────────────────────
 # B 重生周期 MVP — 整局态字段
 # ─────────────────────────────────────────
+## MVP-δ 阶段 2：原 _leader_display_name / _is_in_coma / _coma_hp_threshold_ratio
+## / _coma_duration_sec 字段定义全部迁到 PlayerLifecycle.gd
 
-## 当前队长显示名（来自 RunState.draw_new_leader 的 hero_pool 行 name 字段）
-## 用于昏迷文字 / 重生介绍占位文案；HUD 显示也读这里
-var _leader_display_name: String = ""
-
-## 昏迷态守门：true 期间锁所有输入，等 SceneTreeTimer 走完后 reload 场景
-var _is_in_coma: bool = false
-
-## 队长昏迷阈值（current_hp / max_hp ≤ 该值触发昏迷）；run_config.csv 注入
-var _coma_hp_threshold_ratio: float = 0.2
-
-## 昏迷遮罩 / 文字停留秒数；run_config.csv 注入
-var _coma_duration_sec: float = 1.5
+## MVP-δ 阶段 2：玩家 lifecycle 子系统（_characters / 队长 / coma 状态）
+## 由 _ready 在 _init_player 调用前创建 + setup（runtime_cfg 内含 coma 阈值与时长）
+## 信号接线：coma_triggered / defeat_triggered / respawn_intro_ready 三个 sink
+var _player_lifecycle: PlayerLifecycle = null
 
 # ─────────────────────────────────────────
 # 渲染常量（MVP-γ 阶段 2：随 _draw 区块迁回；WorldMapRenderer 经 const 别名引用）
@@ -795,8 +726,8 @@ func _ready() -> void:
 	var narrative_rows: Array = ConfigLoader.load_csv(CONFIG_NARRATIVE_POOL)
 	NarrativeProvider.ensure_loaded(narrative_rows)
 	var max_cycles_v: int = int(run_cfg.get("max_cycles", "3"))
-	_coma_duration_sec = float(run_cfg.get("coma_duration_sec", "1.5"))
-	_coma_hp_threshold_ratio = float(run_cfg.get("coma_hp_threshold_ratio", "0.2"))
+	# MVP-δ 阶段 2：coma_duration_sec / coma_hp_threshold_ratio 从 run_cfg 注入移到
+	# PlayerLifecycle.setup 内（_player_lifecycle 在 _init_player 调用点创建）
 	# rng 传 null：RunState 内部 randomize 一个独立 RNG，不被地图 PCG seed 干扰
 	# （重生抽队长应与地图 PCG 解耦，否则同 seed 重开会抽到同一队长序列）
 	RunState.ensure_initialized(max_cycles_v, hero_pool_rows, null)
@@ -936,8 +867,17 @@ func _ready() -> void:
 	_unit.max_movement = default_movement
 	_unit.current_movement = default_movement
 
-	# 初始化玩家角色和部队（多角色，从配置读取）
-	_init_player(player_cfg)
+	# MVP-δ 阶段 2：玩家 lifecycle 子系统创建 + setup（原 _init_player 主体迁入）
+	# 必须在 _turn_manager 创建之前——setup 内 emit respawn_intro_ready / coma_triggered 等
+	# 信号目前不立即触发，但 sink 接线要在 setup 之前完成，否则首次 emit 会丢
+	_player_lifecycle = PlayerLifecycle.new()
+	_player_lifecycle.name = "PlayerLifecycle"
+	add_child(_player_lifecycle)
+	# Sink 接线：3 个信号让 PlayerLifecycle 不直接依赖 OverlayTransitionUI / VictoryJudge
+	_player_lifecycle.coma_triggered.connect(_on_player_coma_triggered)
+	_player_lifecycle.defeat_triggered.connect(_on_player_defeat_triggered)
+	_player_lifecycle.respawn_intro_ready.connect(_on_player_respawn_intro_ready)
+	_player_lifecycle.setup(player_cfg, run_cfg)
 
 	# 视觉位置初始化到起点像素中心
 	_unit_visual_pos = _grid_to_pixel_center(_start_pos)
@@ -988,17 +928,9 @@ func _ready() -> void:
 	_camera.offset = Vector2(0, float(EXPLORE_HUD_OFFSET_PX))
 
 	# 初始化子系统
+	# MVP-δ 阶段 2：NightVisionLayer 创建 + setup 已迁到 _init_subsystems 末尾
+	#   原 _setup_night_overlay / _setup_fog_signal_layer / set_process 调用整体移除
 	_init_subsystems()
-
-	# 入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）：挂载夜晚遮罩 CanvasLayer
-	# 必须在 _init_subsystems 之后——后者已通过 DayNightState.register_phase_changed_sink
-	# 注册了 _on_day_night_phase_changed；本函数挂载完节点后，sink 即可驱动 fade
-	# set_process(true) 启用每帧 update（默认 Node 自动启用，显式声明意图）
-	_setup_night_overlay()
-	# 入口 4 后段第 1 份（codex P0 修复）：紧跟挂载浓雾外敌人信号浮层
-	# 必须在 _setup_night_overlay 之后——layer=6 排在 layer=5 之上才能盖过黑幕
-	_setup_fog_signal_layer()
-	set_process(true)
 
 	# 初始化地图标签字体：使用顶部 const MAIN_FONT（preload 形式，编辑期校验路径）
 	_label_font = MAIN_FONT
@@ -1017,7 +949,7 @@ func _ready() -> void:
 	#   - reload 触发的新场景：_init_player 内已调 notify_world_ready 推进过渡，本路径跳过
 	# OverlayTransitionUI _ready 时已黑屏 alpha=1，掩盖应用启动到此处的全部加载耗时
 	if not OverlayTransitionUI.is_initial_play_done():
-		var line: String = _format_respawn_line_for_current_leader()
+		var line: String = _player_lifecycle.format_respawn_line_for_current_leader()
 		var lines: PackedStringArray = PackedStringArray([line])
 		# 火苗团数 = 过渡完成后的玩家总命数；游戏开始无消耗 → 当前 respawns_left + 1（含当前队长）
 		# 例：max_cycles=3, _cycle_index=0 → respawns_left=2 → 显示 3 团火苗
@@ -1058,12 +990,11 @@ func _exit_tree() -> void:
 	TickRegistry.unregister(_on_faction_tick)
 	TickRegistry.unregister(_on_build_tick)
 	VictoryJudge.clear_sink()
-	# D MVP：清理昼夜监听 + sink，避免跨场景残留 connect / 悬空 Callable
-	DayNightState.clear_sinks()
-	# 入口 4 后段第 1 份（夜晚视野 MVP）：清理 fade Tween，避免场景退出后悬空 Callable 触发
-	if _phase_alpha_tween != null and _phase_alpha_tween.is_valid():
-		_phase_alpha_tween.kill()
-	_phase_alpha_tween = null
+	# MVP-δ 阶段 2：NightVisionLayer.clear 内部清 DayNightState sinks + 杀 _phase_alpha_tween
+	# WorldMap 自己注册的 phase_changed sink（_on_day_night_phase_changed）也一并被
+	# DayNightState.clear_sinks() 清掉（静态全局清理）
+	if _night_vision != null:
+		_night_vision.clear()
 	# B 重生周期 MVP：清理周期推进 sink；不清整局态（_cycle_index / _used_hero_ids 跨场景持久）
 	# 整局态 reset 由 _on_restart_pressed 显式触发
 	RunState.clear_sinks()
@@ -1157,6 +1088,15 @@ func _init_subsystems() -> void:
 	# MVP-γ 阶段 2：渲染层注入 —— WorldView（探索态只读入口）+ BattleViewState（战斗态）
 	# 均已在本函数前文创建（_world_view / _battle_view），此处一次性注入，跨战斗复用
 	_renderer.setup(_world_view, _battle_view)
+
+	# MVP-δ 阶段 2：夜晚视野子系统（NightVisionLayer）—— 子 Node，持 CanvasLayer=5 / =6 浮层
+	# 注入 turn_manager / camera / world_view / tile_size + 浓雾外信号颜色（敌方 slot / 移动色）
+	# setup 内挂载 CanvasLayer + 注册 DayNightState phase_changed sink
+	_night_vision = NightVisionLayer.new()
+	_night_vision.name = "NightVisionLayer"
+	add_child(_night_vision)
+	_night_vision.setup(_turn_manager, _camera, _world_view, TILE_SIZE,
+		ENEMY_SLOT_COLOR, ENEMY_MOVE_COLOR)
 
 	# 入口 4 MVP（2026-05-09）：探索态行动栏 HBoxContainer（攻击 + 扎营平行排布）
 	# 居中屏幕底部偏上；child 数 0 / 1 / 2 都自然布局
@@ -1292,8 +1232,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	# 动画播放中、战斗确认中、敌方移动中、管理 / 建造 / 事件面板打开中、扎营中、昏迷过渡中或流程结束时锁定所有输入
 	# 事件面板（F MVP）：玩家未确认事件前禁止地图点击 / 空格扎营，避免叠加触发
-	# 昏迷过渡（B MVP）：_is_in_coma=true 期间 reload 场景已排队，不允许任何操作
-	if _game_finished or _is_moving or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open or _is_in_coma:
+	# 昏迷过渡（B MVP）：_player_lifecycle.is_in_coma()=true 期间 reload 场景已排队，不允许任何操作
+	if _game_finished or _is_moving or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open or _player_lifecycle.is_in_coma():
 		return
 
 	# 鼠标左键点击：移动单位（需要补给 > 0）
@@ -1400,16 +1340,10 @@ func _start_battle_camera(battle_center: Vector2i) -> void:
 	_battle_zoom_tween.tween_property(_camera, "rotation", BATTLE_TILT_RAD, BATTLE_ZOOM_TWEEN_DURATION) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
-	# 入口 4 后段第 1 份（夜晚视野 MVP）：战斗中强制白天遮罩
-	# 记录战斗开始前的目标 phase（用于战斗结束时回到原状态）；fade 出夜晚遮罩到 alpha=0
-	# 0.3s 与 zoom Tween 同步完成；force=true 表示无视 _battle_force_day 限制（本路径就是要设它）
-	_pending_post_battle_phase = int(DayNightState.current(_turn_manager))
-	_battle_force_day = true
-	_fade_phase_alpha(0.0, BATTLE_FORCE_DAY_DURATION, true)
-	# 跑测修复（2026-05-11 第 2 轮）：force-day 启动时强制清浮层信号
-	# 与 phase_changed 边沿触发同理——避免战斗触发瞬间浮层菱形残留
-	if _fog_signal_node != null:
-		_fog_signal_node.queue_redraw()
+	# MVP-δ 阶段 2：战斗强制白天 fade —— NightVisionLayer 自管理 pending_post_battle_phase
+	# + force_day flag + Tween + 浮层清空，WorldMap 一行调用即可
+	if _night_vision != null:
+		_night_vision.set_battle_force_day_on()
 
 
 ## 入口 4 MVP：战斗结束 Camera zoom 回归 + 镜头回到队长（_on_battle_session_ended 开头调用）
@@ -1419,9 +1353,10 @@ func _start_battle_camera(battle_center: Vector2i) -> void:
 ##   如之后则 _unit.position 已是战斗结束最终位置；如之前则可能仍是开战时位置。
 ##   当前选择：在 _on_battle_session_ended 顶部调用，与 _battle_hud.hide_hud 同时机
 func _end_battle_camera() -> void:
-	# 入口 4 后段第 1 份（codex P1-4 修复）：force-day 解除前置——无论后续 early return 触发与否，
-	# 夜晚状态恢复都要执行；否则 _battle_zoom_active=false / _camera==null 异常路径下 force-day 卡死
-	_resync_night_overlay_to_post_battle_state()
+	# MVP-δ 阶段 2：force-day 解除前置（codex P1-4 历史修复语义保留）—— NightVisionLayer 自管理
+	# 无论后续 _battle_zoom_active=false / _camera==null 异常路径，本调用总会跑完
+	if _night_vision != null:
+		_night_vision.resync_to_post_battle_state()
 	if not _battle_zoom_active:
 		return
 	_battle_zoom_active = false
@@ -1442,350 +1377,16 @@ func _end_battle_camera() -> void:
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 
-## 入口 4 后段第 1 份（codex P1-4 修复）：抽出夜晚遮罩状态恢复 helper
+## MVP-δ 阶段 2：以下 17 个夜晚视野相关函数 + FogSignalNode 内嵌类整体迁到 NightVisionLayer.gd
 ##
-## 在 _end_battle_camera 顶部调用，先于所有 early return；保证 force-day 总能被解除
-## 即使 _battle_zoom_active=false 或 _camera==null 也走完整的"解除 + fade 回正确 phase"逻辑
-func _resync_night_overlay_to_post_battle_state() -> void:
-	if not _battle_force_day:
-		return
-	_battle_force_day = false
-	var resync_target: float = 1.0 if _pending_post_battle_phase == int(DayNightState.Phase.NIGHT) else 0.0
-	_fade_phase_alpha(resync_target, DAY_NIGHT_FADE_DURATION, true)
-	# 跑测修复（2026-05-11 第 2 轮）：force-day 解除时强制刷浮层
-	# 退战回到夜晚时让浮层重新渲染信号；退战回到白天时让浮层清空
-	if _fog_signal_node != null:
-		_fog_signal_node.queue_redraw()
-
-
-## 入口 4 后段第 1 份（夜晚视野 MVP，2026-05-11）：挂载夜晚遮罩 CanvasLayer
+## 迁入清单（设计原文：tile-advanture-design/代码健康度回看/MVP-δ_拆分批2.md §阶段 2）：
+##   _resync_night_overlay_to_post_battle_state → NightVisionLayer.resync_to_post_battle_state
+##   _setup_night_overlay / _setup_fog_signal_layer → NightVisionLayer.setup 内联实装
+##   collect_fog_signals / _process / _update_night_shader_uniforms / _player_light_world_center
+##   _world_to_screen / _apply_phase_alpha_to_shader / _fade_phase_alpha / _set_phase_alpha_value
+##   _is_phase_alpha_tween_active / _compute_blink_alpha / _is_in_fog / _need_blinking_redraw
 ##
-## 层级关系：世界 layer=0 → night_overlay layer=5 → UILayer layer=10
-## ColorRect 默认 mouse_filter = MOUSE_FILTER_STOP 会吞下输入 → 改为 IGNORE
-##
-## ShaderMaterial 资源通过 const 在文件顶 preload，编辑期校验路径；
-## duplicate() 是为了让每个 WorldMap 实例独立持有 shader 参数副本，
-## 避免跨场景 reload 时 set_shader_parameter 影响到旧场景（防御性，主要为
-## reload_current_scene 路径 + 编辑器 Run Scene 多次启动场景）
-func _setup_night_overlay() -> void:
-	_night_overlay_layer = CanvasLayer.new()
-	_night_overlay_layer.name = "NightOverlayLayer"
-	_night_overlay_layer.layer = NIGHT_OVERLAY_CANVAS_LAYER
-	add_child(_night_overlay_layer)
-
-	_night_overlay_rect = ColorRect.new()
-	_night_overlay_rect.name = "NightOverlayRect"
-	# 用基础颜色 + shader；shader 输出 alpha 接管最终可见度，ColorRect 本身的颜色不影响最终结果
-	_night_overlay_rect.color = Color(1.0, 1.0, 1.0, 1.0)
-	_night_overlay_rect.material = NIGHT_OVERLAY_MATERIAL.duplicate() as ShaderMaterial
-	_night_overlay_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_night_overlay_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_night_overlay_layer.add_child(_night_overlay_rect)
-
-	# 初始全部清零：白天 phase_alpha=0 → shader 输出 alpha=0，遮罩完全透明
-	_apply_phase_alpha_to_shader()
-
-
-## 入口 4 后段第 1 份（codex P0 修复）：挂载浓雾外敌人信号浮层（CanvasLayer=6）
-##
-## 与 _setup_night_overlay 配对，必须在其之后挂——layer=6 > layer=5 → 信号画在遮罩之上
-## 信号 Node2D 持有 self 引用，_draw 时回调 collect_fog_signals 拿数据
-func _setup_fog_signal_layer() -> void:
-	_fog_signal_layer = CanvasLayer.new()
-	_fog_signal_layer.name = "FogSignalLayer"
-	_fog_signal_layer.layer = FOG_SIGNAL_CANVAS_LAYER
-	add_child(_fog_signal_layer)
-
-	_fog_signal_node = FogSignalNode.new()
-	_fog_signal_node.name = "FogSignalNode"
-	_fog_signal_node.world_map = self
-	_fog_signal_layer.add_child(_fog_signal_node)
-
-
-## 入口 4 后段第 1 份（codex P0 修复）：FogSignalNode._draw 回调
-##
-## 返回需要画的浓雾外敌方信号列表，每项 = { center: Vector2(屏幕坐标), half: float, color: Color }
-##
-## 跑测修复（2026-05-11 第 2 轮）：守卫从 is_night 改为 _phase_alpha > 0.001
-##   并把信号 alpha 乘以 _phase_alpha，让 fade 过程中浮层信号与背景遮罩同步渐隐
-##   force-day 期间 _phase_alpha 在 Tween 中 fade 到 0，自然不画 → 与战斗白天语义一致
-func collect_fog_signals() -> Array:
-	var out: Array = []
-	if _battle_force_day:
-		return out
-	if _phase_alpha < 0.001:
-		return out
-	if _level_slots == null or _level_slots.is_empty():
-		return out
-	if _camera == null:
-		return out
-	# 信号菱形屏幕像素半径 = TILE_SIZE × camera.zoom.x × 缩放比例
-	# 战斗 zoom 时（zoom < 1）信号会更小，但战斗中 force-day 已 return，此分支主要服务探索态
-	var screen_half: float = float(TILE_SIZE) * 0.5 * _camera.zoom.x * FOG_SIGNAL_DIAMOND_SCALE
-
-	# 静态敌方关卡
-	var moving_level: LevelSlot = _enemy_movement.get_moving_level() if _enemy_movement != null else null
-	for pos_v in _level_slots:
-		var pos: Vector2i = pos_v as Vector2i
-		var level: LevelSlot = _level_slots[pos] as LevelSlot
-		if level == null:
-			continue
-		# 击败 / 击退态敌方不再是"威胁信号"，浓雾中不画（与世界层视野内一致）
-		if level.is_defeated() or level.is_repelled():
-			continue
-		# 移动中关卡由下方独立分支处理（避免 visual_pos 与 grid 位置不一致时重复画）
-		if level == moving_level:
-			continue
-		# 战斗中参战 LevelSlot 跳过（视野内由 BattleUnit 独占；浓雾外不画信号避免重复）
-		if _is_pack_in_battle(pos):
-			continue
-		var world_center: Vector2 = _grid_to_pixel_center(pos)
-		if not _is_in_fog(world_center):
-			continue
-		var seed: int = level.get_instance_id()
-		var blink_a: float = _compute_blink_alpha(seed) * _phase_alpha
-		var screen_center: Vector2 = _world_to_screen(world_center)
-		out.append({
-			"center": screen_center,
-			"half": screen_half,
-			"color": Color(ENEMY_SLOT_COLOR.r, ENEMY_SLOT_COLOR.g, ENEMY_SLOT_COLOR.b, blink_a),
-		})
-
-	# 移动中敌方关卡（codex P1 修复：用 LevelSlot.get_instance_id 作 seed，移动中相位稳定）
-	if moving_level != null and _enemy_movement != null:
-		var enemy_vis_pos: Vector2 = _enemy_movement.get_visual_pos()
-		if _is_in_fog(enemy_vis_pos):
-			var seed: int = moving_level.get_instance_id()
-			var blink_a: float = _compute_blink_alpha(seed) * _phase_alpha
-			var screen_center: Vector2 = _world_to_screen(enemy_vis_pos)
-			out.append({
-				"center": screen_center,
-				"half": screen_half,
-				"color": Color(ENEMY_MOVE_COLOR.r, ENEMY_MOVE_COLOR.g, ENEMY_MOVE_COLOR.b, blink_a),
-			})
-
-	return out
-
-
-## 入口 4 后段第 1 份：每帧驱动 shader uniform + 闪烁敌人 redraw
-##
-## 性能守卫：
-##   - shader uniform 更新仅在 _phase_alpha > 0.001（fade 中或夜晚）时执行，白天空转跳过
-##   - queue_redraw 仅在 is_night + 非 force-day + 视野外有敌方 slot 时触发
-func _process(_delta: float) -> void:
-	if _night_overlay_rect == null:
-		return
-	# 守卫：白天且非 fade 中 → 全跳过（_phase_alpha 已是 0，shader 输出 alpha=0）
-	if _phase_alpha < 0.001 and not _is_phase_alpha_tween_active():
-		return
-	_update_night_shader_uniforms()
-	# 闪烁敌人需要每帧 redraw 驱动 sin 动画；codex P0 修复：浮层 _fog_signal_node 是真正画信号的节点
-	# WorldMapRenderer 的 _draw 不再画闪烁，但仍可能需要 _renderer.queue_redraw 应对玩家移动时光源位置变化导致的可见性边界变化
-	if _need_blinking_redraw():
-		if _fog_signal_node != null:
-			_fog_signal_node.queue_redraw()
-		_renderer.queue_redraw()
-
-
-## 入口 4 后段第 1 份：每帧把玩家队伍像素位置 + 视野半径转 UV 空间，喂给 shader
-##
-## 2026-05-11 跑测修复：从"viewport pixel + vec4 数组"切换到"UV 空间 + 单光源"
-##   根因 1：vec4[N] uniform 在 Godot 4.6 canvas_item shader 下传递不稳，光源位置丢失
-##   根因 2：viewport pixel 空间在 stretch=canvas_items + 跨分辨率窗口下与 shader
-##           SCREEN_UV/SCREEN_PIXEL_SIZE 反算的"屏幕像素"不一致，导致光源位置错位
-##           + 半径不随窗口缩放
-##   修复：所有坐标统一到 SCREEN_UV [0,1] 空间——viewport pixel / vp_size = UV
-##         半径用 vp_size.y 归一化（与 shader 内 aspect 校正基准一致 = viewport 高度）
-##         无论 stretch_mode、真实窗口大小、4K/720p，UV 都是稳定的 [0,1]
-##
-## codex P2-6 修复：_unit == null 时把 phase_alpha 归零，避免启动早期 1 帧整屏全黑
-func _update_night_shader_uniforms() -> void:
-	var mat: ShaderMaterial = _night_overlay_rect.material as ShaderMaterial
-	if mat == null:
-		return
-	# _unit == null 守卫：临时把 phase_alpha 归零（光源缺失 = 看不到，不如让玩家有"白天感"）
-	if _unit == null:
-		mat.set_shader_parameter("phase_alpha", 0.0)
-		return
-	if _camera == null:
-		return
-	var vp_size: Vector2 = get_viewport().get_visible_rect().size
-	if vp_size.x <= 0.0 or vp_size.y <= 0.0:
-		return
-
-	# 光源在世界空间的坐标（移动中用 _unit_visual_pos，静止用格中心）
-	# codex P1-1 修复：光源跟随棋子视觉动画
-	var light_world: Vector2 = _player_light_world_center()
-
-	# world → viewport pixel → UV
-	# canvas_transform 已自动包含 Camera2D position / zoom / rotation / offset 全部变换
-	# 用同一个 canvas_transform 算"半径锚点"距离，保证 zoom + stretch 怎么变都一致
-	var canvas_t: Transform2D = _camera.get_canvas_transform()
-	var light_vp: Vector2 = canvas_t * light_world
-	var light_uv: Vector2 = light_vp / vp_size
-
-	# 半径锚点 = 光源右侧 NIGHT_VISION_RADIUS_GRIDS 格的世界位置
-	# 经过同一 canvas_transform 后，距离 = 半径在 viewport pixel 空间的值
-	# 不直接乘 zoom.x：让 canvas_transform 统一处理所有缩放（含 stretch + camera zoom）
-	var radius_anchor_world: Vector2 = light_world + Vector2(NIGHT_VISION_RADIUS_GRIDS * float(TILE_SIZE), 0.0)
-	var radius_anchor_vp: Vector2 = canvas_t * radius_anchor_world
-	var radius_vp_px: float = light_vp.distance_to(radius_anchor_vp)
-	# 用 viewport 高度归一化：与 shader 内 d.x *= aspect_xy 的基准（Y = 高度）对齐
-	var radius_uv: float = radius_vp_px / vp_size.y
-
-	var falloff_anchor_world: Vector2 = light_world + Vector2(NIGHT_FOG_FALLOFF_GRIDS * float(TILE_SIZE), 0.0)
-	var falloff_anchor_vp: Vector2 = canvas_t * falloff_anchor_world
-	var falloff_vp_px: float = light_vp.distance_to(falloff_anchor_vp)
-	var falloff_uv: float = falloff_vp_px / vp_size.y
-
-	# 宽高比：让 shader 内距离 X 方向按 aspect 拉伸，圆始终是正圆而非椭圆
-	var aspect_xy: float = vp_size.x / vp_size.y
-
-	mat.set_shader_parameter("light_uv", light_uv)
-	mat.set_shader_parameter("light_radius_uv", radius_uv)
-	mat.set_shader_parameter("fog_falloff_uv", falloff_uv)
-	mat.set_shader_parameter("aspect_xy", aspect_xy)
-	mat.set_shader_parameter("phase_alpha", _phase_alpha)
-
-
-## 玩家队伍火把光源世界坐标（格中心像素）
-##
-## codex P1-1 修复：移动中读 _unit_visual_pos（Tween 动画位置），静止时读 _unit.position 的格中心
-## 防御：_unit == null 时返回 _unit_visual_pos（启动时默认 _start_pos 像素）
-func _player_light_world_center() -> Vector2:
-	if _unit == null:
-		return _unit_visual_pos
-	if _is_moving:
-		return _unit_visual_pos
-	return _grid_to_pixel_center(_unit.position)
-
-
-## 把世界坐标转屏幕像素坐标
-## 用 _camera.get_canvas_transform()：返回的是 Canvas → Viewport 的变换
-## 屏幕像素 = canvas_transform * world_pos
-func _world_to_screen(world_pos: Vector2) -> Vector2:
-	if _camera == null:
-		return world_pos
-	return _camera.get_canvas_transform() * world_pos
-
-
-## 把 _phase_alpha 当前值写入 shader uniform
-## 由 Tween tween_method 每帧调用 + _setup_night_overlay 初始化时调用
-func _apply_phase_alpha_to_shader() -> void:
-	if _night_overlay_rect == null:
-		return
-	var mat: ShaderMaterial = _night_overlay_rect.material as ShaderMaterial
-	if mat == null:
-		return
-	mat.set_shader_parameter("phase_alpha", _phase_alpha)
-
-
-## 入口 4 后段第 1 份：启动 _phase_alpha fade Tween
-##
-## 参数：
-##   target：目标 alpha 值（0.0 = 白天 / 1.0 = 夜晚）
-##   duration：Tween 时长（秒）
-##   force：是否强制启动（force-day fade in/out 用 true 跳过守卫）
-##
-## 同值守卫：当前 alpha 与目标差 < 0.001 时跳过（避免重复 Tween）；force=true 时不守卫
-##
-## BUG 修复（2026-05-13）：先 kill 旧 tween，再判断 early return；否则 in-flight tween
-## 会绕过守卫继续跑。复现场景：被动战斗夜晚胜利时 _resync 启动 tween_to_NIGHT（force=true，
-## create_tween 异步未 step），紧接切回合触发 _on_day_night_phase_changed(DAY) 调本函数
-## (force=false)，此时 _phase_alpha 仍是 0（force-day fade 终态），target=0，diff < 0.001
-## → 早 return → 漏 kill tween_to_NIGHT → 玩家看到夜晚遮罩 fade in 后永不消失。
-func _fade_phase_alpha(target: float, duration: float, force: bool) -> void:
-	# 先 kill 旧 tween：避免 in-flight tween 绕过守卫继续把 _phase_alpha 推向旧 target
-	if _phase_alpha_tween != null and _phase_alpha_tween.is_valid():
-		_phase_alpha_tween.kill()
-	# 同值守卫（kill 之后判断）：当前 alpha 已经 == target 且 force=false → 不创建新 tween
-	if not force and absf(_phase_alpha - target) < 0.001:
-		return
-	_phase_alpha_tween = create_tween()
-	_phase_alpha_tween.tween_method(_set_phase_alpha_value, _phase_alpha, target, duration) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-
-
-## Tween tween_method 回调：写入 _phase_alpha 并同步刷 shader
-func _set_phase_alpha_value(value: float) -> void:
-	_phase_alpha = value
-	_apply_phase_alpha_to_shader()
-
-
-## 判断 _phase_alpha Tween 是否还在进行中
-## 用于 _process 的守卫：fade 中需要持续更新 shader uniform（光源位置可能变化）
-func _is_phase_alpha_tween_active() -> bool:
-	return _phase_alpha_tween != null and _phase_alpha_tween.is_valid() and _phase_alpha_tween.is_running()
-
-
-## 入口 4 后段第 1 份：闪烁敌人 alpha 计算
-##
-## 公式：alpha = BASE + AMP * (sin(2π * t / PERIOD + phase) * 0.5 + 0.5)
-##   - t：当前时间（秒）
-##   - phase：按 seed 哈希出的相位偏移，避免所有敌人同步闪烁
-##   - 输出范围：[BASE, BASE + AMP]
-##
-## seed 通常用 LevelSlot 的 unique_id（int）或 instance_id；调用方保证 seed 稳定
-func _compute_blink_alpha(seed: int) -> float:
-	var t: float = float(Time.get_ticks_msec()) / 1000.0
-	var phase_offset: float = float(hash(seed) % 1000) / 1000.0 * TAU
-	var sine: float = sin(t * TAU / BLINK_PERIOD + phase_offset)
-	return BLINK_BASE_ALPHA + BLINK_AMP * (sine * 0.5 + 0.5)
-
-
-## 入口 4 后段第 1 份：判断世界坐标是否在浓雾中
-##
-## 仅当夜晚 + 非 force-day 时返回有意义结果（其他情况返回 false，调用方应短路判断）
-## 距离 > 视野半径 + 过渡带 → 完全在浓雾外（GDScript 端等价于 shader smoothstep 衰减完成处）
-##
-## codex P1-1 修复：与 shader 光源对齐，移动中用 _unit_visual_pos；保证视觉与判定同步
-func _is_in_fog(world_pos: Vector2) -> bool:
-	if _unit == null:
-		return false
-	var light_center: Vector2 = _player_light_world_center()
-	var threshold_px: float = (NIGHT_VISION_RADIUS_GRIDS + NIGHT_FOG_FALLOFF_GRIDS) * float(TILE_SIZE)
-	return world_pos.distance_to(light_center) > threshold_px
-
-
-## 入口 4 后段第 1 份：判断当前帧是否需要 redraw 驱动闪烁动画
-##
-## 仅当 phase_alpha > 0（夜晚或 fade 中）+ 非战斗强制白天 + 视野外有敌方关卡时返回 true
-## 否则避免空转 _renderer.queue_redraw（WorldMapRenderer 的 _draw 渲染量大，redraw 有可观开销）
-##
-## 跑测修复（2026-05-11 第 2 轮）：判断条件从 is_night 改为 _phase_alpha > 0.001
-##   原 is_night 在 phase 切换瞬间立即 false，导致 fade 过程中浮层信号 / 闪烁敌人
-##   突然消失而不是跟随 0.6s fade 渐隐。改用 phase_alpha 守卫让浮层与背景 shader 同步
-func _need_blinking_redraw() -> bool:
-	if _phase_alpha < 0.001 and not _is_phase_alpha_tween_active():
-		return false
-	if _battle_force_day:
-		return false
-	if _level_slots == null or _level_slots.is_empty():
-		return false
-	# 仅扫一遍 _level_slots 找视野外的敌方关卡；视野内的不需要闪烁
-	for pos_v in _level_slots:
-		var pos: Vector2i = pos_v as Vector2i
-		var world_pos: Vector2 = _grid_to_pixel_center(pos)
-		if _is_in_fog(world_pos):
-			return true
-	return false
-
-
-## 入口 4 后段第 1 份：返回应用闪烁后的颜色
-##
-## 仅在 夜晚 + 非 force-day + world_pos 在浓雾外 三个条件全部满足时缩 alpha；
-## 否则原色返回（保持调用方逻辑不变）
-##
-## seed 用于 _compute_blink_alpha 的 phase 偏移（避免同步闪烁）
-func _apply_blink_modulate(color: Color, world_pos: Vector2, seed: int) -> Color:
-	if _battle_force_day:
-		return color
-	if not DayNightState.is_night(_turn_manager):
-		return color
-	if not _is_in_fog(world_pos):
-		return color
-	var blink_a: float = _compute_blink_alpha(seed)
-	return Color(color.r, color.g, color.b, color.a * blink_a)
+## 顺带清理：_apply_blink_modulate（grep 验证全项目无调用者，γ 阶段抽 Renderer 后留下的死代码）
 
 
 ## 入口 4 MVP：战斗 zoom 目标值计算（设计文档公式）
@@ -1824,16 +1425,16 @@ func _update_hud() -> void:
 	_update_explore_action_button()
 
 ## 获取所有角色部队的显示文本
-## B 重生周期 MVP：首角色（队长）前加 _leader_display_name 前缀，对齐 §7 场景 1
+## B 重生周期 MVP：首角色（队长）前加 _player_lifecycle.current_leader_name() 前缀，对齐 §7 场景 1
 ## 验收（HUD 显示当前重生周期的队长名 = hero_pool.csv 中某个英雄）
 func _get_all_troops_display() -> String:
 	var parts: Array[String] = []
-	for i in range(_characters.size()):
-		var ch: CharacterData = _characters[i]
+	for i in range(_player_lifecycle.characters().size()):
+		var ch: CharacterData = _player_lifecycle.characters()[i]
 		# 队长（[0]）拼名字前缀；其他队员保持原格式（C MVP 入队后再扩展）
 		var prefix: String = ""
-		if i == 0 and not _leader_display_name.is_empty():
-			prefix = "%s · " % _leader_display_name
+		if i == 0 and not _player_lifecycle.current_leader_name().is_empty():
+			prefix = "%s · " % _player_lifecycle.current_leader_name()
 		if ch.has_troop():
 			parts.append("%s%s %d/%d" % [
 				prefix,
@@ -1848,7 +1449,7 @@ func _get_all_troops_display() -> String:
 ## 获取评分摘要文本
 func _get_score_text() -> String:
 	var result: Dictionary = ScoreCalculator.calculate(
-		_camp_count, _total_hp_lost, _total_max_hp, _score_config
+		_camp_count, _total_hp_lost, _player_lifecycle.total_max_hp(), _score_config
 	)
 	return "评分 %d（扎营%d次 效率%.0f%% | 损兵%d 存活%.0f%%）" % [
 		int(result["score"]),
@@ -2203,7 +1804,7 @@ func _on_build_tick(faction: int) -> void:
 ## 默认 false 即"按 [B] 不弹板"，给一行 notice 说明，避免玩家不知道键失效。
 func _open_build_panel() -> void:
 	# E MVP：战斗态守卫——_is_in_battle 期间不允许打开建造面板（设计 §2.10）
-	if _game_finished or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open or _is_in_coma or _is_in_battle():
+	if _game_finished or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open or _player_lifecycle.is_in_coma() or _is_in_battle():
 		return
 	if not _build_upgrade_enabled:
 		_show_notice("当前阶段不可手动升级")
@@ -2259,7 +1860,7 @@ func _get_player_persistent_slots() -> Array[PersistentSlot]:
 ## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
 func _start_camp() -> void:
 	# E MVP：战斗态守卫——_is_in_battle 期间不允许扎营（设计 §2.10）
-	if _game_finished or _is_moving or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open or _is_in_coma or _is_in_battle():
+	if _game_finished or _is_moving or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open or _player_lifecycle.is_in_coma() or _is_in_battle():
 		return
 	_is_camping = true
 	_camp_count += 1
@@ -2284,7 +1885,7 @@ func _start_camp() -> void:
 		var supply_info: Dictionary = _resolve_camp_scenario()
 		var supply_scenario: String = "camp_supply_" + String(supply_info.get("scenario", "camp_wild")).substr(5)
 		var supply_ctx: Dictionary = {
-			"leader_name": _leader_display_name,
+			"leader_name": _player_lifecycle.current_leader_name(),
 			"count": _camp_restore,
 		}
 		if supply_scenario != "camp_supply_wild":
@@ -2300,7 +1901,7 @@ func _start_camp() -> void:
 	# 顺序意图：玩家心智上"扎营整顿 → 物资产出 → 新人加入"，叙事节奏自然
 	# RunState.check_recruit_milestone 内部命中时调 _on_recruit_triggered → push_event
 	# 入队事件因此排在扎营产出事件之后，由 EventPanelUI FIFO 依次弹出
-	RunState.check_recruit_milestone(_get_team_hero_ids())
+	RunState.check_recruit_milestone(_player_lifecycle.get_team_hero_ids())
 
 	_update_hud()
 
@@ -2312,7 +1913,7 @@ func _start_camp() -> void:
 	if _event_panel != null and _event_panel.is_open:
 		_pending_camp_manage_open = true
 	else:
-		_manage_ui.open(_characters, _inventory, true)
+		_manage_ui.open(_player_lifecycle.characters(), _inventory, true)
 
 
 ## M6 扎营结算：ProductionSystem.settle_camp + apply_production + 飘字
@@ -2351,7 +1952,7 @@ func _settle_persistent_camp_production() -> void:
 			var entry_dict: Dictionary = entry as Dictionary
 			var item_count: Dictionary = _entry_to_item_count(entry_dict)
 			var ctx: Dictionary = {
-				"leader_name": _leader_display_name,
+				"leader_name": _player_lifecycle.current_leader_name(),
 				"item": item_count["item"],
 				"count": item_count["count"],
 			}
@@ -2387,7 +1988,7 @@ func _push_battle_victory_event(rewards: Array[ItemData]) -> void:
 		return
 	var reward_text: String = _format_rewards_text(rewards)
 	var ctx: Dictionary = {
-		"leader_name": _leader_display_name,
+		"leader_name": _player_lifecycle.current_leader_name(),
 		"item": reward_text,
 	}
 	var narrative: String = NarrativeProvider.pick("battle_victory", ctx)
@@ -2430,7 +2031,7 @@ func _try_collect_resource_at(pos: Vector2i) -> void:
 			var entry_dict: Dictionary = applied_entry as Dictionary
 			var item_count: Dictionary = _entry_to_item_count(entry_dict)
 			var ctx: Dictionary = {
-				"leader_name": _leader_display_name,
+				"leader_name": _player_lifecycle.current_leader_name(),
 				"item": item_count["item"],
 				"count": item_count["count"],
 			}
@@ -2608,28 +2209,15 @@ func _on_restart_pressed() -> void:
 
 ## D MVP + 入口 4 后段第 1 份（夜晚视野 MVP）：昼夜阶段切换回调
 ##
-## 双重职责：
-##   1. queue_redraw —— 让闪烁敌人渲染 / 战场外压暗 overlay 等 _draw 分支立即响应（D MVP 既有）
-##   2. _fade_phase_alpha —— 启动夜晚遮罩 fade 0↔1（入口 4 后段新增）
-##
-## 战斗中（_battle_force_day = true）：
-##   仅记录 _pending_post_battle_phase，不动 Tween（战斗内强制白天，phase 切换不影响遮罩）
-##   战斗结束时 _end_battle_camera 会按 _pending_post_battle_phase fade 回正确状态
+## MVP-δ 阶段 2 重构为组合派发 sink：
+##   DayNightState 是单 sink 模型（register 覆盖前者），WorldMap 注册一个 sink 同时驱动：
+##   1. _renderer.queue_redraw() —— 让闪烁敌人 / 战场外压暗等 _draw_* 分支立即响应
+##   2. _night_vision.on_phase_changed(phase) —— 浮层 redraw / fade Tween / force-day 守卫
+##      全部由 NightVisionLayer 内部处理
 func _on_day_night_phase_changed(phase: int) -> void:
 	_renderer.queue_redraw()
-	# 跑测修复（2026-05-11 第 2 轮）：phase 边沿触发清浮层
-	# _fog_signal_node 只在 _need_blinking_redraw 命中时 queue_redraw；切到白天后
-	# 不再 redraw，上一帧画的菱形会"卡"在 CanvasLayer 缓冲里不消失。
-	# 这里强制 redraw 一次，让 fade 过程中浮层信号正确跟随 phase_alpha 渐隐。
-	if _fog_signal_node != null:
-		_fog_signal_node.queue_redraw()
-	# 战斗中只记录目标 phase，不动 Tween（force-day 优先级最高）
-	if _battle_force_day:
-		_pending_post_battle_phase = phase
-		return
-	# 正常昼夜切换：NIGHT → 遮罩 fade in 到 1.0；DAY → fade out 到 0.0
-	var target: float = 1.0 if phase == int(DayNightState.Phase.NIGHT) else 0.0
-	_fade_phase_alpha(target, DAY_NIGHT_FADE_DURATION, false)
+	if _night_vision != null:
+		_night_vision.on_phase_changed(phase)
 
 
 # ─────────────────────────────────────────
@@ -2661,7 +2249,7 @@ func _get_enemy_target_pos() -> Vector2i:
 ##
 ## 防御（P2 审查）：仅在 current_faction == ENEMY_1 时切换；若被误调在玩家回合中，直接返回避免错误双 start
 ##
-## B 重生周期 MVP：昏迷过渡期间（_is_in_coma=true）也直接 return——
+## B 重生周期 MVP：昏迷过渡期间（_player_lifecycle.is_in_coma()=true）也直接 return——
 ## 战斗结算时若触发昏迷，BattleSession 走 COMA 退出，由 _on_battle_session_ended
 ## 处理 _enemy_movement.finish_phase()。让 phase_finished 信号发出后本回调若切回
 ## PLAYER 回合会跑额外 tick / HUD 刷新，
@@ -2669,7 +2257,7 @@ func _get_enemy_target_pos() -> Vector2i:
 func _on_enemy_phase_finished() -> void:
 	if _game_finished:
 		return
-	if _is_in_coma:
+	if _player_lifecycle.is_in_coma():
 		return
 	if _turn_manager.current_faction != Faction.ENEMY_1:
 		push_warning("WorldMap._on_enemy_phase_finished: current_faction != ENEMY_1，忽略该次回调")
@@ -2709,7 +2297,7 @@ func _on_enemy_phase_finished() -> void:
 
 
 ## 战斗态守门：_battle_session 非空且未结束
-## 沿用 _is_in_coma / _event_panel.is_open 同样的守门模式
+## 沿用 _player_lifecycle.is_in_coma() / _event_panel.is_open 同样的守门模式
 ## 各守卫函数（_input / _unhandled_key_input / _open_*_panel / _on_abandon / _start_camp）追加该判定
 func _is_in_battle() -> bool:
 	return _battle_session != null and not _battle_session.is_ended()
@@ -2788,7 +2376,7 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 	_battle_anim_director.setup(_renderer, _battle_hud, _battle_view, _terrain_altitude_step)
 	_bind_battle_session_sinks()
 	_battle_session.start(
-		_characters,
+		_player_lifecycle.characters(),
 		_unit.position,
 		packs,
 		_schema,
@@ -2796,7 +2384,7 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 		_battle_unit_config,
 		_battle_config,
 		_terrain_altitude_step,
-		_coma_hp_threshold_ratio,
+		_player_lifecycle.coma_hp_threshold_ratio(),
 		0,
 		_damage_increment
 	)
@@ -2804,7 +2392,7 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 	# BattleSession.start 末尾的防御性 _check_battle_end_after_action 可能立即触发 COMA →
 	# on_battle_ended sink 同步进入 _on_battle_session_ended → await 处 yield 出来,start() 返回
 	# 此时 is_ended() == true,不应再启动战场镜头 / 显示 HUD（否则会闪现一帧 zoom + HUD 然后黑屏）
-	# sink 的 await 完成后会自然进入 _trigger_coma_or_lose 启动黑屏过渡
+	# sink 的 await 完成后会自然进入 _player_lifecycle.trigger_coma_or_lose 启动黑屏过渡
 	if _battle_session.is_ended():
 		return
 	# 战斗中清掉探索态可达高亮（避免视觉与战场叠加层干扰）
@@ -2839,7 +2427,7 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 	_battle_anim_director.setup(_renderer, _battle_hud, _battle_view, _terrain_altitude_step)
 	_bind_battle_session_sinks()
 	_battle_session.start(
-		_characters,
+		_player_lifecycle.characters(),
 		_unit.position,
 		packs,
 		_schema,
@@ -2847,7 +2435,7 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		_battle_unit_config,
 		_battle_config,
 		_terrain_altitude_step,
-		_coma_hp_threshold_ratio,
+		_player_lifecycle.coma_hp_threshold_ratio(),
 		0,
 		_damage_increment
 	)
@@ -2876,10 +2464,10 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 func _try_trigger_active_battle() -> void:
 	if _unit == null:
 		return
-	# 队长无部队 → 不能入战；走兜底队伍状态评估（理论上 _evaluate_party_state 此时应已触发昏迷 / 失败）
+	# 队长无部队 → 不能入战；走兜底队伍状态评估（理论上 _player_lifecycle.evaluate_party_state 此时应已触发昏迷 / 失败）
 	# 防御性检查避免 BattleSession._deploy_player_side 落到无 actor 的卡死战斗态
-	if _characters.is_empty() or _characters[0] == null or not _characters[0].has_troop():
-		_evaluate_party_state()
+	if _player_lifecycle.characters().is_empty() or _player_lifecycle.characters()[0] == null or not _player_lifecycle.characters()[0].has_troop():
+		_player_lifecycle.evaluate_party_state()
 		return
 	# 触发判断：dist ≤ _battle_trigger_range 内有候选 → 才能按 [F]
 	var trigger_candidates: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
@@ -2960,9 +2548,9 @@ func _sync_world_unit_from_battle_leader() -> void:
 ## 三分支处理：
 ##   VICTORY     —— 收集每个 defeated_pack 的关卡 / 部队奖励 → 合并 _push_battle_victory_event
 ##                  → 清理 _level_slots / 恢复 schema slot
-##                  → _evaluate_party_state 兜底队员阵亡（队长不会跌阈值，否则走 COMA）
-##   MANUAL_EXIT —— 不发奖励，敌方残余保留；_evaluate_party_state 兜底
-##   COMA        —— 走 B MVP 重生分支（_trigger_coma_or_lose）
+##                  → _player_lifecycle.evaluate_party_state 兜底队员阵亡（队长不会跌阈值，否则走 COMA）
+##   MANUAL_EXIT —— 不发奖励，敌方残余保留；_player_lifecycle.evaluate_party_state 兜底
+##   COMA        —— 走 B MVP 重生分支（_player_lifecycle.trigger_coma_or_lose）
 ##
 ## 收尾通用：清空 _battle_session / 隐藏 HUD / 重置移动力 / 刷新可达
 func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
@@ -2980,13 +2568,13 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 		# 此时动画已自然跑完；清理瞬时视觉态 + 动画并发状态（理论应已空，防御性归零）
 		_battle_view.clear()
 		_battle_anim_director.reset()
-		# B MVP 重生分支：_trigger_coma_or_lose 内部会处理 _is_in_coma 守卫
+		# B MVP 重生分支：_player_lifecycle.trigger_coma_or_lose 内部会处理 _player_lifecycle.is_in_coma() 守卫
 		# _battle_session 在 reload 场景后由新 _ready 重新初始化（默认 null），无需手动清
 		_battle_session = null
 		# 入口 4 MVP：先 zoom 回归（用开战时 _unit.position 作 tween 终点）
-		# 重生分支由 _trigger_coma_or_lose 内部处理 _unit.position 重置 + camera 同步（瞬移到 spawn）
+		# 重生分支由 _player_lifecycle.trigger_coma_or_lose 内部处理 _unit.position 重置 + camera 同步（瞬移到 spawn）
 		_end_battle_camera()
-		_trigger_coma_or_lose()
+		_player_lifecycle.trigger_coma_or_lose()
 		return
 
 	# VICTORY / MANUAL_EXIT：原入口 1.2 P1-4 修复路径（立即清理）
@@ -3040,8 +2628,8 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 	# MANUAL_EXIT：不发奖励，敌方残余保留；走通用收尾
 
 	# 4. 兜底队员阵亡评估（队长跌阈值的极端情况已在战斗中走 COMA 路径，不走到此处）
-	# _evaluate_party_state 返回 true 表示已触发昏迷 / 失败遮罩，无需再走收尾流程
-	if _evaluate_party_state():
+	# _player_lifecycle.evaluate_party_state 返回 true 表示已触发昏迷 / 失败遮罩，无需再走收尾流程
+	if _player_lifecycle.evaluate_party_state():
 		_battle_session = null
 		return
 
@@ -3248,14 +2836,14 @@ func _get_level_at(pos: Vector2i) -> LevelSlot:
 
 ## 为我方部队应用伤害（从 BattleResult 中提取 damages），同时追踪累计损兵
 ##
-## B 重生周期 MVP：返回 _evaluate_party_state() 的结果
+## B 重生周期 MVP：返回 _player_lifecycle.evaluate_party_state() 的结果
 ##   - true → 已触发昏迷过渡 / 末周期失败遮罩；调用方应立即中断奖励发放 / 事件推送 / 后处理
 ##   - false → 战斗流程继续
 ##
 ## 战斗 / 强制战斗均经过本函数，是玩家方 hp 变化的最主要入口
 func _apply_player_damages(result: BattleResolver.BattleResult) -> bool:
 	var troop_index: int = 0
-	for ch in _characters:
+	for ch in _player_lifecycle.characters():
 		if ch.has_troop():
 			if troop_index < result.damages.size():
 				# 追踪实际损失（不超过剩余兵力）
@@ -3265,7 +2853,7 @@ func _apply_player_damages(result: BattleResolver.BattleResult) -> bool:
 				if ch.troop.is_defeated():
 					ch.clear_troop()
 			troop_index += 1
-	return _evaluate_party_state()
+	return _player_lifecycle.evaluate_party_state()
 
 ## 从敌方部队快照中随机抽取 1 支，转为 TROOP 道具加入背包
 ## 背包已满时直接丢弃
@@ -3304,9 +2892,9 @@ func _grant_level_rewards_for(level: LevelSlot) -> Array[ItemData]:
 ## 打开装配管理面板（非扎营模式，仅允许替换）
 func _open_manage_panel() -> void:
 	# E MVP：战斗态守卫——_is_in_battle 期间不允许装配 / 用道具（设计 §2.10）
-	if _game_finished or _is_moving or _is_camping or _event_panel.is_open or _is_in_coma or _is_in_battle():
+	if _game_finished or _is_moving or _is_camping or _event_panel.is_open or _player_lifecycle.is_in_coma() or _is_in_battle():
 		return
-	_manage_ui.open(_characters, _inventory, false)
+	_manage_ui.open(_player_lifecycle.characters(), _inventory, false)
 
 ## 管理面板关闭回调
 ## 扎营模式下关闭面板 → 触发完整回合结算流程
@@ -3349,7 +2937,7 @@ func _on_equip_troop(character: CharacterData, item: ItemData) -> void:
 	# 刷新面板
 	_manage_ui.refresh()
 	# B 重生周期 MVP：装配换部队后队长 max_hp / current_hp 比例可能跌到阈值（如把高 hp 旧部队换成低 hp 新部队）
-	_evaluate_party_state()
+	_player_lifecycle.evaluate_party_state()
 
 ## 使用道具操作回调（经验道具、兵力恢复道具）
 func _on_use_item(character: CharacterData, item: ItemData) -> void:
@@ -3368,89 +2956,7 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	_manage_ui.refresh()
 	# B 重生周期 MVP：道具使用后队长状态可能改变（HP_RESTORE 仅会脱离阈值，不会触发昏迷；
 	# 但 EXP 升级品质后 max_hp 会刷新，理论上有跨阈值可能。统一调用以保持入口对齐）
-	_evaluate_party_state()
-
-# ─────────────────────────────────────────
-# 玩家初始化
-# ─────────────────────────────────────────
-
-## 从 RunState 抽队长 + 装配初始部队（B 重生周期 MVP）
-##
-## A MVP 起 `_characters` 只构造一个角色（队长）；后续队员由 [[C_扎营里程碑入队_MVP]] 追加。
-## B MVP 起兵种 / 品质来源切换：从 player_config 的 initial_troop_quality 改为 hero_pool.csv 行字段。
-##   - troop_type / troop_quality 字段名按 TroopData.TroopType / Quality 枚举名（"SWORD"/"R" 等）
-##   - 兵种枚举不在 hero_pool 中预设时回退到 SWORD，品质回退到 R
-##
-## 重生事件：函数末尾消费 RunState._pending_respawn_intro
-##   - true → 上一帧 _trigger_coma_or_lose 已启动 OverlayTransitionUI 黑屏过渡（phase B 在等）
-##           调 OverlayTransitionUI.notify_world_ready(1, respawn_line) 替换第二句 + 推进 phase C
-##   - false → 跳过（首次进入由 _ready 末尾的 play_with_blackout_start 接管）
-##
-## 参数 player_cfg 暂保留：留作未来 hero_pool 缺省时的兜底字段来源；本期不再读 character_count
-func _init_player(player_cfg: Dictionary) -> void:
-	# 默认品质：hero_pool 行未填或解析失败时回退
-	var default_quality: int = int(player_cfg.get("initial_troop_quality", "0"))
-
-	_characters = []
-	_total_max_hp = 0
-
-	# 从 RunState 抽未使用的英雄；返回的 leader_row 浅拷贝
-	# RunState.ensure_initialized 已在 _ready 早期调用过；此处直接 draw
-	var leader_row: Dictionary = RunState.draw_new_leader()
-	_leader_display_name = String(leader_row.get("name", "队长"))
-
-	# 单角色：队长占据 _characters[0]，其余空位由 C MVP 入队事件追加
-	var ch: CharacterData = CharacterData.new()
-	ch.id = 1
-	# C MVP：写入 hero_id，让 draw_recruit 能正确排除当前在队英雄
-	ch.hero_id = int(leader_row.get("id", "-1"))
-	var troop: TroopData = TroopData.new()
-	troop.troop_type = _parse_troop_type(String(leader_row.get("troop_type", "SWORD")))
-	troop.quality = _parse_troop_quality(String(leader_row.get("troop_quality", "")), default_quality)
-	# 重新按品质设置 max_hp（TroopData 默认构造未走品质表，这里保守按 R 兜底；
-	#   若未来 TroopData 引入按品质 max_hp 表，删除这段即可）
-	ch.troop = troop
-	_total_max_hp += troop.max_hp
-	_characters.append(ch)
-
-	# 重生事件（B MVP → 入口 2 MVP 2.1 议题 5 升级）
-	# RunState.advance_cycle 时置 _pending_respawn_intro=true；
-	# 新场景 _ready → _init_player 末尾消费一次后清零
-	#
-	# 入口 2 MVP 2.1（2026-05-10）：
-	# 上一帧 _trigger_coma_or_lose 已启动 OverlayTransitionUI.play 黑屏过渡（phase B 在等 world_ready_signal）
-	# 此处替换 phase C 第二句的占位文本 + emit signal 让 phase B 通过
-	if RunState.consume_pending_respawn_intro():
-		var respawn_line: String = _format_respawn_line_for_current_leader(leader_row)
-		OverlayTransitionUI.notify_world_ready(1, respawn_line)
-
-
-## 兵种枚举字符串 → TroopData.TroopType
-## 解析失败回退到 SWORD（hero_pool.csv 写错字段时不至于崩）
-func _parse_troop_type(name: String) -> TroopData.TroopType:
-	match name.to_upper():
-		"SWORD":   return TroopData.TroopType.SWORD
-		"BOW":     return TroopData.TroopType.BOW
-		"SPEAR":   return TroopData.TroopType.SPEAR
-		"CAVALRY": return TroopData.TroopType.CAVALRY
-		"SHIELD":  return TroopData.TroopType.SHIELD
-		_:
-			push_warning("WorldMap._parse_troop_type: 未知兵种 '%s'，回退 SWORD" % name)
-			return TroopData.TroopType.SWORD
-
-
-## 品质字符串 → TroopData.Quality；空字符串走 default
-func _parse_troop_quality(name: String, default_quality: int) -> TroopData.Quality:
-	if name.is_empty():
-		return default_quality as TroopData.Quality
-	match name.to_upper():
-		"R":   return TroopData.Quality.R
-		"SR":  return TroopData.Quality.SR
-		"SSR": return TroopData.Quality.SSR
-		_:
-			push_warning("WorldMap._parse_troop_quality: 未知品质 '%s'，回退 R" % name)
-			return TroopData.Quality.R
-
+	_player_lifecycle.evaluate_party_state()
 
 ## 入口 2 MVP 2.3（2026-05-11）：扎营场景判定
 ##
@@ -3510,6 +3016,15 @@ func _resolve_camp_scenario() -> Dictionary:
 ##   KIND_STONE:    amount → "石料" + amount
 ##   KIND_ITEM:     item: ItemData → display_name + stack_count
 ##   其他:          fallback "物资" / 1
+
+
+## 入口 2 MVP 2.3（2026-05-11）：把 ProductionSystem entry 转为 {item, count} 字典
+##
+## entry 字段结构因 kind 不同:
+##   KIND_RESOURCE: resource_type / amount → 取 ResourceSlot.RESOURCE_TYPE_NAMES + amount
+##   KIND_STONE:    amount → "石料" + amount
+##   KIND_ITEM:     item: ItemData → display_name + stack_count
+##   其他:          fallback "物资" / 1
 func _entry_to_item_count(entry: Dictionary) -> Dictionary:
 	var kind: String = String(entry.get("kind", ""))
 	match kind:
@@ -3528,53 +3043,7 @@ func _entry_to_item_count(entry: Dictionary) -> Dictionary:
 			return {"item": "物资", "count": 1}
 
 
-## 入口 2 MVP 2.1 议题 5（2026-05-10）：构造 coma 文案
-## 查 _characters[0] 的 coma_narrative csv 字段，空则用通用模板
-## 通用模板内 {name} 占位会被替换为传入 leader_name
-func _format_coma_line(leader_name: String) -> String:
-	var template: String = ""
-	if not _characters.is_empty() and _characters[0] != null:
-		var row: Dictionary = RunState.find_hero_row(_characters[0].hero_id)
-		template = String(row.get("coma_narrative", ""))
-	if template.is_empty():
-		return "队长 %s 失去了意识" % leader_name
-	return template.replace("{name}", leader_name)
 
-
-## 入口 2 MVP 2.1 议题 5（2026-05-10）：构造当前队长的 respawn 文案
-## leader_row_hint 可由 _init_player 直接传入（避免 find_hero_row 重复查）；
-## 未提供 hint 时用 _characters[0].hero_id 查 RunState
-func _format_respawn_line_for_current_leader(leader_row_hint: Dictionary = {}) -> String:
-	var template: String = String(leader_row_hint.get("respawn_narrative", ""))
-	if template.is_empty() and not _characters.is_empty() and _characters[0] != null:
-		var row: Dictionary = RunState.find_hero_row(_characters[0].hero_id)
-		template = String(row.get("respawn_narrative", ""))
-	if template.is_empty():
-		return "队长 %s 开启了旅程" % _leader_display_name
-	return template.replace("{name}", _leader_display_name)
-
-
-# ─────────────────────────────────────────
-# C MVP — 扎营里程碑入队
-# ─────────────────────────────────────────
-
-## 收集当前队伍中所有有 hero_id 的成员 ID（用于 RunState.draw_recruit 排除）
-## hero_id == -1 的角色（老路径 / 测试构造）跳过——不会影响"未在队伍中"判定
-func _get_team_hero_ids() -> Array[int]:
-	var ids: Array[int] = []
-	for ch in _characters:
-		if ch == null:
-			continue
-		if ch.hero_id >= 0:
-			ids.append(ch.hero_id)
-	return ids
-
-
-## RunState.check_recruit_milestone 命中时回调
-## hero_dict 来自 hero_pool 行；milestone 是触发的扎营次数
-##
-## 构造 recruit 事件 payload，把 hero_id 通过 payload 传给确认回调
-## EventPanelUI 已支持 result_callback；玩家点确认 → 调 _on_recruit_confirmed 装配新队员
 func _on_recruit_triggered(hero_dict: Dictionary, milestone: int) -> void:
 	if _event_panel == null:
 		push_warning("WorldMap._on_recruit_triggered: EventPanelUI 未就绪，事件丢弃")
@@ -3582,7 +3051,7 @@ func _on_recruit_triggered(hero_dict: Dictionary, milestone: int) -> void:
 	var hero_name: String = String(hero_dict.get("name", "新成员"))
 	# 入口 2 MVP 2.3（2026-05-11）:走 NarrativeProvider recruit_event 池
 	var ctx: Dictionary = {
-		"leader_name": _leader_display_name,
+		"leader_name": _player_lifecycle.current_leader_name(),
 		"recruit_name": hero_name,
 		"milestone": milestone,
 	}
@@ -3603,7 +3072,7 @@ func _on_recruit_triggered(hero_dict: Dictionary, milestone: int) -> void:
 ## payload 即 hero_dict（_on_recruit_triggered 中塞入）
 ##
 ## 流程：构造 CharacterData + 装配初始部队（troop_type / troop_quality）→ append → HUD
-## 不去重：MVP 不检查兵种重复——_get_team_hero_ids 已保证不抽到当前在队成员
+## 不去重：MVP 不检查兵种重复——_player_lifecycle.get_team_hero_ids 已保证不抽到当前在队成员
 func _on_recruit_confirmed(_action_result: String, payload: Dictionary) -> void:
 	if payload.is_empty():
 		push_warning("WorldMap._on_recruit_confirmed: payload 为空，入队跳过")
@@ -3613,25 +3082,25 @@ func _on_recruit_confirmed(_action_result: String, payload: Dictionary) -> void:
 		push_warning("WorldMap._on_recruit_confirmed: hero_id 非法，入队跳过")
 		return
 	# 防御：极端时序下 _on_recruit_confirmed 触发时该英雄已被其他途径加入
-	for ch_existing in _characters:
+	for ch_existing in _player_lifecycle.characters():
 		if ch_existing != null and ch_existing.hero_id == hero_id:
 			push_warning("WorldMap._on_recruit_confirmed: hero_id=%d 已在队，跳过重复入队" % hero_id)
 			return
 	# 构造 CharacterData
 	var member: CharacterData = CharacterData.new()
 	# id 在队伍中按 size+1 递增；与队长保持简单序号语义
-	member.id = _characters.size() + 1
+	member.id = _player_lifecycle.characters().size() + 1
 	member.hero_id = hero_id
 	var troop: TroopData = TroopData.new()
-	troop.troop_type = _parse_troop_type(String(payload.get("troop_type", "SWORD")))
+	troop.troop_type = _player_lifecycle.parse_troop_type(String(payload.get("troop_type", "SWORD")))
 	# 入队队员品质：hero_pool 行未填时回退 R（队员相对队长更平均）
-	troop.quality = _parse_troop_quality(String(payload.get("troop_quality", "")), TroopData.Quality.R)
+	troop.quality = _player_lifecycle.parse_troop_quality(String(payload.get("troop_quality", "")), TroopData.Quality.R)
 	member.troop = troop
-	_total_max_hp += troop.max_hp
-	_characters.append(member)
+	# MVP-δ 阶段 2：入队 → PlayerLifecycle.add_character 内同步 _total_max_hp + append
+	_player_lifecycle.add_character(member)
 	_update_hud()
 	# C MVP P1 修复：扎营流程在 push 入队事件后立刻 _manage_ui.open(...)，确认入队事件时
-	# 装配面板已打开且按旧 _characters 渲染过 refresh；这里补一次 refresh 让新队员
+	# 装配面板已打开且按旧 _player_lifecycle.characters() 渲染过 refresh；这里补一次 refresh 让新队员
 	# 在本次扎营内立即可见 / 可装配（设计文档 §6 数据驱动语义 + §7 场景 2 验收）
 	if _manage_ui != null and _manage_ui.is_open:
 		_manage_ui.refresh()
@@ -3641,113 +3110,17 @@ func _on_recruit_confirmed(_action_result: String, payload: Dictionary) -> void:
 # 多角色辅助方法
 # ─────────────────────────────────────────
 
-## 判断是否有任意角色已装配部队
-func _has_any_troop() -> bool:
-	for ch in _characters:
-		if ch.has_troop():
-			return true
-	return false
-
-## B 重生周期 MVP：评估队伍状态（队员阵亡移除 + 队长昏迷阈值判定）
+## 全灭兜底（B MVP 退化）：仅在 _player_lifecycle.characters() 为空时触发；正常昏迷 / 失败路径已被 _player_lifecycle.evaluate_party_state 接管
 ##
-## 流程：
-##   1. 倒序遍历 _characters[1..]：troop == null 或 current_hp <= 0 → 移除（队员阵亡不复活）
-##   2. 检查 _characters[0] 队长：troop == null 或 current_hp / max_hp ≤ _coma_hp_threshold_ratio
-##      → 调 _trigger_coma_or_lose
-##
-## 返回 true 表示已触发昏迷态或失败遮罩，调用方应中断后续流程。
-##
-## 触发挂点：_apply_player_damages / _on_use_item / _on_equip_troop 末尾。
-## 守卫：_is_in_coma / _game_finished 时直接返回 true，避免重入。
-func _evaluate_party_state() -> bool:
-	if _game_finished or _is_in_coma:
-		return true
-	# 1. 队员阵亡 → 从队伍移除（倒序避免索引漂移）
-	for i in range(_characters.size() - 1, 0, -1):
-		var ch_member: CharacterData = _characters[i]
-		if ch_member == null:
-			_characters.remove_at(i)
-			continue
-		if not ch_member.has_troop():
-			_characters.remove_at(i)
-			continue
-		if ch_member.troop.current_hp <= 0:
-			_characters.remove_at(i)
-	# 2. 队长检查
-	if _characters.is_empty():
-		# 极端态：连队长都没了 → 走兜底重生 / 失败分支
-		_trigger_coma_or_lose()
-		return true
-	var leader: CharacterData = _characters[0]
-	if leader == null or not leader.has_troop():
-		_trigger_coma_or_lose()
-		return true
-	var troop: TroopData = leader.troop
-	if troop.max_hp <= 0:
-		# 数据异常；不强制触发昏迷以免误判，写日志
-		push_warning("WorldMap._evaluate_party_state: 队长 max_hp <= 0，跳过阈值判定")
-		return false
-	var ratio: float = float(troop.current_hp) / float(troop.max_hp)
-	if ratio <= _coma_hp_threshold_ratio:
-		_trigger_coma_or_lose()
-		return true
-	return false
-
-
-## B 重生周期 MVP：队长昏迷或末周期失败分支
-##
-## 路径：
-##   - RunState.respawns_left() > 0 → 进入昏迷态 + 走 OverlayTransitionUI 黑屏过渡
-##                                    midpoint 闭包内 advance_cycle + reload_current_scene
-##                                    新场景 _init_player 调 notify_world_ready 让 phase B 通过
-##   - 否则                          → 末周期失败 → _on_victory_decided(ENEMY_1) 走 VictoryUI 失败遮罩
-##
-## 入口 2 MVP 2.1 升级（2026-05-10 议题 5）：
-##   - 删除原 _show_notice + SceneTreeTimer + _play_coma_anim 路径
-##   - 黑屏期间执行 reload，玩家不感知卡顿；视觉时长由 OverlayTransitionUI phase 决定
-##
-## 幂等：_is_in_coma / _game_finished 守卫，重复调用不重复触发
-func _trigger_coma_or_lose() -> void:
-	if _is_in_coma or _game_finished:
-		return
-	if RunState.respawns_left() > 0:
-		_is_in_coma = true
-		_reachable_tiles = {}
-		# codex review P1-5 修复（2026-05-10）：coma 触发即重置 flag
-		# 防 EventPanel 在战斗中被 hide 而非 close → flag 永久 true → 下次 EventPanel close 误开 ManageUI
-		_pending_camp_manage_open = false
-		_renderer.queue_redraw()
-		# 双句：第 1 句"X 失去了意识"立即可定；
-		# 第 2 句留空占位，reload 后 _init_player 内 notify_world_ready(1, ...) 替换为"队长 Y 开启了旅程"
-		var coma_line: String = _format_coma_line(_leader_display_name)
-		var lines: PackedStringArray = PackedStringArray([coma_line, ""])
-		# 火苗团数 = 过渡完成后的玩家总命数
-		# coma 触发会消耗 1 命（advance_cycle 把 _cycle_index +1），advance 后 respawns_left + 1 = 调用时的 respawns_left
-		# 例：max_cycles=3, _cycle_index=0 时触发：调用时 respawns_left=2 → 显示 2 团（advance 后剩 1 + 当前新队长）
-		var icon_data: Dictionary = {"icon": "🔥", "count": RunState.respawns_left()}
-		# midpoint 闭包：phase B 内由 OverlayTransitionUI 调用
-		# 返回 world_ready_signal 让 OverlayTransitionUI await，等新场景 ready 后继续
-		var midpoint: Callable = func() -> Signal:
-			RunState.advance_cycle()
-			get_tree().reload_current_scene()
-			return OverlayTransitionUI.world_ready_signal
-		OverlayTransitionUI.play(lines, icon_data, midpoint)
-	else:
-		# 末周期无保护 → 整局失败（沿用现有 VictoryUI 失败遮罩）
-		_on_victory_decided(Faction.ENEMY_1)
-
-
-## 全灭兜底（B MVP 退化）：仅在 _characters 为空时触发；正常昏迷 / 失败路径已被 _evaluate_party_state 接管
-##
-## 仍保留是因为：极端时序（外部代码清空 _characters）或老调用点未迁到 _evaluate_party_state 时
+## 仍保留是因为：极端时序（外部代码清空 _player_lifecycle.characters()）或老调用点未迁到 _player_lifecycle.evaluate_party_state 时
 ## 不至于"无人则永久卡死"。返回 true 表示游戏已结束，调用方应中断后续流程。
 func _check_defeat() -> bool:
 	if _game_finished:
 		return true
-	if _is_in_coma:
+	if _player_lifecycle.is_in_coma():
 		# 已进入昏迷过渡，等 timer 走完即可
 		return true
-	if _characters.is_empty():
+	if _player_lifecycle.characters().is_empty():
 		_game_finished = true
 		_reachable_tiles = {}
 		_show_defeat_text()
@@ -3758,10 +3131,41 @@ func _check_defeat() -> bool:
 ## 获取所有已装配部队的部队列表（用于战斗结算）
 func _get_active_troops() -> Array[TroopData]:
 	var troops: Array[TroopData] = []
-	for ch in _characters:
+	for ch in _player_lifecycle.characters():
 		if ch.has_troop():
 			troops.append(ch.troop)
 	return troops
+
+# ─────────────────────────────────────────
+# MVP-δ 阶段 2：PlayerLifecycle 信号 sink（_player_lifecycle.coma_triggered /
+# defeat_triggered / respawn_intro_ready 三个信号让 PlayerLifecycle 不直接依赖 UI 系统）
+# ─────────────────────────────────────────
+
+## 队长昏迷过渡触发（PlayerLifecycle.coma_triggered sink）
+##
+## 原 _trigger_coma_or_lose 内 OverlayTransitionUI.play 直调迁过来；
+## 状态副作用（_reachable_tiles = {} / _pending_camp_manage_open = false / _renderer.queue_redraw）
+## 仍在 WorldMap 内执行——这些是 WorldMap 自己的视图态
+func _on_player_coma_triggered(lines: PackedStringArray, icon_data: Dictionary, midpoint: Callable) -> void:
+	_reachable_tiles = {}
+	# codex review P1-5 修复（2026-05-10）：coma 触发即重置 flag
+	# 防 EventPanel 在战斗中被 hide 而非 close → flag 永久 true → 下次 EventPanel close 误开 ManageUI
+	_pending_camp_manage_open = false
+	_renderer.queue_redraw()
+	OverlayTransitionUI.play(lines, icon_data, midpoint)
+
+
+## 末周期失败触发（PlayerLifecycle.defeat_triggered sink）
+## 原 _trigger_coma_or_lose 内 _on_victory_decided(ENEMY_1) 直调迁过来
+func _on_player_defeat_triggered(faction: int) -> void:
+	_on_victory_decided(faction)
+
+
+## 新场景启动重生文案就绪（PlayerLifecycle.respawn_intro_ready sink）
+## 原 _init_player 内 OverlayTransitionUI.notify_world_ready 直调迁过来
+func _on_player_respawn_intro_ready(respawn_line: String) -> void:
+	OverlayTransitionUI.notify_world_ready(1, respawn_line)
+
 
 # ─────────────────────────────────────────
 # 奖励辅助方法
@@ -3785,7 +3189,7 @@ func _format_rewards_text(rewards: Array[ItemData]) -> String:
 func _on_abandon() -> void:
 	# B 重生周期 MVP：昏迷过渡期间锁 Q 键放弃，避免在 OverlayTransitionUI 黑屏过渡中触发整局失败
 	# E MVP：战斗态期间锁 Q 键放弃（设计 §2.10）；战斗结束才允许整局放弃
-	if _game_finished or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open or _is_in_coma or _is_in_battle():
+	if _game_finished or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open or _player_lifecycle.is_in_coma() or _is_in_battle():
 		return
 	_game_finished = true
 	_reachable_tiles = {}
@@ -3805,7 +3209,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if _event_panel != null and _event_panel.is_open:
 		return
 	# B MVP：昏迷过渡期间锁所有快捷键，等 reload_current_scene 走完
-	if _is_in_coma:
+	if _player_lifecycle.is_in_coma():
 		return
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
@@ -3868,7 +3272,7 @@ func _on_event_panel_closed() -> void:
 	if _pending_camp_manage_open:
 		_pending_camp_manage_open = false
 		if _manage_ui != null:
-			_manage_ui.open(_characters, _inventory, true)
+			_manage_ui.open(_player_lifecycle.characters(), _inventory, true)
 
 
 ## 刷新探索态【攻击】/【扎营】按钮可见性
@@ -3914,7 +3318,7 @@ func _can_show_explore_camp() -> bool:
 func _passes_explore_action_guards() -> bool:
 	if _is_in_battle():
 		return false
-	if _game_finished or _is_moving or _is_in_coma or _is_camping:
+	if _game_finished or _is_moving or _player_lifecycle.is_in_coma() or _is_camping:
 		return false
 	if _manage_ui != null and _manage_ui.is_open:
 		return false
@@ -3928,7 +3332,7 @@ func _passes_explore_action_guards() -> bool:
 		return false
 	if _unit == null:
 		return false
-	if _characters.is_empty() or _characters[0] == null or not _characters[0].has_troop():
+	if _player_lifecycle.characters().is_empty() or _player_lifecycle.characters()[0] == null or not _player_lifecycle.characters()[0].has_troop():
 		return false
 	return true
 
@@ -3937,7 +3341,7 @@ func _passes_explore_action_guards() -> bool:
 ##
 ## 探索态守卫覆盖（防止在错位时序入战）：
 ##   _is_moving / _manage_ui.is_open / _is_camping / _build_panel_ui.is_open
-##   _is_in_coma（昏迷过渡，B MVP）/ _enemy_movement.is_moving（敌方移动阶段）
+##   _player_lifecycle.is_in_coma()（昏迷过渡，B MVP）/ _enemy_movement.is_moving（敌方移动阶段）
 ##   非 PLAYER 回合（敌方阶段不可主动入战）
 ##
 ## 战斗态：BattleHUD 退出按钮按下也走 _on_battle_hud_exit_pressed，与 [F] 同语义
@@ -3950,7 +3354,7 @@ func _handle_f_key() -> void:
 		_on_battle_hud_attack_pressed()
 		return
 	# 探索态：补给 / 候选 / 触发由 _try_trigger_active_battle 内部判定
-	if _game_finished or _is_in_coma or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:
+	if _game_finished or _player_lifecycle.is_in_coma() or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:
 		return
 	if _enemy_movement != null and _enemy_movement.is_moving():
 		return

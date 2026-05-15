@@ -146,8 +146,12 @@ func get_battle_trigger_range() -> int:
 
 
 ## 战斗态是否强制白昼（关卡 slot / 移动标记昼夜分支）
+## MVP-δ 阶段 2：转发改指向 NightVisionLayer.is_battle_force_day（保持调用方 API 不变）
 func is_battle_force_day() -> bool:
-	return _wm.get("_battle_force_day")
+	var nv: NightVisionLayer = _wm.get("_night_vision") as NightVisionLayer
+	if nv == null:
+		return false
+	return nv.is_battle_force_day()
 
 
 ## 当前战斗会话（战斗叠加层绘制用；非战斗态为 null）
@@ -180,8 +184,18 @@ func is_in_battle() -> bool:
 
 
 ## 世界像素坐标是否落在浓雾内
+## MVP-δ 阶段 2：转发改指向 NightVisionLayer.is_in_fog（保持调用方 API 不变）
 func is_in_fog(world_pos: Vector2) -> bool:
-	return _wm.call("_is_in_fog", world_pos)
+	var nv: NightVisionLayer = _wm.get("_night_vision") as NightVisionLayer
+	if nv == null:
+		return false
+	return nv.is_in_fog(world_pos)
+
+
+## 玩家单位是否正在移动（用于 NightVisionLayer 计算光源位置 —— 移动中读 unit_visual_pos）
+## MVP-δ 阶段 2 追加
+func is_player_moving() -> bool:
+	return _wm.get("_is_moving")
 
 
 ## 取指定格的 LevelSlot（无则 null）
