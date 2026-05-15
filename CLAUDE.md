@@ -283,7 +283,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 / β / γ 已落地（γ = WorldMapRenderer + BattleAnimDirector 拆出，WorldMap.gd 5462 → 4101 行，2026-05-15，4 commit），后续 δ/ε 2 批待启动
+- [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 / β / γ / δ 已落地（δ = EnemyMovement 解耦 + NightVisionLayer + PlayerLifecycle + lifecycle 协议建档，WorldMap.gd 4163 → 3574 行净减 596，2026-05-15，3 commit + 同窗修复 codex P0/P1/P2 + 2 个 pre-existing bug），后续 ε 批待启动
 
 ## 预启动（方向已认可，等启动时机）
 
