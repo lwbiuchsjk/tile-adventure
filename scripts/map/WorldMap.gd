@@ -2720,7 +2720,10 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 	# 钳位防御 _active_battle_supply_cost > _supply 时不进入负数（被动战斗 E4 路径同样适用）
 	_supply = maxi(0, _supply - _active_battle_supply_cost)
 	_battle_session = BattleSession.new()
-	_battle_anim_director.setup(self, _battle_hud, _battle_view, _terrain_altitude_step)
+	# MVP-γ 阶段 2 修复：redraw_target 传 _renderer（非 self）—— _draw 已迁到
+	# WorldMapRenderer，动画 tween 每帧须重绘 _renderer，重绘空的 WorldMap 无效；
+	# BattleFloatText 也挂到 _renderer（同坐标空间的 Node2D）
+	_battle_anim_director.setup(_renderer, _battle_hud, _battle_view, _terrain_altitude_step)
 	_bind_battle_session_sinks()
 	_battle_session.start(
 		_characters,
@@ -2768,7 +2771,10 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		return
 	_supply = maxi(0, _supply - _passive_battle_supply_cost)
 	_battle_session = BattleSession.new()
-	_battle_anim_director.setup(self, _battle_hud, _battle_view, _terrain_altitude_step)
+	# MVP-γ 阶段 2 修复：redraw_target 传 _renderer（非 self）—— _draw 已迁到
+	# WorldMapRenderer，动画 tween 每帧须重绘 _renderer，重绘空的 WorldMap 无效；
+	# BattleFloatText 也挂到 _renderer（同坐标空间的 Node2D）
+	_battle_anim_director.setup(_renderer, _battle_hud, _battle_view, _terrain_altitude_step)
 	_bind_battle_session_sinks()
 	_battle_session.start(
 		_characters,
