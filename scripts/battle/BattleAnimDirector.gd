@@ -192,7 +192,8 @@ func _on_battle_unit_moved(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector
 
 func _on_battle_unit_attacked(
 	actor: BattleUnit, target: BattleUnit,
-	damage: int, counter_factor: float, altitude_diff: int
+	damage: int, counter_factor: float, altitude_diff: int,
+	is_killing_blow: bool
 ) -> void:
 	if actor == null or target == null:
 		_redraw_target.queue_redraw()
@@ -205,7 +206,7 @@ func _on_battle_unit_attacked(
 	_view_state.displayed_hps[target] = hp_before
 	_redraw_target.queue_redraw()
 	var runner: Callable = func() -> void:
-		_run_attack_anim(actor, target, damage, counter_factor, altitude_diff, hp_before, hp_after)
+		_run_attack_anim(actor, target, damage, counter_factor, altitude_diff, hp_before, hp_after, is_killing_blow)
 	_enqueue_battle_anim(runner)
 
 
@@ -271,18 +272,29 @@ func _run_move_anim(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector2i) -> 
 
 
 ## 攻击 runner：actor 推冲 + 回弹（串行）；target 颤抖（并行）；飘字 + HP 补间
+##
+## is_killing_blow=true：本击导致队长 COMA —— 用更慢、幅度更大的参数强化因果感
 func _run_attack_anim(
 	actor: BattleUnit, target: BattleUnit,
 	damage: int, counter_factor: float, altitude_diff: int,
-	hp_before: float, hp_after: float
+	hp_before: float, hp_after: float, is_killing_blow: bool
 ) -> void:
+	# 致命一击 vs 普通：动画参数选用（普通常量 vs 升级常量）
+	var thrust_dur: float = WorldMap.BATTLE_KILLING_THRUST_DURATION if is_killing_blow else WorldMap.BATTLE_THRUST_DURATION
+	var thrust_ratio: float = WorldMap.BATTLE_KILLING_THRUST_DISTANCE_RATIO if is_killing_blow else WorldMap.BATTLE_THRUST_DISTANCE_RATIO
+	var shake_dur: float = WorldMap.BATTLE_KILLING_SHAKE_DURATION if is_killing_blow else WorldMap.BATTLE_SHAKE_DURATION
+	var shake_amp: float = WorldMap.BATTLE_KILLING_SHAKE_AMPLITUDE if is_killing_blow else WorldMap.BATTLE_SHAKE_AMPLITUDE
+	var shake_osc: float = WorldMap.BATTLE_KILLING_SHAKE_OSCILLATIONS if is_killing_blow else WorldMap.BATTLE_SHAKE_OSCILLATIONS
+	var hp_dur: float = WorldMap.BATTLE_KILLING_HP_TWEEN_DURATION if is_killing_blow else WorldMap.BATTLE_HP_TWEEN_DURATION
+	var float_dur: float = WorldMap.BATTLE_KILLING_FLOAT_DAMAGE_DURATION if is_killing_blow else WorldMap.BATTLE_FLOAT_DAMAGE_DURATION
+
 	# 推冲方向：单位差 / 曼哈顿距离（远程兵种斜攻时按斜向单位向量推冲）
 	var diff: Vector2i = target.battle_position - actor.battle_position
 	var dir: Vector2 = Vector2.ZERO
 	var manhattan_d: int = absi(diff.x) + absi(diff.y)
 	if manhattan_d > 0:
 		dir = Vector2(float(diff.x), float(diff.y)) / float(manhattan_d)
-	var thrust_offset: Vector2 = dir * float(WorldMap.TILE_SIZE) * WorldMap.BATTLE_THRUST_DISTANCE_RATIO
+	var thrust_offset: Vector2 = dir * float(WorldMap.TILE_SIZE) * thrust_ratio
 
 	# actor 推冲 + 回弹
 	_begin_battle_anim()
@@ -292,11 +304,11 @@ func _run_attack_anim(
 	var actor_tween: Tween = create_tween()
 	actor_tween.tween_method(
 		func(p: float) -> void: actor_set_offset.call(thrust_offset * p),
-		0.0, 1.0, WorldMap.BATTLE_THRUST_DURATION
+		0.0, 1.0, thrust_dur
 	)
 	actor_tween.tween_method(
 		func(p: float) -> void: actor_set_offset.call(thrust_offset * (1.0 - p)),
-		0.0, 1.0, WorldMap.BATTLE_THRUST_DURATION
+		0.0, 1.0, thrust_dur
 	)
 	actor_tween.tween_callback(func() -> void:
 		_view_state.unit_visual_offsets.erase(actor)
@@ -310,11 +322,11 @@ func _run_attack_anim(
 	shake_tween.tween_method(
 		func(p: float) -> void:
 			_view_state.unit_visual_offsets[target] = Vector2(
-				WorldMap.BATTLE_SHAKE_AMPLITUDE * sin(p * TAU * WorldMap.BATTLE_SHAKE_OSCILLATIONS),
+				shake_amp * sin(p * TAU * shake_osc),
 				0.0
 			)
 			_redraw_target.queue_redraw(),
-		0.0, 1.0, WorldMap.BATTLE_SHAKE_DURATION
+		0.0, 1.0, shake_dur
 	)
 	shake_tween.tween_callback(func() -> void:
 		_view_state.unit_visual_offsets.erase(target)
@@ -330,7 +342,7 @@ func _run_attack_anim(
 		func(v: float) -> void:
 			_view_state.displayed_hps[target] = v
 			_redraw_target.queue_redraw(),
-		hp_before, hp_after, WorldMap.BATTLE_HP_TWEEN_DURATION
+		hp_before, hp_after, hp_dur
 	)
 	hp_tween.tween_callback(func() -> void:
 		_view_state.displayed_hps.erase(target)
@@ -347,7 +359,7 @@ func _run_attack_anim(
 		_redraw_target, float_pos, str(damage),
 		_altitude_subtitle(altitude_diff),
 		_attack_float_color(counter_factor),
-		WorldMap.BATTLE_FLOAT_DAMAGE_DURATION
+		float_dur
 	)
 
 

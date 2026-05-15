@@ -824,6 +824,10 @@ func _emit_unit_moved(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector2i) -
 
 ## emit 攻击事件；衍生 counter_factor + altitude_diff（与 _calc_attack_damage 内部口径一致）
 ## 视觉层据 counter_factor 编码飘字颜色、据 altitude_diff 显示副标题
+##
+## is_killing_blow（MVP-γ 后续追加）：本次伤害是否导致队长跌阈值进入 COMA
+## 视觉层据此用更慢、幅度更大的攻击动画强化"这一击致昏"的因果（设计 §致命一击）
+## 判定时机：take_damage 已应用，调用 _is_leader_in_coma() 看队长是否已跌阈值
 func _emit_unit_attacked(actor: BattleUnit, target: BattleUnit, damage: int) -> void:
 	if not on_unit_attacked.is_valid():
 		return
@@ -837,7 +841,13 @@ func _emit_unit_attacked(actor: BattleUnit, target: BattleUnit, damage: int) -> 
 		target.battle_position.x, target.battle_position.y
 	)
 	var altitude_diff: int = actor_alt - target_alt
-	on_unit_attacked.call(actor, target, damage, counter_factor, altitude_diff)
+	# 致命一击判定：target 是队长 且 本次伤害后 leader 已跌至 COMA 阈值
+	var is_killing_blow: bool = (
+		not player_units.is_empty()
+		and target == player_units[0]
+		and _is_leader_in_coma()
+	)
+	on_unit_attacked.call(actor, target, damage, counter_factor, altitude_diff, is_killing_blow)
 
 
 func _emit_unit_skipped(actor: BattleUnit) -> void:

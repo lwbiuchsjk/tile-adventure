@@ -224,7 +224,9 @@ func _draw() -> void:
 	# 第四层：单位标记（基于视觉位置）
 	# E MVP：战斗态由 _draw_battle_overlay 渲染战场上的队长（按 battle_position），
 	# 跳过探索态单位 marker，避免与战场队长重叠
-	if _unit != null and not _world_view.is_in_battle():
+	# 门控用 `_battle_session == null`（对象不存在）而非 `is_in_battle()`（!is_ended()）——
+	# 让 COMA 的 await 致命一击动画期间（session 已 ended 但还没置 null）仍走战场渲染
+	if _unit != null and _battle_session == null:
 		_draw_unit_marker()
 
 	# 第五层：夜晚效果（已上移至 night_overlay CanvasLayer=5，本 _draw 不再处理）
@@ -240,7 +242,9 @@ func _draw() -> void:
 
 	# 第六层：E MVP 战场叠加（战斗态时渲染战场边框 / 单位 / 移动+攻击高亮 / HP 条）
 	# 渲染顺序在夜晚滤镜之后：让战场单位 / 高亮不被夜晚色调遮罩，保证战斗操作的可见性
-	if _world_view.is_in_battle():
+	# 门控用 `_battle_session != null`：COMA await 致命一击动画期间 session 已 ended 但
+	# 还没置 null，仍需画战场单位 / 攻击动画偏移 / HP 补间（设计 §致命一击）
+	if _battle_session != null:
 		_draw_battle_overlay()
 
 ## 绘制单格地形色块及 Slot 标记
@@ -521,8 +525,8 @@ func _draw_persistent_influence_ranges() -> void:
 func _draw_enemy_threat_zones() -> void:
 	if _schema == null:
 		return
-	# 战斗态不画：探索阶段专属
-	if _world_view.is_in_battle():
+	# 战斗态不画：探索阶段专属（含 COMA await 期间 —— session 已 ended 但还没置 null）
+	if _battle_session != null:
 		return
 	const THREAT_COLOR: Color = Color(1, 0, 0, 0.20)
 	for pos in _level_slots:

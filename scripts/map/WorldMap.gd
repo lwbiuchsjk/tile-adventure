@@ -721,6 +721,19 @@ const BATTLE_FLOAT_COLOR_ADV: Color = Color(0.3, 0.9, 0.3)         ## > 1.0 克�
 const BATTLE_FLOAT_COLOR_DIS: Color = Color(1.0, 0.55, 0.1)        ## < 1.0 受克 → 橙
 const BATTLE_FLOAT_COLOR_NEUTRAL: Color = Color(0.9, 0.3, 0.3)     ## = 1.0 中性 → 默认红
 const BATTLE_FLOAT_COLOR_SKIP: Color = Color(0.65, 0.65, 0.65)     ## 跳过飘字 → 灰
+
+# ─────────────────────────────────────
+# 致命一击动画规格（MVP-γ 后续：队长 COMA 触发的那一击专用 —— 更慢、幅度更大）
+# 设计意图：让玩家清楚看到"这一击导致队长昏迷"的因果，强化转折感
+# 触发条件：BattleSession._emit_unit_attacked 检测 target==leader && _is_leader_in_coma() 后传 is_killing_blow=true
+# ─────────────────────────────────────
+const BATTLE_KILLING_THRUST_DURATION: float = 0.40             ## 推冲/回弹单段时长（普通 0.15）
+const BATTLE_KILLING_THRUST_DISTANCE_RATIO: float = 1.0        ## 推冲距离 = TILE_SIZE * 该比例（普通 0.5；满格推冲）
+const BATTLE_KILLING_SHAKE_DURATION: float = 0.60              ## 目标颤抖时长（普通 0.20）
+const BATTLE_KILLING_SHAKE_AMPLITUDE: float = 6.0              ## 颤抖振幅 ±px（普通 2.0）
+const BATTLE_KILLING_SHAKE_OSCILLATIONS: float = 5.0           ## 颤抖正弦周期数（普通 3.0）
+const BATTLE_KILLING_HP_TWEEN_DURATION: float = 0.60           ## HP 条平滑过渡（普通 0.30）
+const BATTLE_KILLING_FLOAT_DAMAGE_DURATION: float = 1.5        ## 伤害飘字上飘时长（普通 1.0）
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
