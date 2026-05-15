@@ -50,7 +50,12 @@ var _move_tween: Tween = null
 # ─────────────────────────────────────
 
 var _schema: MapSchema = null
-var _level_slots: Dictionary = {}
+## 世界视图 facade（MVP-δ 阶段 1 引入）—— 取代原 _level_slots / _original_slot_types 字典副本
+##
+## EnemyMovement 不再持有任何 WorldMap 私字段引用；所有读访问通过 facade getter，
+## 所有写操作通过 facade command（commit_enemy_move / try_enemy_occupy_persistent_slot）。
+## 由 start_phase 时 WorldMap 一次性注入。
+var _world_view: WorldView = null
 ## 玩家单位当前位置（用于 _pick_target_for 追玩家分支 + 保护区中心）
 var _player_pos: Vector2i = Vector2i.ZERO
 ## 敌方部队寻路目的地战略目标位置
@@ -59,7 +64,6 @@ var _player_pos: Vector2i = Vector2i.ZERO
 ## 历史：X-A 前 = 玩家方 CORE_TOWN；X-A 后 = _start_pos；现保留作 start_phase 签名兼容
 var _target_pos: Vector2i = Vector2i.ZERO
 var _movement_points: int = 6
-var _original_slot_types: Dictionary = {}
 var _game_over: bool = false
 ## M8 扩展遗留字段：旧"追玩家阈值"
 ## P0 第二阶段后已废弃：_pick_target_for 改用 PERCEIVE_RANGE 常量（默认 3）
@@ -100,25 +104,29 @@ func get_moving_level() -> LevelSlot:
 ## 收集所有可移动关卡，按距离（到动态 target）排序后逐个处理
 ##
 ## 参数：
-##   target_pos —— 战略目标（P0 X-A 后 = 玩家 spawn 锚 _start_pos；X-A 前 = 玩家方 CORE_TOWN）；寻路目的地的一个候选
+##   schema —— 地图 schema（纯读：Pathfinder.find_path / 地形 cost / 持久 slot 枚举）
+##   world_view —— 世界视图 facade（MVP-δ 阶段 1 引入）；取代原 level_slots / original_slot_types
+##     两个字典引用参数。读 level_slots 走 world_view.get_level_slots()；
+##     写整组（level 位置 + slot 类型 + original_slot_types）走 world_view.commit_enemy_move()
+##   target_pos —— 战略目标（P0 X-A 后 = 玩家 spawn 锚 _start_pos；X-A 前 = 玩家方 CORE_TOWN）
+##     P0 第二阶段后保留仅作签名兼容，_pick_target_for 内部不再读取
 ##   player_pos —— 玩家单位位置；用于 _pick_target_for 追玩家分支 + 保护区中心
 ##   target_switch_range —— 追玩家阈值（默认 10）；pack 到玩家 ≤ 该值才可能追玩家
 ##     传 -1 或 0 时退化为"永远推核心"（测试 / 调试用）
 ##   forced_battle_range —— 保护区半径（默认 3）；保护区内格 blocked + 被动战斗扫描半径
 ##   protected_zone_range —— E MVP 玩家保护区半径（曼哈顿）；保护区内格 cost = INF
 ##     默认 0 = 关闭保护区（向后兼容 / 调试）；正常路径下 WorldMap 注入 _battle_trigger_range
-func start_phase(schema: MapSchema, level_slots: Dictionary,
+func start_phase(schema: MapSchema, world_view: WorldView,
 		player_pos: Vector2i, target_pos: Vector2i, movement_points: int,
-		original_slot_types: Dictionary, game_over: bool,
+		game_over: bool,
 		target_switch_range: int = 10,
 		forced_battle_range: int = 3,
 		protected_zone_range: int = 0) -> void:
 	_schema = schema
-	_level_slots = level_slots
+	_world_view = world_view
 	_player_pos = player_pos
 	_target_pos = target_pos
 	_movement_points = movement_points
-	_original_slot_types = original_slot_types
 	_game_over = game_over
 	_target_switch_range = target_switch_range
 	_forced_battle_range = forced_battle_range
@@ -174,8 +182,10 @@ func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 ##   效果：占领优先制造"敌方扩张感"；玩家远离任何 slot 时被持续追击
 func _get_sorted_movable_levels() -> Array[LevelSlot]:
 	var movable: Array[LevelSlot] = []
-	for pos in _level_slots:
-		var lv: LevelSlot = _level_slots[pos] as LevelSlot
+	# MVP-δ 阶段 1：经 world_view facade 读 level_slots（不再持字典引用副本）
+	var level_slots: Dictionary = _world_view.get_level_slots()
+	for pos in level_slots:
+		var lv: LevelSlot = level_slots[pos] as LevelSlot
 		if lv.state != LevelSlot.State.UNCHALLENGED:
 			continue
 		# 阵营白名单：ENEMY_1（M7 正式）+ NONE（M7 前 legacy 关卡兼容）
@@ -326,17 +336,10 @@ func _process_next_move() -> void:
 	var old_pos: Vector2i = level.position
 	var new_pos: Vector2i = move_path[move_path.size() - 1]
 
-	_level_slots.erase(old_pos)
-	level.position = new_pos
-	_level_slots[new_pos] = level
-
-	# 更新 Slot 标记（保留原始类型以便恢复）
-	var restored_type: int = _original_slot_types.get(old_pos, MapSchema.SlotType.NONE) as int
-	_schema.set_slot(old_pos.x, old_pos.y, restored_type as MapSchema.SlotType)
-	_original_slot_types.erase(old_pos)
-	if not _original_slot_types.has(new_pos):
-		_original_slot_types[new_pos] = _schema.get_slot(new_pos.x, new_pos.y)
-	_schema.set_slot(new_pos.x, new_pos.y, MapSchema.SlotType.FUNCTION)
+	# MVP-δ 阶段 1：7 行原子写收敛到 world_view facade command
+	#   - 字典 erase/set / level.position / schema set_slot 双格 / original_slot_types erase/conditional set
+	#   全部由 WorldMap._commit_enemy_move 在内部一次性执行
+	_world_view.commit_enemy_move(level, old_pos, new_pos)
 
 	# 播放移动动画
 	_start_animation(move_path)
@@ -354,9 +357,11 @@ func _process_next_move() -> void:
 ##     当前 Pathfinder 的"目的地不可达时取最近可达格"行为由 _process_next_move 后续 trim 处理
 func _get_blocked_positions(exclude_level: LevelSlot) -> Dictionary:
 	var blocked: Dictionary = {}
-	for pos in _level_slots:
+	# MVP-δ 阶段 1：经 world_view facade 读 level_slots
+	var level_slots: Dictionary = _world_view.get_level_slots()
+	for pos in level_slots:
 		var p: Vector2i = pos as Vector2i
-		var lv: LevelSlot = _level_slots[p] as LevelSlot
+		var lv: LevelSlot = level_slots[p] as LevelSlot
 		if lv == exclude_level:
 			continue
 		if lv.state == LevelSlot.State.UNCHALLENGED or lv.is_repelled():
@@ -532,15 +537,12 @@ func _finish_phase_internal() -> void:
 
 
 ## M4: 敌方单位在 pos 尝试占据持久 slot
-## 成功翻转则触发重绘（影响范围覆盖即时刷新）
-## 注：_schema.persistent_slots 由 WorldMap 初始化时填充；_schema 在 start_phase 时注入
+##
+## MVP-δ 阶段 1（2026-05-15）：占据写操作收敛到 world_view facade。
+## 占据成功时的重绘由 WorldMap._try_enemy_occupy_persistent_slot 内部直接调
+## _renderer.queue_redraw()，EnemyMovement 不再发 redraw_requested（少一次信号往返）。
+## redraw_requested 信号保留供动画帧 redraw 使用（_start_animation Tween 帧回调）。
 func _try_enemy_occupy_at(pos: Vector2i) -> void:
-	if _schema == null:
+	if _world_view == null:
 		return
-	for entry in _schema.persistent_slots:
-		var ps: PersistentSlot = entry as PersistentSlot
-		if ps.position != pos:
-			continue
-		if OccupationSystem.try_occupy(ps, Faction.ENEMY_1):
-			redraw_requested.emit()
-		return
+	_world_view.try_enemy_occupy_persistent_slot(pos, Faction.ENEMY_1)

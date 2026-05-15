@@ -1084,6 +1084,11 @@ func _init_subsystems() -> void:
 	_renderer.name = "WorldMapRenderer"
 	add_child(_renderer)
 
+	# 世界视图 facade（MVP-β）—— MVP-δ 阶段 1 提前到 EnemyMovement 创建之前，
+	# 让 start_enemy_move_phase 注入 _world_view 时引用已就绪
+	_world_view = WorldView.new()
+	_world_view.init(self)
+
 	# 敌方移动子系统（注入格子尺寸，保证视觉位置计算与 WorldMap 一致）
 	# 同时注入摄像机引用：EnemyMovement 用其计算视口可见矩形，
 	# 路径全在视口外时跳过 Tween 直接结算（详见 EnemyMovement._start_animation）
@@ -1110,11 +1115,7 @@ func _init_subsystems() -> void:
 	_build_panel_ui.closed.connect(_on_build_panel_closed)
 	_build_panel_ui.upgrade_requested.connect(_on_upgrade_requested)
 
-	# 世界视图 facade（MVP-β）—— 先于 EnemyAI 构造，作为 AI 模块访问世界的唯一入口
-	_world_view = WorldView.new()
-	_world_view.init(self)
-
-	# 敌方 AI（M7）
+	# 敌方 AI（M7）—— _world_view 已在 _renderer 之后提前创建（MVP-δ 阶段 1）
 	_enemy_ai = EnemyAI.new()
 	_enemy_ai.name = "EnemyAI"
 	add_child(_enemy_ai)
@@ -2484,6 +2485,9 @@ func _on_turn_end_settlement() -> void:
 ## P0 第二阶段：target_pos 参数已废弃（EnemyMovement._pick_target_for 改为"附近 slot 占领 + 追玩家"双轴）
 ## 仍传值给保持签名兼容；实际 per-pack 决策不再读取该值（详见 EnemyMovement.gd）
 ## 无可移动 → 直接触发 phase_finished（走 _on_enemy_phase_finished → 回 PLAYER）
+##
+## MVP-δ 阶段 1（2026-05-15）：EnemyMovement 不再持有 _level_slots / _original_slot_types
+## 字典引用，改为通过 _world_view facade 读写。签名相应缩 2 参（旧 9 参 → 新 8 参）。
 func start_enemy_move_phase() -> void:
 	if _game_finished or not _enemy_movement_enabled:
 		_on_enemy_phase_finished()
@@ -2498,12 +2502,57 @@ func start_enemy_move_phase() -> void:
 	# E4 注入玩家保护区半径（= _battle_trigger_range）：保护区内格 cost = INF
 	# 让敌方寻路自然停在保护区边缘，等敌方阶段末尾扫描触发被动战斗
 	_enemy_movement.start_phase(
-		_schema, _level_slots, _unit.position, legacy_target_pos,
-		_enemy_movement_points, _original_slot_types, _game_finished,
+		_schema, _world_view, _unit.position, legacy_target_pos,
+		_enemy_movement_points, _game_finished,
 		_enemy_target_switch_range,
 		_forced_battle_range,
 		_battle_trigger_range
 	)
+
+
+## MVP-δ 阶段 1：敌方关卡移动的原子写提交
+##
+## 由 WorldView.commit_enemy_move 转发；EnemyMovement._process_next_move 在选定新位置后调用。
+## 7 行原子写（原 EnemyMovement.gd L329-L339 整组迁过来）：
+##   - _level_slots erase(old) / set(new, level)
+##   - level.position = new_pos（mutate LevelSlot 字段）
+##   - _schema.set_slot(old, restored_original_type)：恢复 old_pos 原始地形
+##   - _original_slot_types erase(old)
+##   - 条件 set _original_slot_types[new] = 当前 schema 类型（首次踩到该格才记录）
+##   - _schema.set_slot(new, FUNCTION)：把 new_pos 标为 FUNCTION（敌方占用语义）
+func _commit_enemy_move(level: LevelSlot, old_pos: Vector2i, new_pos: Vector2i) -> void:
+	_level_slots.erase(old_pos)
+	level.position = new_pos
+	_level_slots[new_pos] = level
+	# 恢复 old_pos 的原始地形类型（敌方占用时记录的 FUNCTION 标记还原）
+	var restored_type: int = _original_slot_types.get(old_pos, MapSchema.SlotType.NONE) as int
+	_schema.set_slot(old_pos.x, old_pos.y, restored_type as MapSchema.SlotType)
+	_original_slot_types.erase(old_pos)
+	if not _original_slot_types.has(new_pos):
+		_original_slot_types[new_pos] = _schema.get_slot(new_pos.x, new_pos.y)
+	_schema.set_slot(new_pos.x, new_pos.y, MapSchema.SlotType.FUNCTION)
+
+
+## MVP-δ 阶段 1：敌方对持久 slot 的占据尝试
+##
+## 由 WorldView.try_enemy_occupy_persistent_slot 转发；EnemyMovement._try_enemy_occupy_at
+## 在移动动画末尾调用。
+##
+## 流程（原 EnemyMovement.gd L537-L546 迁过来）：
+##   - 扫 _schema.persistent_slots 找匹配 pos 的 PersistentSlot
+##   - 调 OccupationSystem.try_occupy(ps, faction)
+##   - 成功翻转 → _renderer.queue_redraw() 触发重绘（原 EnemyMovement 用 redraw_requested.emit
+##     往 WorldMap 转一道；现在直接在 WorldMap 内 redraw，少一次信号往返）
+func _try_enemy_occupy_persistent_slot(pos: Vector2i, faction: int) -> void:
+	if _schema == null:
+		return
+	for entry in _schema.persistent_slots:
+		var ps: PersistentSlot = entry as PersistentSlot
+		if ps.position != pos:
+			continue
+		if OccupationSystem.try_occupy(ps, faction):
+			_renderer.queue_redraw()
+		return
 
 
 # ─────────────────────────────────────────

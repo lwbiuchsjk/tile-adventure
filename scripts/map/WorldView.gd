@@ -197,3 +197,32 @@ func is_pack_in_battle(pos: Vector2i) -> bool:
 ## 格坐标 → 像素中心
 func grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 	return _wm.call("_grid_to_pixel_center", grid_pos)
+
+
+# ─────────────────────────────────────────
+# 写命令端（MVP-δ 阶段 1 追加）—— 转发 WorldMap 私有方法
+# EnemyMovement 不再直接 mutate 外部引用（_level_slots / _schema / _original_slot_types），
+# 改为通过本段写命令把整组原子写一次性提交到 WorldMap 内部。
+# ─────────────────────────────────────────
+
+## 提交一次敌方关卡移动（包整组 7 行原子写）
+## 由 EnemyMovement._process_next_move 在选定新位置后调用
+##
+## 内部行为（详见 WorldMap._commit_enemy_move 实现）：
+##   - _level_slots erase(old) / set(new, level)
+##   - level.position = new_pos
+##   - _schema.set_slot(old, restored_original_type) / set_slot(new, FUNCTION)
+##   - _original_slot_types erase(old) / 条件 set(new, schema 当前类型)
+func commit_enemy_move(level: LevelSlot, old_pos: Vector2i, new_pos: Vector2i) -> void:
+	_wm.call("_commit_enemy_move", level, old_pos, new_pos)
+
+
+## 尝试让指定势力占据指定位置的持久 slot
+## 由 EnemyMovement._try_enemy_occupy_at 在移动动画末尾调用
+##
+## 内部行为（详见 WorldMap._try_enemy_occupy_persistent_slot 实现）：
+##   - 扫 _schema.persistent_slots 找匹配位置
+##   - 调 OccupationSystem.try_occupy(ps, faction)
+##   - 成功时 WorldMap 内调 _renderer.queue_redraw()（EnemyMovement 侧不再 emit redraw）
+func try_enemy_occupy_persistent_slot(pos: Vector2i, faction: int) -> void:
+	_wm.call("_try_enemy_occupy_persistent_slot", pos, faction)

@@ -281,12 +281,17 @@ func _test_movable_levels_faction_whitelist() -> void:
 	# 模拟未来扩展：99 非任何已知势力（应被白名单拦住）
 	var pack_unknown: LevelSlot = _make_level_slot(Vector2i(4, 4), 99)
 
-	em._level_slots = {
+	# MVP-δ 阶段 1：EnemyMovement 不再持 _level_slots 字段，
+	# 走 WorldView facade（包 _MockWorld 暴露 _level_slots 字段）注入
+	var mock_world: _MockWorld = _MockWorld.new()
+	mock_world._schema = schema
+	mock_world._level_slots = {
 		pack_enemy.position: pack_enemy,
 		pack_none.position: pack_none,
 		pack_player.position: pack_player,
 		pack_unknown.position: pack_unknown,
 	}
+	em._world_view = _wrap_world(mock_world)
 
 	var movable: Array = em._get_sorted_movable_levels()
 	var positions: Array[Vector2i] = []
@@ -300,6 +305,7 @@ func _test_movable_levels_faction_whitelist() -> void:
 		"未知势力（99）拦住（白名单外）")
 
 	em.queue_free()
+	mock_world.queue_free()
 
 
 ## 11. PERCEIVE_RANGE 边界
