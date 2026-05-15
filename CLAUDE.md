@@ -283,7 +283,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 / β 已落地（β = WorldView facade，EnemyAI/EnemyReinforcement 字符串穿透清零，2026-05-14，3 commit），后续 γ/δ/ε 3 批待启动
+- [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 / β / γ 已落地（γ = WorldMapRenderer + BattleAnimDirector 拆出，WorldMap.gd 5462 → 4101 行，2026-05-15，4 commit），后续 δ/ε 2 批待启动
 
 ## 预启动（方向已认可，等启动时机）
 
