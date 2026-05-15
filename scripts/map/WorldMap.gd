@@ -1091,7 +1091,8 @@ func _init_subsystems() -> void:
 
 	# MVP-δ 阶段 2：夜晚视野子系统（NightVisionLayer）—— 子 Node，持 CanvasLayer=5 / =6 浮层
 	# 注入 turn_manager / camera / world_view / tile_size + 浓雾外信号颜色（敌方 slot / 移动色）
-	# setup 内挂载 CanvasLayer + 注册 DayNightState phase_changed sink
+	# setup 只挂 CanvasLayer + 初始化 shader uniform；DayNightState phase_changed sink 由
+	# WorldMap 在下方注册组合派发（DayNightState 单 sink 模型，注册覆盖语义）
 	_night_vision = NightVisionLayer.new()
 	_night_vision.name = "NightVisionLayer"
 	add_child(_night_vision)
@@ -2202,9 +2203,15 @@ func _on_victory_decided(winner_faction: int) -> void:
 ##
 ## B 重生周期 MVP：reload 前先调 RunState.reset() 清整局态（_cycle_index / _used_hero_ids / _camp_milestones）；
 ## 否则重开会沿用上一局的周期编号和已用英雄列表，违反"主动重开 = 整局重置"语义
+##
+## MVP-δ 桌面跑测后续（2026-05-15）：reload 走 call_deferred，避免在 _unhandled_input 同步信号链中
+## 调用导致当前节点脱离树后 _unhandled_input 继续访问 get_viewport() 触发 null crash。
+## 复现路径：VictoryUI 失败遮罩开启 → SPACE → _route_space_confirm → confirm_restart → 同步 emit
+## restart_pressed → 本函数 → reload_current_scene → 节点脱树 → 回到 _unhandled_input L1231 调
+## get_viewport() 返回 null → "Cannot call method 'set_input_as_handled' on a null value"
 func _on_restart_pressed() -> void:
 	RunState.reset()
-	get_tree().reload_current_scene()
+	get_tree().reload_current_scene.call_deferred()
 
 
 ## D MVP + 入口 4 后段第 1 份（夜晚视野 MVP）：昼夜阶段切换回调
@@ -2467,7 +2474,7 @@ func _try_trigger_active_battle() -> void:
 	# 队长无部队 → 不能入战；走兜底队伍状态评估（理论上 _player_lifecycle.evaluate_party_state 此时应已触发昏迷 / 失败）
 	# 防御性检查避免 BattleSession._deploy_player_side 落到无 actor 的卡死战斗态
 	if _player_lifecycle.characters().is_empty() or _player_lifecycle.characters()[0] == null or not _player_lifecycle.characters()[0].has_troop():
-		_player_lifecycle.evaluate_party_state()
+		_player_lifecycle.evaluate_party_state(_game_finished)
 		return
 	# 触发判断：dist ≤ _battle_trigger_range 内有候选 → 才能按 [F]
 	var trigger_candidates: Array[LevelSlot] = _get_packs_in_range(_unit.position, _battle_trigger_range)
@@ -2629,7 +2636,7 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 
 	# 4. 兜底队员阵亡评估（队长跌阈值的极端情况已在战斗中走 COMA 路径，不走到此处）
 	# _player_lifecycle.evaluate_party_state 返回 true 表示已触发昏迷 / 失败遮罩，无需再走收尾流程
-	if _player_lifecycle.evaluate_party_state():
+	if _player_lifecycle.evaluate_party_state(_game_finished):
 		_battle_session = null
 		return
 
@@ -2836,7 +2843,7 @@ func _get_level_at(pos: Vector2i) -> LevelSlot:
 
 ## 为我方部队应用伤害（从 BattleResult 中提取 damages），同时追踪累计损兵
 ##
-## B 重生周期 MVP：返回 _player_lifecycle.evaluate_party_state() 的结果
+## B 重生周期 MVP：返回 _player_lifecycle.evaluate_party_state(_game_finished) 的结果
 ##   - true → 已触发昏迷过渡 / 末周期失败遮罩；调用方应立即中断奖励发放 / 事件推送 / 后处理
 ##   - false → 战斗流程继续
 ##
@@ -2853,7 +2860,7 @@ func _apply_player_damages(result: BattleResolver.BattleResult) -> bool:
 				if ch.troop.is_defeated():
 					ch.clear_troop()
 			troop_index += 1
-	return _player_lifecycle.evaluate_party_state()
+	return _player_lifecycle.evaluate_party_state(_game_finished)
 
 ## 从敌方部队快照中随机抽取 1 支，转为 TROOP 道具加入背包
 ## 背包已满时直接丢弃
@@ -2937,7 +2944,7 @@ func _on_equip_troop(character: CharacterData, item: ItemData) -> void:
 	# 刷新面板
 	_manage_ui.refresh()
 	# B 重生周期 MVP：装配换部队后队长 max_hp / current_hp 比例可能跌到阈值（如把高 hp 旧部队换成低 hp 新部队）
-	_player_lifecycle.evaluate_party_state()
+	_player_lifecycle.evaluate_party_state(_game_finished)
 
 ## 使用道具操作回调（经验道具、兵力恢复道具）
 func _on_use_item(character: CharacterData, item: ItemData) -> void:
@@ -2956,7 +2963,7 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	_manage_ui.refresh()
 	# B 重生周期 MVP：道具使用后队长状态可能改变（HP_RESTORE 仅会脱离阈值，不会触发昏迷；
 	# 但 EXP 升级品质后 max_hp 会刷新，理论上有跨阈值可能。统一调用以保持入口对齐）
-	_player_lifecycle.evaluate_party_state()
+	_player_lifecycle.evaluate_party_state(_game_finished)
 
 ## 入口 2 MVP 2.3（2026-05-11）：扎营场景判定
 ##
@@ -3007,15 +3014,6 @@ func _resolve_camp_scenario() -> Dictionary:
 		if nearest != null:
 			result["slot_name"] = nearest.display_id
 	return result
-
-
-## 入口 2 MVP 2.3（2026-05-11）：把 ProductionSystem entry 转为 {item, count} 字典
-##
-## entry 字段结构因 kind 不同:
-##   KIND_RESOURCE: resource_type / amount → 取 ResourceSlot.RESOURCE_TYPE_NAMES + amount
-##   KIND_STONE:    amount → "石料" + amount
-##   KIND_ITEM:     item: ItemData → display_name + stack_count
-##   其他:          fallback "物资" / 1
 
 
 ## 入口 2 MVP 2.3（2026-05-11）：把 ProductionSystem entry 转为 {item, count} 字典
@@ -3146,12 +3144,21 @@ func _get_active_troops() -> Array[TroopData]:
 ## 原 _trigger_coma_or_lose 内 OverlayTransitionUI.play 直调迁过来；
 ## 状态副作用（_reachable_tiles = {} / _pending_camp_manage_open = false / _renderer.queue_redraw）
 ## 仍在 WorldMap 内执行——这些是 WorldMap 自己的视图态
-func _on_player_coma_triggered(lines: PackedStringArray, icon_data: Dictionary, midpoint: Callable) -> void:
+##
+## MVP-δ codex review P1 修复：midpoint 闭包整体迁到本处构造（原在 PlayerLifecycle.trigger_coma_or_lose 内）
+## 闭包负责：advance_cycle（RunState 周期推进）+ reload_current_scene（场景重启）+ 返回 world_ready_signal
+##   让 OverlayTransitionUI 在 phase B 内调用 + await，等新场景 _ready 触发 notify_world_ready 后继续 phase C
+## 由 WorldMap 持有这段时序逻辑：PlayerLifecycle 彻底独立于 OverlayTransitionUI / SceneTree
+func _on_player_coma_triggered(lines: PackedStringArray, icon_data: Dictionary) -> void:
 	_reachable_tiles = {}
 	# codex review P1-5 修复（2026-05-10）：coma 触发即重置 flag
 	# 防 EventPanel 在战斗中被 hide 而非 close → flag 永久 true → 下次 EventPanel close 误开 ManageUI
 	_pending_camp_manage_open = false
 	_renderer.queue_redraw()
+	var midpoint: Callable = func() -> Signal:
+		RunState.advance_cycle()
+		get_tree().reload_current_scene()
+		return OverlayTransitionUI.world_ready_signal
 	OverlayTransitionUI.play(lines, icon_data, midpoint)
 
 

@@ -14,8 +14,16 @@ extends Node
 ##   - 队伍状态评估（原 _evaluate_party_state）
 ##   - 昏迷触发 + 末周期失败（原 _trigger_coma_or_lose）
 ##
-## 与 UI 系统解耦：所有 UI 交互（OverlayTransitionUI / VictoryUI）通过 signal 发出，
-## 由 WorldMap 接 sink 后调用对应 autoload / 节点。本节点不直接依赖 UI。
+## 与 UI 系统 + 场景生命周期完整解耦（MVP-δ codex review P1 修复）：
+##   所有 UI 调用（OverlayTransitionUI.play / VictoryUI / VictoryJudge）通过 signal 发出，
+##   由 WorldMap 接 sink 后调用对应 autoload / 节点。
+##   COMA 重生流的 midpoint 闭包（含 RunState.advance_cycle + reload_current_scene +
+##   返回 OverlayTransitionUI.world_ready_signal）整体由 WorldMap 在 sink handler 内构造，
+##   PlayerLifecycle 不引用 OverlayTransitionUI / get_tree().reload —— 彻底独立于 UI/场景。
+##
+## 职责切分：
+##   PlayerLifecycle = 队伍/coma 状态判定 + 发信号
+##   WorldMap        = UI 过渡 + 场景 reload + 时序协调
 
 
 # ─────────────────────────────────────────
@@ -23,9 +31,13 @@ extends Node
 # ─────────────────────────────────────────
 
 ## 队长昏迷过渡触发（_trigger_coma_or_lose 内 respawns_left > 0 分支）
-## 参数：黑屏文案双句 + 火苗团数据 + midpoint 闭包（黑屏 phase B 内执行 reload）
-## WorldMap 接 sink → 调 OverlayTransitionUI.play(lines, icon_data, midpoint)
-signal coma_triggered(lines: PackedStringArray, icon_data: Dictionary, midpoint: Callable)
+## 参数：黑屏文案双句 + 火苗团数据
+## WorldMap 接 sink → 自行构造 midpoint 闭包（含 RunState.advance_cycle + reload_current_scene +
+## 返回 OverlayTransitionUI.world_ready_signal），再调 OverlayTransitionUI.play
+##
+## MVP-δ codex review P1 修复：原 signal 含 midpoint 参数 + PlayerLifecycle 内构造闭包引用
+## OverlayTransitionUI；现 payload 减为 2 参，midpoint 全部迁到 WorldMap.sink handler 构造
+signal coma_triggered(lines: PackedStringArray, icon_data: Dictionary)
 
 ## 末周期失败触发（_trigger_coma_or_lose 内 respawns_left == 0 分支）
 ## WorldMap 接 sink → 调 _on_victory_decided(faction) 走 VictoryUI 失败遮罩
@@ -172,9 +184,14 @@ func add_character(member: CharacterData) -> void:
 ## 返回 true 表示已触发昏迷态或失败遮罩，调用方应中断后续流程。
 ##
 ## 触发挂点：WorldMap._apply_player_damages / _on_use_item / _on_equip_troop 末尾。
-## 守卫：is_in_coma / WorldMap._game_finished 时调用方应跳过本调用；这里仅守 is_in_coma
-func evaluate_party_state() -> bool:
-	if _is_in_coma:
+##
+## 守卫（MVP-δ codex review P0 修复）：
+##   - 内部守 _is_in_coma（lifecycle 自身已进入昏迷态）
+##   - 外部传 skip_if_finished（WorldMap 的 _game_finished 顶层游戏结束态；
+##     防胜负判定后调用本方法触发 race condition —— 末敌包清空 + 队长血量阈值同帧）
+##   接口参数化让调用方不必每点重复守卫；未来若引入 GameState autoload，改读 GameState 即可
+func evaluate_party_state(skip_if_finished: bool = false) -> bool:
+	if skip_if_finished or _is_in_coma:
 		return true
 	# 1. 队员阵亡 → 从队伍移除（倒序避免索引漂移）
 	for i in range(_characters.size() - 1, 0, -1):
@@ -211,16 +228,21 @@ func evaluate_party_state() -> bool:
 ## B 重生周期 MVP：队长昏迷或末周期失败分支
 ##
 ## 路径：
-##   - RunState.respawns_left() > 0 → 进入昏迷态 + emit coma_triggered signal（WorldMap 接 → OverlayTransitionUI.play）
-##                                    midpoint 闭包内 advance_cycle + reload_current_scene
-##                                    新场景 setup 调 respawn_intro_ready 让 phase B 通过
+##   - RunState.respawns_left() > 0 → 进入昏迷态 + emit coma_triggered(lines, icon_data)
+##                                    WorldMap.sink → 构造 midpoint 闭包 + OverlayTransitionUI.play
+##                                    midpoint 内 advance_cycle + reload；新场景 setup 调
+##                                    respawn_intro_ready 让 phase B 通过
 ##   - 否则                          → 末周期失败 → emit defeat_triggered(ENEMY_1)
-##                                    WorldMap 接 → _on_victory_decided(ENEMY_1) 走 VictoryUI 失败遮罩
+##                                    WorldMap 接 → _on_victory_decided(ENEMY_1) 走 VictoryUI
 ##
-## MVP-δ 阶段 2 重构：通过 signal 与 OverlayTransitionUI / VictoryJudge 解耦；
-##   原 OverlayTransitionUI.play 调用 + _on_victory_decided 直调移到 WorldMap sink handler
+## MVP-δ 阶段 2 + codex review P1 修复：
+##   PlayerLifecycle 完全不引用 OverlayTransitionUI / get_tree().reload；
+##   原 midpoint 闭包整体迁到 WorldMap._on_player_coma_triggered 内构造（含 advance_cycle +
+##   reload_current_scene + 返回 world_ready_signal）—— 职责切分清晰：
+##     PlayerLifecycle = 队伍/coma 状态判定 + 发信号
+##     WorldMap        = UI 过渡 + 场景 reload + 时序协调
 ##
-## 幂等：_is_in_coma 守卫，重复调用不重复触发；_game_finished 守卫由 WorldMap 调用方负责（本类不知 game finished）
+## 幂等：_is_in_coma 守卫，重复调用不重复触发；_game_finished 守卫由 WorldMap 调用方负责
 func trigger_coma_or_lose() -> void:
 	if _is_in_coma:
 		return
@@ -234,14 +256,7 @@ func trigger_coma_or_lose() -> void:
 		# coma 触发会消耗 1 命（advance_cycle 把 _cycle_index +1），advance 后 respawns_left + 1 = 调用时的 respawns_left
 		# 例：max_cycles=3, _cycle_index=0 时触发：调用时 respawns_left=2 → 显示 2 团（advance 后剩 1 + 当前新队长）
 		var icon_data: Dictionary = {"icon": "🔥", "count": RunState.respawns_left()}
-		# midpoint 闭包：phase B 内由 OverlayTransitionUI 调用
-		# 注意：reload_current_scene 需要 SceneTree 访问，本节点是 Node 子节点，get_tree() 在闭包内仍可用
-		# 返回 world_ready_signal 让 OverlayTransitionUI await，等新场景 ready 后继续
-		var midpoint: Callable = func() -> Signal:
-			RunState.advance_cycle()
-			get_tree().reload_current_scene()
-			return OverlayTransitionUI.world_ready_signal
-		coma_triggered.emit(lines, icon_data, midpoint)
+		coma_triggered.emit(lines, icon_data)
 	else:
 		# 末周期无保护 → 整局失败（沿用现有 VictoryUI 失败遮罩，由 WorldMap 接 sink 处理）
 		defeat_triggered.emit(Faction.ENEMY_1)

@@ -794,12 +794,27 @@ func _calc_attack_damage(attacker: BattleUnit, target: BattleUnit) -> int:
 	)
 
 
-## 在 units 数组中从 start_index 起找下一个可行动的单位索引；找不到返回 -1
+## 在 units 数组中从 start_index 起循环找下一个可行动的单位索引；找不到返回 -1
 ##
 ## "可行动" = is_active && is_alive() && !has_attacked
 ##           （has_moved 不阻止"仅移动后再跳过"路径，因此不作排除条件）
+##
+## 循环扫描语义（MVP-δ 桌面跑测后续修复 2026-05-15）：
+##   先扫 [start_index, units.size())；找不到再折回扫 [0, start_index)
+##
+## 修复 bug：玩家通过 try_select_player_unit 手动切到 idx N（跳过 [0, N)）后让 N 行动 →
+##   advance_to_next_player_unit 从 N+1 扫 → 原单向实装找不到时直接返回 -1 → 误判"全员完成"
+##   提前切敌方回合，[0, N) 的未行动单位永远不被扫到。
+##
+## 敌方路径幂等：敌方按顺序行动，前段单位已 has_attacked=true 不会被折回扫描误选；
+##   循环扫描对敌方路径行为无变化
 func _find_next_actor_index(units: Array[BattleUnit], start_index: int) -> int:
 	for i in range(start_index, units.size()):
+		var u: BattleUnit = units[i]
+		if u.is_active and u.is_alive() and not u.has_attacked:
+			return i
+	# 折回扫描 [0, start_index)：覆盖"玩家跳过中间单位"场景
+	for i in range(0, start_index):
 		var u: BattleUnit = units[i]
 		if u.is_active and u.is_alive() and not u.has_attacked:
 			return i
