@@ -161,21 +161,35 @@ func start(
 	battle_round = 1
 
 	# 战场 Rect2i = 玩家中心 ±arena_range 与地图边界交集
-	arena = _compute_arena(player_pos, arena_range, schema)
+	arena = BattleDeploy.compute_arena(player_pos, arena_range, schema)
 
-	# 全局占位字典（展开期间维护）
+	# 全局占位字典（展开期间维护，由 BattleDeploy 系列函数 mutate）
 	var occupied: Dictionary = {}
 
 	# 玩家方展开
 	player_units = []
 	inactive_player_chars = []
-	_deploy_player_side(characters, player_pos, occupied)
+	var player_result: Dictionary = BattleDeploy.deploy_player_side(
+		characters, player_pos, arena, schema, unit_config, occupied
+	)
+	player_units.assign(player_result["units"])
+	inactive_player_chars.assign(player_result["inactive"])
 
 	# 敌方展开（按参战 LevelSlot 顺序）
 	enemy_units = []
 	inactive_enemy_troops = {}
 	for pack in packs:
-		_deploy_enemy_pack(pack, occupied)
+		var enemy_result: Dictionary = BattleDeploy.deploy_enemy_pack(
+			pack, arena, schema, unit_config, occupied
+		)
+		var pack_units: Array = enemy_result["units"]
+		for unit in pack_units:
+			enemy_units.append(unit as BattleUnit)
+		var pack_inactive: Array = enemy_result["inactive"]
+		if not pack_inactive.is_empty():
+			var inactive_typed: Array[TroopData] = []
+			inactive_typed.assign(pack_inactive)
+			inactive_enemy_troops[pack] = inactive_typed
 
 	# 入口 2 MVP 2.1 议题 5 防御性兜底（2026-05-10）：
 	# 战斗 start 后立即检查 COMA —— 防止队长带病上场（HP 已 ≤ 阈值但因
@@ -199,14 +213,17 @@ func end(reason: EndReason, defeated_packs: Array[LevelSlot]) -> void:
 # 状态查询
 # ─────────────────────────────────────
 
+## 当前是否处于玩家行动阶段
 func is_player_turn() -> bool:
 	return current_phase == Phase.PLAYER_TURN
 
 
+## 当前是否处于敌方行动阶段
 func is_enemy_turn() -> bool:
 	return current_phase == Phase.ENEMY_TURN
 
 
+## 战斗会话是否已结束（VICTORY / MANUAL_EXIT / COMA 任一）
 func is_ended() -> bool:
 	return current_phase == Phase.ENDED
 
@@ -250,7 +267,7 @@ func get_reachable_for_current() -> Array[Vector2i]:
 	var actor: BattleUnit = current_actor()
 	if actor == null or not is_player_turn() or actor.has_moved:
 		return []
-	return _bfs_reachable(actor)
+	return BattleMath.bfs_reachable(actor, arena, schema, BattleDeploy.build_occupied(player_units, enemy_units))
 
 
 ## 当前玩家单位的攻击范围内敌方目标
@@ -263,7 +280,7 @@ func get_attackable_targets() -> Array[BattleUnit]:
 	for enemy in enemy_units:
 		if not enemy.is_active or not enemy.is_alive():
 			continue
-		if _manhattan(actor.battle_position, enemy.battle_position) <= actor.attack_range:
+		if BattleMath.manhattan(actor.battle_position, enemy.battle_position) <= actor.attack_range:
 			targets.append(enemy)
 	return targets
 
@@ -306,9 +323,12 @@ func try_player_attack(target: BattleUnit) -> Dictionary:
 	if target.owner_faction == actor.owner_faction:
 		push_warning("BattleSession.try_player_attack: target 与 actor 同阵营，拒绝")
 		return {"success": false, "damage": 0}
-	if _manhattan(actor.battle_position, target.battle_position) > actor.attack_range:
+	if BattleMath.manhattan(actor.battle_position, target.battle_position) > actor.attack_range:
 		return {"success": false, "damage": 0}
-	var damage: int = _calc_attack_damage(actor, target)
+	var damage: int = BattleMath.calc_attack_damage(
+		actor, target, schema, terrain_altitude_step,
+		battle_config, difficulty, damage_increment
+	)
 	target.troop.take_damage(damage)
 	actor.has_attacked = true
 	# 入口 1.2：先 emit 攻击事件，再 emit 死亡事件（顺序保证视觉层先播伤害飘字、后播死亡渐隐）
@@ -412,7 +432,7 @@ func step_enemy_turn() -> bool:
 		_start_player_turn()
 		return false
 	var decision: Dictionary = BattleAI.decide(
-		actor, player_units, arena, schema, _build_occupied()
+		actor, player_units, arena, schema, BattleDeploy.build_occupied(player_units, enemy_units)
 	)
 	var action: int = int(decision.get("action", BattleAI.Action.SKIP))
 	match action:
@@ -435,7 +455,10 @@ func step_enemy_turn() -> bool:
 			# 攻击
 			var target: BattleUnit = decision["target"] as BattleUnit
 			if target != null and target.is_active and target.is_alive():
-				var damage: int = _calc_attack_damage(actor, target)
+				var damage: int = BattleMath.calc_attack_damage(
+					actor, target, schema, terrain_altitude_step,
+					battle_config, difficulty, damage_increment
+				)
 				target.troop.take_damage(damage)
 				_emit_unit_attacked(actor, target, damage)
 				if not target.is_alive():
@@ -520,279 +543,8 @@ func _is_leader_in_coma() -> bool:
 
 
 # ─────────────────────────────────────
-# 内部 helper：展开
+# 内部 helper：行动顺序
 # ─────────────────────────────────────
-
-## 计算战场 Rect2i：玩家中心 ±arena_range 与地图边界做交集（§2.1）
-static func _compute_arena(center: Vector2i, arena_range: int, schema: MapSchema) -> Rect2i:
-	var raw: Rect2i = Rect2i(
-		center.x - arena_range, center.y - arena_range,
-		arena_range * 2 + 1, arena_range * 2 + 1
-	)
-	var map_rect: Rect2i = Rect2i(0, 0, schema.width, schema.height)
-	# Rect2i.intersection 在 Godot 4 中可用，返回交集
-	return raw.intersection(map_rect)
-
-
-## 玩家方展开：队长留原位，队员按 4邻 → 8邻 找空位
-func _deploy_player_side(
-	characters: Array[CharacterData], player_pos: Vector2i, occupied: Dictionary
-) -> void:
-	if characters.is_empty():
-		return
-	# 队长（[0]）
-	var leader_char: CharacterData = characters[0]
-	if leader_char != null and leader_char.has_troop():
-		var leader_unit: BattleUnit = _make_player_unit(leader_char, player_pos)
-		player_units.append(leader_unit)
-		occupied[player_pos] = leader_unit
-	else:
-		# 队长无部队 → 战斗刚启动就走失败分支；这里不展开，调用方应在 start 前检查
-		push_warning("BattleSession._deploy_player_side: 队长无部队，玩家方未展开任何单位")
-		return
-	# 队员（[1..]）
-	for i in range(1, characters.size()):
-		var ch: CharacterData = characters[i]
-		if ch == null or not ch.has_troop():
-			continue
-		var slot: Vector2i = _find_deploy_slot(player_pos, occupied)
-		if not _is_valid_slot(slot, occupied):
-			push_warning("BattleSession: 队员 %s 找不到展开位，标记未上场" % ch.id)
-			inactive_player_chars.append(ch)
-			continue
-		var unit: BattleUnit = _make_player_unit(ch, slot)
-		unit.is_active = true
-		player_units.append(unit)
-		occupied[slot] = unit
-
-
-## 敌方 LevelSlot 展开：首 troop 留原格 + 其余 4邻→8邻→16邻 找空位
-func _deploy_enemy_pack(pack: LevelSlot, occupied: Dictionary) -> void:
-	if pack == null or pack.troops.is_empty():
-		return
-	var pack_pos: Vector2i = pack.position
-	var inactive_for_pack: Array[TroopData] = []
-
-	# 首 troop
-	var first_troop: TroopData = pack.troops[0]
-	var first_pos: Vector2i = pack_pos
-	if not _can_deploy_at(first_pos, occupied):
-		# 极端：原格已被占（例如另一 LevelSlot 同位 / 玩家展开占了——理论极少）
-		first_pos = _find_deploy_slot(pack_pos, occupied)
-	if _is_valid_slot(first_pos, occupied):
-		var first_unit: BattleUnit = _make_enemy_unit(first_troop, pack, first_pos)
-		enemy_units.append(first_unit)
-		occupied[first_pos] = first_unit
-	else:
-		push_warning("BattleSession: pack %s 首 troop 找不到展开位，标记未上场" % pack_pos)
-		inactive_for_pack.append(first_troop)
-
-	# 其余 troops
-	for i in range(1, pack.troops.size()):
-		var troop: TroopData = pack.troops[i]
-		var slot: Vector2i = _find_deploy_slot(pack_pos, occupied, 4)  # 4 = 16 格内
-		if not _is_valid_slot(slot, occupied):
-			push_warning("BattleSession: pack %s 第 %d 个 troop 找不到展开位，标记未上场" % [pack_pos, i])
-			inactive_for_pack.append(troop)
-			continue
-		var unit: BattleUnit = _make_enemy_unit(troop, pack, slot)
-		enemy_units.append(unit)
-		occupied[slot] = unit
-
-	if not inactive_for_pack.is_empty():
-		inactive_enemy_troops[pack] = inactive_for_pack
-
-
-## 构造玩家方 BattleUnit：装配 troop_type 对应的 move_range / attack_range
-func _make_player_unit(ch: CharacterData, pos: Vector2i) -> BattleUnit:
-	var unit: BattleUnit = BattleUnit.new()
-	unit.owner_faction = Faction.PLAYER
-	unit.troop = ch.troop
-	unit.character = ch
-	unit.battle_position = pos
-	_apply_unit_config(unit)
-	return unit
-
-
-## 构造敌方 BattleUnit
-func _make_enemy_unit(troop: TroopData, pack: LevelSlot, pos: Vector2i) -> BattleUnit:
-	var unit: BattleUnit = BattleUnit.new()
-	unit.owner_faction = Faction.ENEMY_1
-	unit.troop = troop
-	unit.source_level = pack
-	unit.battle_position = pos
-	_apply_unit_config(unit)
-	return unit
-
-
-## 从 unit_config 装配 move_range / attack_range
-func _apply_unit_config(unit: BattleUnit) -> void:
-	var key: int = unit.troop.troop_type as int
-	if unit_config.has(key):
-		var entry: Dictionary = unit_config[key] as Dictionary
-		unit.move_range = int(entry.get("move_range", 3))
-		unit.attack_range = int(entry.get("attack_range", 1))
-	else:
-		# 兜底：未配置兵种默认 SWORD 数值
-		unit.move_range = 3
-		unit.attack_range = 1
-
-
-# ─────────────────────────────────────
-# 内部 helper：展开位查找
-# ─────────────────────────────────────
-
-## 哨兵值：表示"找不到展开位"
-const _NO_DEPLOY_SLOT: Vector2i = Vector2i(-9999, -9999)
-
-
-## 在 anchor 周围找空位：先 4 邻、再 8 邻、可选扩到 max_radius 圈
-##
-## anchor    —— 锚点（玩家位置 / LevelSlot 位置）
-## occupied  —— 全局占位字典
-## max_radius—— 搜索半径（默认 2 即覆盖 8 邻；4 = 16 格内）
-##
-## 返回找到的空格坐标；找不到返回 _NO_DEPLOY_SLOT
-func _find_deploy_slot(anchor: Vector2i, occupied: Dictionary, max_radius: int = 2) -> Vector2i:
-	# 4 邻优先（与设计 §2.4 一致）
-	var four_neighbors: Array[Vector2i] = [
-		anchor + Vector2i(0, -1), anchor + Vector2i(0, 1),
-		anchor + Vector2i(-1, 0), anchor + Vector2i(1, 0),
-	]
-	for pos in four_neighbors:
-		if _can_deploy_at(pos, occupied):
-			return pos
-	# 8 邻（含对角）
-	if max_radius >= 2:
-		var eight_corners: Array[Vector2i] = [
-			anchor + Vector2i(-1, -1), anchor + Vector2i(1, -1),
-			anchor + Vector2i(-1, 1),  anchor + Vector2i(1, 1),
-		]
-		for pos in eight_corners:
-			if _can_deploy_at(pos, occupied):
-				return pos
-	# 扩展圈（敌方多 troops 兜底）
-	for radius in range(2, max_radius + 1):
-		for dy in range(-radius, radius + 1):
-			for dx in range(-radius, radius + 1):
-				if absi(dx) + absi(dy) > radius:
-					continue
-				if absi(dx) + absi(dy) < radius:
-					continue
-				var pos: Vector2i = anchor + Vector2i(dx, dy)
-				if _can_deploy_at(pos, occupied):
-					return pos
-	return _NO_DEPLOY_SLOT
-
-
-## 可占位条件（§2.4 is_valid_deploy_pos）
-##   - 战场内 / 地图内
-##   - 地形可通行（不是 MOUNTAIN 等）
-##   - 不在持久 slot 占据格
-##   - 不在 occupied 字典
-func _can_deploy_at(pos: Vector2i, occupied: Dictionary) -> bool:
-	if not arena.has_point(pos):
-		return false
-	if not schema.is_in_bounds(pos.x, pos.y):
-		return false
-	if schema.get_terrain_cost(pos.x, pos.y) >= INF:
-		return false
-	if occupied.has(pos):
-		return false
-	# 持久 slot 占据格不可放
-	for ps in schema.persistent_slots:
-		if ps != null and ps.position == pos:
-			return false
-	return true
-
-
-## 判断 _find_deploy_slot 返回的坐标是否合法（区分哨兵）
-func _is_valid_slot(slot: Vector2i, occupied: Dictionary) -> bool:
-	if slot == _NO_DEPLOY_SLOT:
-		return false
-	return _can_deploy_at(slot, occupied)
-
-
-# ─────────────────────────────────────
-# 内部 helper：移动 / 行动 / 伤害
-# ─────────────────────────────────────
-
-## BFS 计算当前 actor 的可达格
-##
-## 移动 cost 规则（设计 §2.5）：复用 `MapSchema.terrain_costs`
-##   - MOUNTAIN cost = INF（不可通行 / 已被 _can_deploy_at 类似逻辑过滤）
-##   - HIGHLAND / LOWLAND cost = 2（高地、洼地两倍消耗）
-##   - FLATLAND cost = 1
-##   move_range 视为整数 budget，BFS 累加 int(get_terrain_cost) 比较
-##   注：BattleAI._plan_move_toward 同样按这套规则计算，保持玩家高亮 / AI 决策一致
-func _bfs_reachable(actor: BattleUnit) -> Array[Vector2i]:
-	var occupied: Dictionary = _build_occupied()
-	var visited: Dictionary = {}
-	visited[actor.battle_position] = 0
-	var frontier: Array[Vector2i] = [actor.battle_position]
-	var move_budget: int = actor.move_range
-	while not frontier.is_empty():
-		var current: Vector2i = frontier.pop_front()
-		var current_cost: int = int(visited[current])
-		if current_cost >= move_budget:
-			continue
-		for offset in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
-			var next_pos: Vector2i = current + offset
-			if visited.has(next_pos):
-				continue
-			if not arena.has_point(next_pos):
-				continue
-			if not schema.is_in_bounds(next_pos.x, next_pos.y):
-				continue
-			var terrain_cost: float = schema.get_terrain_cost(next_pos.x, next_pos.y)
-			if terrain_cost >= INF:
-				continue
-			if occupied.has(next_pos) and next_pos != actor.battle_position:
-				continue
-			# 累加地形 cost（int 化避免浮点累积误差）
-			var step_cost: int = maxi(1, int(terrain_cost))
-			var next_cost: int = current_cost + step_cost
-			if next_cost > move_budget:
-				continue
-			visited[next_pos] = next_cost
-			frontier.append(next_pos)
-	# 返回除起点外的所有可达格（actor 可以"留在原位"由 skip / 不点击表达，不需要列入可达）
-	var result: Array[Vector2i] = []
-	for pos in visited:
-		var p: Vector2i = pos as Vector2i
-		if p != actor.battle_position:
-			result.append(p)
-	return result
-
-
-## 构建 occupied 字典：所有存活上场单位的位置 → BattleUnit
-func _build_occupied() -> Dictionary:
-	var d: Dictionary = {}
-	for u in player_units:
-		if u.is_active and u.is_alive():
-			d[u.battle_position] = u
-	for u in enemy_units:
-		if u.is_active and u.is_alive():
-			d[u.battle_position] = u
-	return d
-
-
-## 攻击伤害计算：地形高度差 + BattleResolver 复用
-func _calc_attack_damage(attacker: BattleUnit, target: BattleUnit) -> int:
-	var attacker_alt: int = schema.get_terrain_altitude(
-		attacker.battle_position.x, attacker.battle_position.y
-	)
-	var target_alt: int = schema.get_terrain_altitude(
-		target.battle_position.x, target.battle_position.y
-	)
-	var altitude_diff: int = attacker_alt - target_alt
-	return BattleResolver.calculate_single_attack(
-		attacker.troop, target.troop,
-		altitude_diff, terrain_altitude_step,
-		battle_config, difficulty, damage_increment,
-		attacker.owner_faction
-	)
-
 
 ## 在 units 数组中从 start_index 起循环找下一个可行动的单位索引；找不到返回 -1
 ##
@@ -837,7 +589,7 @@ func _emit_unit_moved(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector2i) -
 		on_unit_moved.call(actor, from_pos, to_pos)
 
 
-## emit 攻击事件；衍生 counter_factor + altitude_diff（与 _calc_attack_damage 内部口径一致）
+## emit 攻击事件；衍生 counter_factor + altitude_diff（与 BattleMath.calc_attack_damage 内部口径一致）
 ## 视觉层据 counter_factor 编码飘字颜色、据 altitude_diff 显示副标题
 ##
 ## is_killing_blow（MVP-γ 后续追加）：本次伤害是否导致队长跌阈值进入 COMA
@@ -865,26 +617,25 @@ func _emit_unit_attacked(actor: BattleUnit, target: BattleUnit, damage: int) -> 
 	on_unit_attacked.call(actor, target, damage, counter_factor, altitude_diff, is_killing_blow)
 
 
+## 分发 on_unit_skipped 回调（is_valid 守卫 + 转发）
 func _emit_unit_skipped(actor: BattleUnit) -> void:
 	if on_unit_skipped.is_valid():
 		on_unit_skipped.call(actor)
 
 
+## 分发 on_unit_died 回调（is_valid 守卫 + 转发）
 func _emit_unit_died(unit: BattleUnit) -> void:
 	if on_unit_died.is_valid():
 		on_unit_died.call(unit)
 
 
+## 分发 on_phase_changed 回调（Phase 枚举切换时）
 func _emit_phase_changed(new_phase: int) -> void:
 	if on_phase_changed.is_valid():
 		on_phase_changed.call(new_phase)
 
 
+## 分发 on_round_started 回调（新一轮玩家回合开启时）
 func _emit_round_started(round_num: int) -> void:
 	if on_round_started.is_valid():
 		on_round_started.call(round_num)
-
-
-## 曼哈顿距离
-static func _manhattan(a: Vector2i, b: Vector2i) -> int:
-	return absi(a.x - b.x) + absi(a.y - b.y)
