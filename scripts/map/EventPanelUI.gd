@@ -32,36 +32,15 @@ signal closed
 
 
 # ─────────────────────────────────────
-# 入口 2 MVP 2.2 视觉规格常量（2026-05-10）
-# 跑测调参 / 美术接入时改这里;后续可被 .tres 资源替换
+# 动态创建项的字号
+# 视觉规格主体（panel bg/border/shadow/字号字色/margin/min_size 等）已在 α.5 .tscn 化批
+# 迁进 scenes/ui/EventPanel.tscn（StyleBox + Theme override）；本 .gd 内仅留按钮字号，
+# 因为按钮是 _add_action_button 动态创建、不在 .tscn 节点树内。MVP-B 阶段 2 一并清理
+# 了 15 个死 const（α.5 .tscn 化遗留），EventPanel 走 .tscn 单源调参路径
 # ─────────────────────────────────────
 
-## 整段 fade in 时长 —— 实际调用 UIFadeHelper.DEFAULT_FADE_IN_DURATION
-## 不在此处再重声明常量(GDScript const 要求常量表达式,跨 class_name 引用不算)
-
-## Panel 最小尺寸(让圆角 + 阴影 + 内边距撑开后不挤)
-const PANEL_MIN_SIZE: Vector2 = Vector2(360, 220)
-
-## StyleBoxFlat 视觉规格
-const PANEL_BG_COLOR: Color = Color(0.13, 0.09, 0.05, 0.92)
-const PANEL_BORDER_COLOR: Color = Color(0.78, 0.62, 0.32, 1.0)
-const PANEL_BORDER_WIDTH: int = 2
-const PANEL_CORNER_RADIUS: int = 8
-const PANEL_CONTENT_MARGIN_H: int = 20
-const PANEL_CONTENT_MARGIN_V: int = 18
-const PANEL_SHADOW_COLOR: Color = Color(0, 0, 0, 0.5)
-const PANEL_SHADOW_SIZE: int = 8
-const PANEL_SHADOW_OFFSET: Vector2 = Vector2(0, 4)
-
-## 字号 / 字色
-const TITLE_FONT_SIZE: int = 18
-const TITLE_FONT_COLOR: Color = Color(1.0, 0.92, 0.65, 1.0)
-const NARRATIVE_FONT_SIZE: int = 14
-const NARRATIVE_FONT_COLOR: Color = Color(0.92, 0.90, 0.85, 1.0)
+## 按钮字号（动态创建按钮 add_theme_font_size_override）
 const BUTTON_FONT_SIZE: int = 14
-
-## 叙事 Label 宽度 = PANEL_MIN_SIZE.x - PANEL_CONTENT_MARGIN_H * 2 = 360 - 40 = 320
-const NARRATIVE_LABEL_WIDTH: int = 320
 
 
 # ─────────────────────────────────────

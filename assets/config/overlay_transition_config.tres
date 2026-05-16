@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="OverlayTransitionConfig" load_steps=2 format=3]
+
+; MVP-B 阶段 2：OverlayTransitionUI 调参 Resource 实例
+; schema 在 res://scripts/config/overlay_transition_config.gd
+; 字段从 OverlayTransitionUI.gd 顶部 11 个 const 迁出 9 个活跃；2 个死 const（ICON/COUNT_FONT_SIZE）直接清理
+
+[ext_resource type="Script" path="res://scripts/config/overlay_transition_config.gd" id="1_otc"]
+
+[resource]
+script = ExtResource("1_otc")
+fade_in_duration = 0.4
+fade_out_duration = 0.4
+line_fade_in_duration = 0.4
+line_hold_duration = 1.5
+icon_fade_in_duration = 0.2
+icon_fallback = "🔥"
+line_font_size = 24
+line_color = Color(1, 1, 1, 1)
+phase_b_timeout_sec = 5.0

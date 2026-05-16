@@ -42,27 +42,17 @@ signal finished
 signal step_advanced
 
 # ─────────────────────────────────────
-# 配置常量（默认值，跑测可调）
+# 调参 Resource + 状态机枚举
 # ─────────────────────────────────────
 
-const FADE_IN_DURATION: float = 0.4
-const FADE_OUT_DURATION: float = 0.4
-const LINE_FADE_IN_DURATION: float = 0.4
-const LINE_HOLD_DURATION: float = 1.5
-const ICON_FADE_IN_DURATION: float = 0.2
+## 调参 Resource（MVP-B 阶段 2：9 个原 const 迁出）—— 双击 .tres 在 inspector 编辑字段
+## schema: scripts/config/overlay_transition_config.gd；instance: assets/config/overlay_transition_config.tres
+##
+## 删除的死 const（α.5 .tscn 化遗留，本批清理）：
+##   - ICON_FONT_SIZE / COUNT_FONT_SIZE：迁进 IconLabel / CountLabel 节点 inspector，.gd 已不用
+const CFG: OverlayTransitionConfig = preload("res://assets/config/overlay_transition_config.tres")
 
-## phase B 超时兜底（codex review P0-2 修复 2026-05-10）：
-## 防止 _pending_respawn_intro 未被置 true 等极端边界让 await world_ready 永久挂起
-## 5s 是设计经验值：reload + _ready 应在 1-2s 内完成；超时即 fallback 进 phase C
-const PHASE_B_TIMEOUT_SEC: float = 5.0
-
-const ICON_FALLBACK: String = "🔥"
-const ICON_FONT_SIZE: int = 48
-const COUNT_FONT_SIZE: int = 32
-const LINE_FONT_SIZE: int = 24
-const LINE_COLOR: Color = Color(1, 1, 1, 1)
-
-# Phase 枚举
+# Phase 枚举（状态机标识，非可调参数）
 const PHASE_IDLE: int = 0
 const PHASE_A: int = 1   # fade in
 const PHASE_B: int = 2   # 全黑期 await midpoint
@@ -144,7 +134,7 @@ func play(lines: PackedStringArray, icon_data: Dictionary, on_midpoint: Callable
 	for lbl in _line_labels:
 		lbl.modulate.a = 0.0
 	var fade_in_tween: Tween = create_tween()
-	fade_in_tween.tween_property(_blackout, "modulate:a", 1.0, FADE_IN_DURATION)
+	fade_in_tween.tween_property(_blackout, "modulate:a", 1.0, CFG.fade_in_duration)
 	await fade_in_tween.finished
 
 	# Phase B：全黑期，await midpoint
@@ -152,7 +142,7 @@ func play(lines: PackedStringArray, icon_data: Dictionary, on_midpoint: Callable
 	if on_midpoint.is_valid():
 		var ret: Variant = on_midpoint.call()
 		if ret is Signal:
-			await _await_signal_with_timeout(ret, PHASE_B_TIMEOUT_SEC)
+			await _await_signal_with_timeout(ret, CFG.phase_b_timeout_sec)
 
 	# Phase C + D
 	await _run_lines_and_fade_out()
@@ -203,21 +193,21 @@ func _run_lines_and_fade_out() -> void:
 	_phase = PHASE_C
 	if _icon_row.modulate.a < 1.0:
 		var icon_tween: Tween = create_tween()
-		icon_tween.tween_property(_icon_row, "modulate:a", 1.0, ICON_FADE_IN_DURATION)
+		icon_tween.tween_property(_icon_row, "modulate:a", 1.0, CFG.icon_fade_in_duration)
 		# 不 await，让 icon 与第一句并行淡入
 
 	for i in range(_line_labels.size()):
 		_current_line_index = i
 		await _await_step(func() -> Tween:
 			var t: Tween = create_tween()
-			t.tween_property(_line_labels[i], "modulate:a", 1.0, LINE_FADE_IN_DURATION)
+			t.tween_property(_line_labels[i], "modulate:a", 1.0, CFG.line_fade_in_duration)
 			return t
 		)
 		# 跳过推进时确保 alpha 拉满（防 SPACE 在中段跳过）
 		_line_labels[i].modulate.a = 1.0
 		await _await_step(func() -> Tween:
 			var t: Tween = create_tween()
-			t.tween_interval(LINE_HOLD_DURATION)
+			t.tween_interval(CFG.line_hold_duration)
 			return t
 		)
 
@@ -226,10 +216,10 @@ func _run_lines_and_fade_out() -> void:
 	# Phase D：fade out（黑屏 + icon + lines 一起）
 	_phase = PHASE_D
 	var out_tween: Tween = create_tween().set_parallel(true)
-	out_tween.tween_property(_blackout, "modulate:a", 0.0, FADE_OUT_DURATION)
-	out_tween.tween_property(_icon_row, "modulate:a", 0.0, FADE_OUT_DURATION)
+	out_tween.tween_property(_blackout, "modulate:a", 0.0, CFG.fade_out_duration)
+	out_tween.tween_property(_icon_row, "modulate:a", 0.0, CFG.fade_out_duration)
 	for lbl in _line_labels:
-		out_tween.tween_property(lbl, "modulate:a", 0.0, FADE_OUT_DURATION)
+		out_tween.tween_property(lbl, "modulate:a", 0.0, CFG.fade_out_duration)
 	await out_tween.finished
 
 	_root.visible = false
@@ -308,8 +298,8 @@ func _setup_content(lines: PackedStringArray, icon_data: Dictionary) -> void:
 		var lbl: Label = Label.new()
 		lbl.text = line_text
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.add_theme_font_size_override("font_size", LINE_FONT_SIZE)
-		lbl.add_theme_color_override("font_color", LINE_COLOR)
+		lbl.add_theme_font_size_override("font_size", CFG.line_font_size)
+		lbl.add_theme_color_override("font_color", CFG.line_color)
 		lbl.modulate.a = 0.0
 		_lines_box.add_child(lbl)
 		_line_labels.append(lbl)
@@ -318,9 +308,9 @@ func _setup_content(lines: PackedStringArray, icon_data: Dictionary) -> void:
 	# 语义：count = 当前总命数（含当前队长 + 剩余重生次数）
 	# 例：还能重生 2 次 → 总命数 3 → 3 团火苗
 	# 由调用方决定 count 值（WorldMap 传 RunState.respawns_left() + 1）
-	var icon_str: String = String(icon_data.get("icon", ICON_FALLBACK))
+	var icon_str: String = String(icon_data.get("icon", CFG.icon_fallback))
 	if icon_str.is_empty():
-		icon_str = ICON_FALLBACK
+		icon_str = CFG.icon_fallback
 	var count: int = int(icon_data.get("count", 0))
 	if count <= 0:
 		_icon_label.text = ""
