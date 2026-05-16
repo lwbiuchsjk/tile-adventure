@@ -22,32 +22,17 @@ extends Node
 
 
 # ─────────────────────────────────────────
-# 常量（原 WorldMap 顶部"夜晚视野 MVP"常量段随抽出迁过来）
+# 调参 Resource + 资源引用
 # ─────────────────────────────────────────
 
-## CanvasLayer 层数：5（介于世界 layer=0 与 UILayer=10 之间，让 HUD 不被夜晚遮罩压暗）
-const NIGHT_OVERLAY_CANVAS_LAYER: int = 5
-## 玩家队伍光源照亮半径（格数）—— 在屏幕像素空间转换时 × TILE_SIZE × camera.zoom
-const NIGHT_VISION_RADIUS_GRIDS: float = 3.5
-## 浓雾过渡带宽度（格数）—— shader smoothstep 衰减带，让光源边缘平滑而非硬切
-const NIGHT_FOG_FALLOFF_GRIDS: float = 0.75
-## 昼夜切换 fade 时长（秒）—— DAY ↔ NIGHT 平滑过渡
-const DAY_NIGHT_FADE_DURATION: float = 0.6
-## 战斗强制白天 fade 时长（秒）—— 与战斗 zoom BATTLE_ZOOM_TWEEN_DURATION 同步
-const BATTLE_FORCE_DAY_DURATION: float = 0.3
-## 浓雾外敌人闪烁参数 —— alpha = BASE + AMP * (sin(2πt/PERIOD + phase) * 0.5 + 0.5)
-const BLINK_BASE_ALPHA: float = 0.35
-const BLINK_AMP: float = 0.45
-const BLINK_PERIOD: float = 1.6
+## 调参 Resource（MVP-B 阶段 1：10 个原 const 迁出）—— 双击 .tres 在 inspector 编辑字段
+## schema: scripts/config/night_vision_config.gd；instance: assets/config/night_vision_config.tres
+const CFG: NightVisionConfig = preload("res://assets/config/night_vision_config.tres")
+
 ## 夜晚遮罩 ShaderMaterial 资源（preload 让编辑期校验路径）
 ## 2026-05-11 跑测修复：shader 从 vec4[N] 多光源数组简化为单光源 UV 空间；
 ## 多光源扩展接口（玩家方城建 slot 等）记入待跟踪事项索引 §十一 P3
 const NIGHT_OVERLAY_MATERIAL: ShaderMaterial = preload("res://assets/shader/night_overlay.tres")
-
-## 浓雾外敌人信号图层 CanvasLayer 层数 = 6（在夜晚遮罩 layer=5 之上、UILayer=10 之下）
-## 信号菱形屏幕像素半径 = TILE_SIZE × camera.zoom.x × FOG_SIGNAL_DIAMOND_SCALE
-const FOG_SIGNAL_CANVAS_LAYER: int = 6
-const FOG_SIGNAL_DIAMOND_SCALE: float = 0.30
 
 
 # ─────────────────────────────────────────
@@ -153,7 +138,7 @@ func is_in_fog(world_pos: Vector2) -> bool:
 	if unit == null:
 		return false
 	var light_center: Vector2 = _player_light_world_center()
-	var threshold_px: float = (NIGHT_VISION_RADIUS_GRIDS + NIGHT_FOG_FALLOFF_GRIDS) * float(_tile_size)
+	var threshold_px: float = (CFG.vision_radius_grids + CFG.fog_falloff_grids) * float(_tile_size)
 	return world_pos.distance_to(light_center) > threshold_px
 
 
@@ -184,7 +169,7 @@ func collect_fog_signals() -> Array:
 		return out
 	# 信号菱形屏幕像素半径 = TILE_SIZE × camera.zoom.x × 缩放比例
 	# 战斗 zoom 时（zoom < 1）信号会更小，但战斗中 force-day 已 return，此分支主要服务探索态
-	var screen_half: float = float(_tile_size) * 0.5 * _camera.zoom.x * FOG_SIGNAL_DIAMOND_SCALE
+	var screen_half: float = float(_tile_size) * 0.5 * _camera.zoom.x * CFG.fog_signal_diamond_scale
 
 	# 静态敌方关卡
 	var enemy_movement: EnemyMovement = _world_view.get_enemy_movement()
@@ -240,7 +225,7 @@ func collect_fog_signals() -> Array:
 func set_battle_force_day_on() -> void:
 	_pending_post_battle_phase = int(DayNightState.current(_turn_manager))
 	_battle_force_day = true
-	_fade_phase_alpha(0.0, BATTLE_FORCE_DAY_DURATION, true)
+	_fade_phase_alpha(0.0, CFG.battle_force_day_duration, true)
 	if _fog_signal_node != null:
 		_fog_signal_node.queue_redraw()
 
@@ -256,7 +241,7 @@ func resync_to_post_battle_state() -> void:
 		return
 	_battle_force_day = false
 	var resync_target: float = 1.0 if _pending_post_battle_phase == int(DayNightState.Phase.NIGHT) else 0.0
-	_fade_phase_alpha(resync_target, DAY_NIGHT_FADE_DURATION, true)
+	_fade_phase_alpha(resync_target, CFG.fade_duration, true)
 	if _fog_signal_node != null:
 		_fog_signal_node.queue_redraw()
 
@@ -309,7 +294,7 @@ func _process(_delta: float) -> void:
 func _setup_night_overlay() -> void:
 	_night_overlay_layer = CanvasLayer.new()
 	_night_overlay_layer.name = "NightOverlayLayer"
-	_night_overlay_layer.layer = NIGHT_OVERLAY_CANVAS_LAYER
+	_night_overlay_layer.layer = CFG.overlay_canvas_layer
 	add_child(_night_overlay_layer)
 
 	_night_overlay_rect = ColorRect.new()
@@ -332,7 +317,7 @@ func _setup_night_overlay() -> void:
 func _setup_fog_signal_layer() -> void:
 	_fog_signal_layer = CanvasLayer.new()
 	_fog_signal_layer.name = "FogSignalLayer"
-	_fog_signal_layer.layer = FOG_SIGNAL_CANVAS_LAYER
+	_fog_signal_layer.layer = CFG.fog_signal_canvas_layer
 	add_child(_fog_signal_layer)
 
 	_fog_signal_node = FogSignalNode.new()
@@ -371,15 +356,15 @@ func _update_night_shader_uniforms() -> void:
 	var light_vp: Vector2 = canvas_t * light_world
 	var light_uv: Vector2 = light_vp / vp_size
 
-	# 半径锚点 = 光源右侧 NIGHT_VISION_RADIUS_GRIDS 格的世界位置
+	# 半径锚点 = 光源右侧 CFG.vision_radius_grids 格的世界位置
 	# 经过同一 canvas_transform 后，距离 = 半径在 viewport pixel 空间的值
-	var radius_anchor_world: Vector2 = light_world + Vector2(NIGHT_VISION_RADIUS_GRIDS * float(_tile_size), 0.0)
+	var radius_anchor_world: Vector2 = light_world + Vector2(CFG.vision_radius_grids * float(_tile_size), 0.0)
 	var radius_anchor_vp: Vector2 = canvas_t * radius_anchor_world
 	var radius_vp_px: float = light_vp.distance_to(radius_anchor_vp)
 	# 用 viewport 高度归一化：与 shader 内 d.x *= aspect_xy 的基准（Y = 高度）对齐
 	var radius_uv: float = radius_vp_px / vp_size.y
 
-	var falloff_anchor_world: Vector2 = light_world + Vector2(NIGHT_FOG_FALLOFF_GRIDS * float(_tile_size), 0.0)
+	var falloff_anchor_world: Vector2 = light_world + Vector2(CFG.fog_falloff_grids * float(_tile_size), 0.0)
 	var falloff_anchor_vp: Vector2 = canvas_t * falloff_anchor_world
 	var falloff_vp_px: float = light_vp.distance_to(falloff_anchor_vp)
 	var falloff_uv: float = falloff_vp_px / vp_size.y
@@ -467,17 +452,17 @@ func _is_phase_alpha_tween_active() -> bool:
 
 ## 闪烁敌人 alpha 计算
 ##
-## 公式：alpha = BASE + AMP * (sin(2π * t / PERIOD + phase) * 0.5 + 0.5)
+## 公式：alpha = blink_base_alpha + blink_amp * (sin(2π * t / blink_period + phase) * 0.5 + 0.5)
 ##   - t：当前时间（秒）
 ##   - phase：按 seed 哈希出的相位偏移，避免所有敌人同步闪烁
-##   - 输出范围：[BASE, BASE + AMP]
+##   - 输出范围：[blink_base_alpha, blink_base_alpha + blink_amp]
 ##
 ## seed 通常用 LevelSlot 的 unique_id（int）或 instance_id；调用方保证 seed 稳定
 func _compute_blink_alpha(seed: int) -> float:
 	var t: float = float(Time.get_ticks_msec()) / 1000.0
 	var phase_offset: float = float(hash(seed) % 1000) / 1000.0 * TAU
-	var sine: float = sin(t * TAU / BLINK_PERIOD + phase_offset)
-	return BLINK_BASE_ALPHA + BLINK_AMP * (sine * 0.5 + 0.5)
+	var sine: float = sin(t * TAU / CFG.blink_period + phase_offset)
+	return CFG.blink_base_alpha + CFG.blink_amp * (sine * 0.5 + 0.5)
 
 
 ## 判断当前帧是否需要 redraw 驱动闪烁动画
@@ -525,4 +510,4 @@ func on_phase_changed(phase: int) -> void:
 		return
 	# 正常昼夜切换：NIGHT → 遮罩 fade in 到 1.0；DAY → fade out 到 0.0
 	var target: float = 1.0 if phase == int(DayNightState.Phase.NIGHT) else 0.0
-	_fade_phase_alpha(target, DAY_NIGHT_FADE_DURATION, false)
+	_fade_phase_alpha(target, CFG.fade_duration, false)

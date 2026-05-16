@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="NightVisionConfig" load_steps=2 format=3]
+
+; MVP-B 阶段 1：夜晚视野子系统调参 Resource 实例
+; schema 在 res://scripts/config/night_vision_config.gd
+; 字段从 NightVisionLayer.gd 顶部 10 个 const 迁出；编辑器内双击本文件在 inspector 调参
+
+[ext_resource type="Script" path="res://scripts/config/night_vision_config.gd" id="1_nvc"]
+
+[resource]
+script = ExtResource("1_nvc")
+overlay_canvas_layer = 5
+fog_signal_canvas_layer = 6
+vision_radius_grids = 3.5
+fog_falloff_grids = 0.75
+fade_duration = 0.6
+battle_force_day_duration = 0.3
+blink_base_alpha = 0.35
+blink_amp = 0.45
+blink_period = 1.6
+fog_signal_diamond_scale = 0.3
