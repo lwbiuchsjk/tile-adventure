@@ -19,8 +19,13 @@ extends Node
 ##     留在 WorldMap。
 ##   - 不含敌方回合调度（_try_schedule_next_enemy_step / _run_enemy_turn_async）：
 ##     那属世界态，留在 WorldMap，本类只在动画清空时 emit anims_drained。
-##   - 战斗动画常量（TILE_SIZE / BATTLE_*）仍读 WorldMap 的 const（编译期常量，
-##     跨 class_name 引用）。常量集中化是诊断报告 P3 议题，本批不动。
+##   - TILE_SIZE / BATTLE_COUNTER_FACTOR_EPS 仍读 WorldMap 的 const（编译期常量，跨 class_name 引用）
+##   - 战斗动画 22 个 const 已在 MVP-B 阶段 3 迁出到 BattleAnimConfig (.tres)，本类自己 preload
+
+
+## 战斗动画调参 Resource（MVP-B 阶段 3）—— 不走 WorldMap 中转，独立 preload 同一份 .tres
+## preload 是 Godot 资源单例，多处 preload 指向同一实例无内存损耗
+const ANIM_CFG: BattleAnimConfig = preload("res://assets/config/battle_anim_config.tres")
 
 
 ## 动画队列清空（_anim_count == 0 且 _anim_queue 为空）时 emit
@@ -267,7 +272,7 @@ func _run_move_anim(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector2i) -> 
 		func(progress: float) -> void:
 			_view_state.unit_visual_offsets[actor] = initial_offset.lerp(Vector2.ZERO, progress)
 			_redraw_target.queue_redraw(),
-		0.0, 1.0, WorldMap.BATTLE_MOVE_TWEEN_DURATION
+		0.0, 1.0, ANIM_CFG.move_tween_duration
 	)
 	tween.tween_callback(func() -> void:
 		_view_state.unit_visual_offsets.erase(actor)
@@ -285,13 +290,13 @@ func _run_attack_anim(
 	hp_before: float, hp_after: float, is_killing_blow: bool
 ) -> void:
 	# 致命一击 vs 普通：动画参数选用（普通常量 vs 升级常量）
-	var thrust_dur: float = WorldMap.BATTLE_KILLING_THRUST_DURATION if is_killing_blow else WorldMap.BATTLE_THRUST_DURATION
-	var thrust_ratio: float = WorldMap.BATTLE_KILLING_THRUST_DISTANCE_RATIO if is_killing_blow else WorldMap.BATTLE_THRUST_DISTANCE_RATIO
-	var shake_dur: float = WorldMap.BATTLE_KILLING_SHAKE_DURATION if is_killing_blow else WorldMap.BATTLE_SHAKE_DURATION
-	var shake_amp: float = WorldMap.BATTLE_KILLING_SHAKE_AMPLITUDE if is_killing_blow else WorldMap.BATTLE_SHAKE_AMPLITUDE
-	var shake_osc: float = WorldMap.BATTLE_KILLING_SHAKE_OSCILLATIONS if is_killing_blow else WorldMap.BATTLE_SHAKE_OSCILLATIONS
-	var hp_dur: float = WorldMap.BATTLE_KILLING_HP_TWEEN_DURATION if is_killing_blow else WorldMap.BATTLE_HP_TWEEN_DURATION
-	var float_dur: float = WorldMap.BATTLE_KILLING_FLOAT_DAMAGE_DURATION if is_killing_blow else WorldMap.BATTLE_FLOAT_DAMAGE_DURATION
+	var thrust_dur: float = ANIM_CFG.killing_thrust_duration if is_killing_blow else ANIM_CFG.thrust_duration
+	var thrust_ratio: float = ANIM_CFG.killing_thrust_distance_ratio if is_killing_blow else ANIM_CFG.thrust_distance_ratio
+	var shake_dur: float = ANIM_CFG.killing_shake_duration if is_killing_blow else ANIM_CFG.shake_duration
+	var shake_amp: float = ANIM_CFG.killing_shake_amplitude if is_killing_blow else ANIM_CFG.shake_amplitude
+	var shake_osc: float = ANIM_CFG.killing_shake_oscillations if is_killing_blow else ANIM_CFG.shake_oscillations
+	var hp_dur: float = ANIM_CFG.killing_hp_tween_duration if is_killing_blow else ANIM_CFG.hp_tween_duration
+	var float_dur: float = ANIM_CFG.killing_float_damage_duration if is_killing_blow else ANIM_CFG.float_damage_duration
 
 	# 推冲方向：单位差 / 曼哈顿距离（远程兵种斜攻时按斜向单位向量推冲）
 	var diff: Vector2i = target.battle_position - actor.battle_position
@@ -375,12 +380,12 @@ func _run_skip_anim(actor: BattleUnit) -> void:
 		float(actor.battle_position.y * WorldMap.TILE_SIZE) - 4.0
 	)
 	BattleFloatText.spawn_text(
-		_redraw_target, float_pos, "跳过", WorldMap.BATTLE_FLOAT_COLOR_SKIP,
-		WorldMap.BATTLE_FLOAT_SKIP_DURATION
+		_redraw_target, float_pos, "跳过", ANIM_CFG.float_color_skip,
+		ANIM_CFG.float_skip_duration
 	)
 	_begin_battle_anim()
 	var skip_tween: Tween = create_tween()
-	skip_tween.tween_interval(WorldMap.BATTLE_FLOAT_SKIP_DURATION)
+	skip_tween.tween_interval(ANIM_CFG.float_skip_duration)
 	skip_tween.tween_callback(func() -> void:
 		_end_battle_anim()
 		_redraw_target.queue_redraw()
@@ -399,7 +404,7 @@ func _run_die_anim(unit: BattleUnit) -> void:
 		func(a: float) -> void:
 			_view_state.dying_units[unit] = a
 			_redraw_target.queue_redraw(),
-		1.0, 0.0, WorldMap.BATTLE_DIE_DURATION
+		1.0, 0.0, ANIM_CFG.die_duration
 	)
 	fade_tween.tween_callback(func() -> void:
 		_view_state.dying_units.erase(unit)
@@ -411,10 +416,10 @@ func _run_die_anim(unit: BattleUnit) -> void:
 ## counter_factor → 飘字主行颜色（设计 §8 飘字色板）
 func _attack_float_color(counter_factor: float) -> Color:
 	if counter_factor > 1.0 + WorldMap.BATTLE_COUNTER_FACTOR_EPS:
-		return WorldMap.BATTLE_FLOAT_COLOR_ADV
+		return ANIM_CFG.float_color_advantage
 	if counter_factor < 1.0 - WorldMap.BATTLE_COUNTER_FACTOR_EPS:
-		return WorldMap.BATTLE_FLOAT_COLOR_DIS
-	return WorldMap.BATTLE_FLOAT_COLOR_NEUTRAL
+		return ANIM_CFG.float_color_disadvantage
+	return ANIM_CFG.float_color_neutral
 
 
 ## altitude_diff → 飘字副行字符串（"+X% 高度" / "-X% 高度" / 空）

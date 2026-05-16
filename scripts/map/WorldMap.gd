@@ -635,36 +635,13 @@ const BATTLE_HEAD_OFFSET: float = 8.0                               ## 单位头
 ## 入口 1.2 补充需求 2：玩家方已行动单位的填充色（灰色），与阵营色形成"已 / 未行动"区分
 ## 玩家回合开始时 BattleSession._start_player_turn 调 reset_turn_flags() 全部恢复未行动 → 自动恢复阵营色
 const BATTLE_PLAYER_ACTED_COLOR: Color = Color(0.55, 0.55, 0.55)
-# 入口 1.2 战斗动画时长 / 偏移规格（设计文档 §8 时长表）
-const BATTLE_MOVE_TWEEN_DURATION: float = 0.35      ## 移动 Tween 0.35s 直线
-const BATTLE_THRUST_DURATION: float = 0.15          ## 攻击推冲 / 回弹 单段时长
-const BATTLE_SHAKE_DURATION: float = 0.20           ## 目标颤抖时长（与推冲并行）
-const BATTLE_DIE_DURATION: float = 0.30             ## 单位死亡渐隐时长
-const BATTLE_FLOAT_DAMAGE_DURATION: float = 1.0     ## 伤害飘字上飘渐隐时长
-const BATTLE_FLOAT_SKIP_DURATION: float = 0.6       ## 跳过飘字时长
-const BATTLE_HP_TWEEN_DURATION: float = 0.30        ## P1-5：HP 条平滑过渡时长（与攻击推冲完成同节奏）
-const BATTLE_ENEMY_STEP_GAP: float = 0.18           ## 敌方两次 step 之间的最小间隔（让玩家看清 actor 切换）
-const BATTLE_THRUST_DISTANCE_RATIO: float = 0.5     ## 推冲距离 = TILE_SIZE * 该比例（半格）
-const BATTLE_SHAKE_AMPLITUDE: float = 2.0           ## 颤抖振幅（±px）
-const BATTLE_SHAKE_OSCILLATIONS: float = 3.0        ## 颤抖在 shake_duration 内完成的正弦周期数
-# 飘字色板（与克制图标色板呼应；设计 §8）
-const BATTLE_FLOAT_COLOR_ADV: Color = Color(0.3, 0.9, 0.3)         ## > 1.0 克制 → 绿
-const BATTLE_FLOAT_COLOR_DIS: Color = Color(1.0, 0.55, 0.1)        ## < 1.0 受克 → 橙
-const BATTLE_FLOAT_COLOR_NEUTRAL: Color = Color(0.9, 0.3, 0.3)     ## = 1.0 中性 → 默认红
-const BATTLE_FLOAT_COLOR_SKIP: Color = Color(0.65, 0.65, 0.65)     ## 跳过飘字 → 灰
-
 # ─────────────────────────────────────
-# 致命一击动画规格（MVP-γ 后续：队长 COMA 触发的那一击专用 —— 更慢、幅度更大）
-# 设计意图：让玩家清楚看到"这一击导致队长昏迷"的因果，强化转折感
-# 触发条件：BattleSession._emit_unit_attacked 检测 target==leader && _is_leader_in_coma() 后传 is_killing_blow=true
+# 战斗动画调参 Resource（MVP-B 阶段 3：22 个原 const 迁出）
+# schema: scripts/config/battle_anim_config.gd；instance: assets/config/battle_anim_config.tres
+# BattleAnimDirector 自己 preload 同一份 .tres（不走 WorldMap 中转），减少 const 桥接职责
+# 编辑器内双击 .tres 在 inspector 调字段（含致命一击 @export_group 分组）
 # ─────────────────────────────────────
-const BATTLE_KILLING_THRUST_DURATION: float = 0.40             ## 推冲/回弹单段时长（普通 0.15）
-const BATTLE_KILLING_THRUST_DISTANCE_RATIO: float = 1.0        ## 推冲距离 = TILE_SIZE * 该比例（普通 0.5；满格推冲）
-const BATTLE_KILLING_SHAKE_DURATION: float = 0.60              ## 目标颤抖时长（普通 0.20）
-const BATTLE_KILLING_SHAKE_AMPLITUDE: float = 6.0              ## 颤抖振幅 ±px（普通 2.0）
-const BATTLE_KILLING_SHAKE_OSCILLATIONS: float = 5.0           ## 颤抖正弦周期数（普通 3.0）
-const BATTLE_KILLING_HP_TWEEN_DURATION: float = 0.60           ## HP 条平滑过渡（普通 0.30）
-const BATTLE_KILLING_FLOAT_DAMAGE_DURATION: float = 1.5        ## 伤害飘字上飘时长（普通 1.0）
+const ANIM_CFG: BattleAnimConfig = preload("res://assets/config/battle_anim_config.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -2523,7 +2500,7 @@ func _try_schedule_next_enemy_step() -> void:
 		return
 	if _battle_anim_director.is_animating():
 		return
-	var t: SceneTreeTimer = get_tree().create_timer(BATTLE_ENEMY_STEP_GAP)
+	var t: SceneTreeTimer = get_tree().create_timer(ANIM_CFG.enemy_step_gap)
 	t.timeout.connect(_run_enemy_turn_async)
 
 
@@ -2703,7 +2680,7 @@ func _post_player_action_check() -> void:
 ## 入口 1.2 P1-1 修复：
 ##   - 不再 step 后立即用固定 0.18s timer 推下一个 step（会与 0.35s 移动 / 0.30s 攻击 Tween 重叠）
 ##   - 改为：本次 step 触发 emit → sink 入队 anim runner → BattleAnimDirector 动画清空时
-##     emit anims_drained → _try_schedule_next_enemy_step（带 BATTLE_ENEMY_STEP_GAP=0.18s 间隔）
+##     emit anims_drained → _try_schedule_next_enemy_step（带 ANIM_CFG.enemy_step_gap=0.18s 间隔）
 ##   - 兜底：若本次 step 没产生任何 anim（BattleAI 极端短路），Director 不在动画态，主动调度
 ##
 ## 战斗结束（_check_battle_end_after_action 命中胜利 / 昏迷）时 step_enemy_turn 返回 false
