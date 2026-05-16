@@ -248,7 +248,7 @@ GODOT_EXE="/mnt/e/Godot/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_
 
 ### 4. 测试套件清单（当前）
 
-`test/` 下共 8 个测试套件，全部 `extends SceneTree`，独立可跑：
+`test/` 下共 10 个测试套件，全部 `extends SceneTree`，独立可跑：
 
 - `test_m1_data_layer.gd` —— M1 数据层（配置加载 / 字段校验）
 - `test_m2_map_gen.gd` —— M2 PCG 地图生成
@@ -258,8 +258,10 @@ GODOT_EXE="/mnt/e/Godot/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_
 - `test_m6_production.gd` —— M6 产出 / 背包
 - `test_m7_enemy_ai.gd` —— M7 敌方 AI（含 P0 第二阶段重写后的 _pick_target_for）
 - `test_m8_victory_judge.gd` —— M8 胜负判定（含 cycle 守卫 + check_enemy_packs_clear 兜底胜利）
+- `test_run_state.gd` —— RunState 整局态（cycle 推进 / 英雄池抽取 / 重生占位 / 扎营里程碑入队 / sink；MVP-ε P3 测试补全）
+- `test_narrative_provider.gd` —— NarrativeProvider 叙事文本池（ensure_loaded 幂等 / pick 占位符替换 / fallback / 缺字段跳过；MVP-ε P3 测试补全）
 
-**测试覆盖说明**：M1-M8 是城建锚实装阶段遗留的命名，对应当时的模块拆分；本项目演进后实际覆盖面已超出原 M1-M8 范畴（如 BattleHUD / DayNightState / RunState 等无独立测试）。后续 MVP-ε 规范扫尾时可考虑补 headless 测试（见 [[../tile-advanture-design/代码健康度回看/03_规范维度报告#P3]]）。
+**测试覆盖说明**：M1-M8 是城建锚实装阶段遗留的命名，对应当时的模块拆分；ε 批补全 RunState + NarrativeProvider 两份 headless 测试；DayNightState / OverlayTransitionUI 等仍因依赖帧驱动 / SceneTree 难独立测，留 P3。
 
 ### 5. 跑测命令模板（验证链 4 步使用）
 
@@ -267,9 +269,10 @@ GODOT_EXE="/mnt/e/Godot/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_
 # 步骤 2: Headless parse
 "$GODOT_EXE" --headless --path "E:\Godot\project\tile-adventure" --quit 2>&1 | tail -5
 
-# 步骤 3: 测试套件回归（M1-M8 全套，一次循环）
+# 步骤 3: 测试套件回归（M1-M8 + ε 新增 2 份，一次循环）
 for t in test_m1_data_layer test_m2_map_gen test_m3_turn_framework test_m4_occupation \
-         test_m5_build test_m6_production test_m7_enemy_ai test_m8_victory_judge; do
+         test_m5_build test_m6_production test_m7_enemy_ai test_m8_victory_judge \
+         test_run_state test_narrative_provider; do
   RESULT=$("$GODOT_EXE" --headless --path "E:\Godot\project\tile-adventure" -s "test/$t.gd" 2>&1 \
            | grep -E "全部通过|项失败" | tail -1)
   printf "%-30s %s\n" "$t" "$RESULT"
@@ -283,14 +286,15 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 / β / γ / δ 已落地（δ = EnemyMovement 解耦 + NightVisionLayer + PlayerLifecycle + lifecycle 协议建档，WorldMap.gd 4163 → 3574 行净减 596，2026-05-15，3 commit + 同窗修复 codex P0/P1/P2 + 2 个 pre-existing bug），后续 ε 批待启动
+_（暂无活跃条目；P1 代码健康度回看 6 批全部完成于 2026-05-16）_
 
 ## 预启动（方向已认可，等启动时机）
 
-_（暂无预启动条目）_
+- [参数调整便利化](tile-advanture-design/设计候选库.md) — D 方案分两步（Resource .tres 化 → 运行时调参面板），覆盖 WorldMap / WorldMapRenderer / NightVisionLayer 等约 200 个散落 const；待启动时机时新建 L0 路线图入口 + 拆 MVP；详见 memory `project-param-tuning-plan`
 
 ## 已归档
 
+- [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 / β / γ / δ / ε 6 批全部完成（2026-05-13 ~ 2026-05-16）；WorldMap.gd 5820 → 3574 行（净减 2246 / 38.6%），BattleSession 865 → 641 行；新抽 29 个子模块；测试套件 M1-M8 + RunState + NarrativeProvider 共 10 套件
 - [入口4_夜晚视野](tile-advanture-design/进度/入口4_夜晚视野_推进进度.md) — 桌面端跑测验收通过（2026-05-11），含两轮跑测修复；HTML / 性能基线落 P1 跟踪
 - [P0_胜负条件重设计](tile-advanture-design/进度/P0_胜负条件重设计_推进进度.md) — 第一/第二阶段全部跑测验收通过（2026-05-08 / 2026-05-11）；真·无限地图启动时整局节奏将回看
 - [入口2_事件流程与队长过渡](tile-advanture-design/进度/入口2_事件流程与队长过渡_推进进度.md) — MVP 2.1 / 2.2 / 2.3 三连跑测验收通过（2026-05-10 ~ 2026-05-11）；夜晚机制迁入入口 4 后段
@@ -323,12 +327,13 @@ _（暂无预启动条目）_
 
 # 提交兜底（pre-commit hook）
 
-本地 `.git/hooks/pre-commit` 在每次提交前运行两个检查脚本，任一失败即阻断提交：
+本地 `.git/hooks/pre-commit` 在每次提交前运行三个检查脚本，任一失败即阻断提交：
 
 | 脚本 | 职责 |
 |---|---|
 | `tools/fix_csv_imports.py` | 检查 `.csv.import` 是否使用 `csv_translation` 导入器、是否有残留 `.translation` 文件（Godot 默认导入副作用，需改为 `keep`） |
 | `tools/check_design_submodule.py` | 检查 staged 中的 `tile-advanture-design` 条目是否被记录为 `120000`（symlink），是则阻断并给出修正命令——WSL git 把 Windows junction 误识为 symlink 引发 |
+| `tools/check_variant_types.py` | 检测 `scripts/**/*.gd` 中 `var x = expr` 无类型 Variant 推断（MVP-ε G2-4 引入）。白名单：字面量 / 构造器 / 显式 `as TypeName` 转型；阻断：`var x = obj.get(...)` 等 Variant 返回值未加显式类型注解。`--report` 模式仅报告不阻断 |
 
 设计 submodule（`tile-advanture-design/`）有自己的 pre-commit hook，调用 `_scripts/check_doc_tags.py` 校验本次 staged 的 `.md` 文件 frontmatter 是否符合 `标签体系.md` 白名单。
 
