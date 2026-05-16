@@ -200,6 +200,7 @@ static func _manhattan(a: Vector2i, b: Vector2i) -> int:
 	return absi(a.x - b.x) + absi(a.y - b.y)
 
 
+## 构造 SKIP 决策（私有工厂）
 static func _make_skip() -> Dictionary:
 	return {
 		"action": Action.SKIP,
@@ -208,6 +209,7 @@ static func _make_skip() -> Dictionary:
 	}
 
 
+## 构造 ATTACK 决策（私有工厂；move_to 可与 actor 原位相同表示不动）
 static func _make_attack(move_to: Vector2i, target: BattleUnit) -> Dictionary:
 	return {
 		"action": Action.ATTACK,

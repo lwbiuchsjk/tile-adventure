@@ -31,7 +31,7 @@ extends RefCounted
 enum Phase { DAY = 0, NIGHT = 1 }
 
 ## 无 override 标记（int 而非 Phase 是因为 Phase 没有"未设置"枚举值）
-const _NO_OVERRIDE: int = -1
+const NO_OVERRIDE: int = -1
 
 
 # ─────────────────────────────────────
@@ -46,14 +46,14 @@ static var _phase_changed_sink: Callable = Callable()
 ## 用普通 var 持有；reload_current_scene 时 _exit_tree → clear_sinks 释放
 static var _attached_turn_manager: TurnManager = null
 
-## phase 强制覆盖；_NO_OVERRIDE 表示无覆盖，按 current_faction 推断
+## phase 强制覆盖；NO_OVERRIDE 表示无覆盖，按 current_faction 推断
 ## 扎营场景由 _start_camp 设为 NIGHT，PLAYER 回合开始时自动清
-static var _phase_override: int = _NO_OVERRIDE
+static var _phase_override: int = NO_OVERRIDE
 
-## 上次成功分发给 sink 的 phase；_NO_OVERRIDE 作"未分发"哨兵
+## 上次成功分发给 sink 的 phase；NO_OVERRIDE 作"未分发"哨兵
 ## 用于去重：相同 phase 不重复 call sink，避免冗余 redraw（codex-rescue 审查 P2 修复）
 ## sink 未注册时 dispatch 不更新此字段，保证未来注册后首次分发不会被错误去重
-static var _last_dispatched_phase: int = _NO_OVERRIDE
+static var _last_dispatched_phase: int = NO_OVERRIDE
 
 
 # ─────────────────────────────────────
@@ -65,7 +65,7 @@ static var _last_dispatched_phase: int = _NO_OVERRIDE
 ## ENEMY_1 = 夜晚；其他（PLAYER 等）= 白天
 ## NONE / 未知 faction 默认归白天，避免空状态时显示夜晚滤镜
 static func current(turn_manager: TurnManager) -> Phase:
-	if _phase_override != _NO_OVERRIDE:
+	if _phase_override != NO_OVERRIDE:
 		return _phase_override as Phase
 	return _faction_to_phase(turn_manager.current_faction if turn_manager != null else Faction.PLAYER)
 
@@ -135,9 +135,9 @@ static func set_phase_override(phase: Phase) -> void:
 ## 防御性：访问 _attached_turn_manager.current_faction 前用 is_instance_valid 校验
 ## 避免极端时序下旧 TurnManager 已释放但静态引用未清造成的运行时风险（codex-rescue P2 修复）
 static func clear_phase_override() -> void:
-	if _phase_override == _NO_OVERRIDE:
+	if _phase_override == NO_OVERRIDE:
 		return
-	_phase_override = _NO_OVERRIDE
+	_phase_override = NO_OVERRIDE
 	if _attached_turn_manager == null or not is_instance_valid(_attached_turn_manager):
 		return
 	_dispatch_phase_changed(_faction_to_phase(_attached_turn_manager.current_faction))
@@ -147,8 +147,8 @@ static func clear_phase_override() -> void:
 ## 场景 _exit_tree 时调用，避免跨场景悬空 Callable / 残留 connect / 错误去重
 static func clear_sinks() -> void:
 	_phase_changed_sink = Callable()
-	_phase_override = _NO_OVERRIDE
-	_last_dispatched_phase = _NO_OVERRIDE
+	_phase_override = NO_OVERRIDE
+	_last_dispatched_phase = NO_OVERRIDE
 	if _attached_turn_manager != null and is_instance_valid(_attached_turn_manager):
 		if _attached_turn_manager.faction_turn_started.is_connected(_on_faction_turn_started):
 			_attached_turn_manager.faction_turn_started.disconnect(_on_faction_turn_started)
@@ -167,10 +167,10 @@ static func clear_sinks() -> void:
 ## 计算出的 phase 仍是 NIGHT，由 _dispatch_phase_changed 内部去重，避免冗余 redraw
 static func _on_faction_turn_started(faction: int) -> void:
 	# PLAYER 回合到来 = 夜晚结束 → 清 override；其他切换不动 override
-	if faction == Faction.PLAYER and _phase_override != _NO_OVERRIDE:
-		_phase_override = _NO_OVERRIDE
+	if faction == Faction.PLAYER and _phase_override != NO_OVERRIDE:
+		_phase_override = NO_OVERRIDE
 	# 计算分发的 phase：override 仍生效则按 override，否则按 faction 推断
-	var phase: Phase = (_phase_override as Phase) if _phase_override != _NO_OVERRIDE else _faction_to_phase(faction)
+	var phase: Phase = (_phase_override as Phase) if _phase_override != NO_OVERRIDE else _faction_to_phase(faction)
 	_dispatch_phase_changed(phase)
 
 

@@ -63,6 +63,7 @@ static func spawn_text(
 	return spawn_damage(parent, world_pos, text, "", color, duration)
 
 
+## Godot 生命周期：装配 font + 启动上飘 / 渐隐 Tween + 首次 redraw
 func _ready() -> void:
 	# 使用顶部 const PROJECT_FONT（preload 形式，编辑期校验路径）
 	_font = PROJECT_FONT
@@ -76,6 +77,7 @@ func _ready() -> void:
 	queue_redraw()
 
 
+## Godot 生命周期：绘制主行 + 可选副标题（克制 / 高度差描述）
 func _draw() -> void:
 	if _font == null or _main_text.is_empty():
 		return

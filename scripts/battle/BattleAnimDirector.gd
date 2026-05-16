@@ -100,12 +100,14 @@ func is_animating() -> bool:
 	return _anim_count > 0 or not _anim_queue.is_empty()
 
 
+## 进入一段战斗动画（_anim_count +1，首次进入时禁用 HUD 行动按钮）
 func _begin_battle_anim() -> void:
 	_anim_count += 1
 	if _anim_count == 1 and _battle_hud != null:
 		_battle_hud.set_actions_enabled(false)
 
 
+## 退出一段战斗动画（_anim_count -1，归零时恢复 HUD 并 drain 排队或 emit anims_drained）
 func _end_battle_anim() -> void:
 	_anim_count = maxi(0, _anim_count - 1)
 	if _anim_count == 0:
@@ -190,6 +192,7 @@ func _on_battle_unit_moved(actor: BattleUnit, from_pos: Vector2i, to_pos: Vector
 	_enqueue_battle_anim(runner)
 
 
+## sink: BattleSession.on_unit_attacked — 入队攻击动画 runner（占位 HP 起点防"双跳"）
 func _on_battle_unit_attacked(
 	actor: BattleUnit, target: BattleUnit,
 	damage: int, counter_factor: float, altitude_diff: int,
@@ -210,6 +213,7 @@ func _on_battle_unit_attacked(
 	_enqueue_battle_anim(runner)
 
 
+## sink: BattleSession.on_unit_skipped — 入队跳过动画 runner（actor 位置不变，无需占位）
 func _on_battle_unit_skipped(actor: BattleUnit) -> void:
 	if actor == null:
 		_redraw_target.queue_redraw()
@@ -219,6 +223,7 @@ func _on_battle_unit_skipped(actor: BattleUnit) -> void:
 	_enqueue_battle_anim(runner)
 
 
+## sink: BattleSession.on_unit_died — 入队死亡动画 runner（占位 dying_alpha 防"瞬间消失"）
 func _on_battle_unit_died(unit: BattleUnit) -> void:
 	if unit == null:
 		_redraw_target.queue_redraw()

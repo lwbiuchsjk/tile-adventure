@@ -3042,6 +3042,7 @@ func _entry_to_item_count(entry: Dictionary) -> Dictionary:
 
 
 
+## sink: PartyRecruitment.recruit_triggered — 接英雄招募事件并推入 EventPanel
 func _on_recruit_triggered(hero_dict: Dictionary, milestone: int) -> void:
 	if _event_panel == null:
 		push_warning("WorldMap._on_recruit_triggered: EventPanelUI 未就绪，事件丢弃")
@@ -3146,7 +3147,7 @@ func _get_active_troops() -> Array[TroopData]:
 ## 仍在 WorldMap 内执行——这些是 WorldMap 自己的视图态
 ##
 ## MVP-δ codex review P1 修复：midpoint 闭包整体迁到本处构造（原在 PlayerLifecycle.trigger_coma_or_lose 内）
-## 闭包负责：advance_cycle（RunState 周期推进）+ reload_current_scene（场景重启）+ 返回 world_ready_signal
+## 闭包负责：advance_cycle（RunState 周期推进）+ reload_current_scene（场景重启）+ 返回 world_ready
 ##   让 OverlayTransitionUI 在 phase B 内调用 + await，等新场景 _ready 触发 notify_world_ready 后继续 phase C
 ## 由 WorldMap 持有这段时序逻辑：PlayerLifecycle 彻底独立于 OverlayTransitionUI / SceneTree
 func _on_player_coma_triggered(lines: PackedStringArray, icon_data: Dictionary) -> void:
@@ -3158,7 +3159,7 @@ func _on_player_coma_triggered(lines: PackedStringArray, icon_data: Dictionary) 
 	var midpoint: Callable = func() -> Signal:
 		RunState.advance_cycle()
 		get_tree().reload_current_scene()
-		return OverlayTransitionUI.world_ready_signal
+		return OverlayTransitionUI.world_ready
 	OverlayTransitionUI.play(lines, icon_data, midpoint)
 
 

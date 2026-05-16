@@ -129,6 +129,7 @@ func setup(world_view: WorldView, battle_view: BattleViewState) -> void:
 	_battle_view = battle_view
 
 
+## Godot 生命周期：主 _draw 入口，从 WorldView 缓存热路径成员后调度 _draw_* 子区块
 func _draw() -> void:
 	if _world_view == null:
 		return

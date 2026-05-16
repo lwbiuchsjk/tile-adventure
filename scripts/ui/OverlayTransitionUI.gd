@@ -33,13 +33,13 @@ extends CanvasLayer
 
 ## 内部使用：WorldMap _ready 末尾调 notify_world_ready 时 emit
 ## play() 的 phase B 等这个信号通过（让 reload 后新场景就绪后才进 phase C）
-signal world_ready_signal
+signal world_ready
 
 ## 整段过渡完成（phase D fade out 末尾）；外部可监听
 signal finished
 
 # 内部信号：当前 step（line fade-in / line hold）完成（自然完成或 SPACE 跳过）
-signal _step_advanced
+signal step_advanced
 
 # ─────────────────────────────────────
 # 配置常量（默认值，跑测可调）
@@ -52,7 +52,7 @@ const LINE_HOLD_DURATION: float = 1.5
 const ICON_FADE_IN_DURATION: float = 0.2
 
 ## phase B 超时兜底（codex review P0-2 修复 2026-05-10）：
-## 防止 _pending_respawn_intro 未被置 true 等极端边界让 await world_ready_signal 永久挂起
+## 防止 _pending_respawn_intro 未被置 true 等极端边界让 await world_ready 永久挂起
 ## 5s 是设计经验值：reload + _ready 应在 1-2s 内完成；超时即 fallback 进 phase C
 const PHASE_B_TIMEOUT_SEC: float = 5.0
 
@@ -127,7 +127,7 @@ func is_initial_play_done() -> bool:
 ## lines：要逐句显示的文字（数组顺序）
 ## icon_data：{"icon": String, "count": int}；空字段走 fallback
 ## on_midpoint：phase B 内调用的 Callable；可返回 Signal 让本方法 await
-##              用于 coma → respawn：内部做 RunState.advance_cycle + reload_current_scene + 返回 world_ready_signal
+##              用于 coma → respawn：内部做 RunState.advance_cycle + reload_current_scene + 返回 world_ready
 ##
 ## 不并发：已在过渡中再次调用会被拒绝（push_warning + return）
 func play(lines: PackedStringArray, icon_data: Dictionary, on_midpoint: Callable) -> void:
@@ -184,13 +184,13 @@ func play_with_blackout_start(lines: PackedStringArray, icon_data: Dictionary) -
 ##   1. 若指定 replace_line_index ∈ [0, _line_labels.size())：替换该 Label 的 text
 ##      —— 用于 coma → respawn 流程：第二句"队长 Y 开启了旅程"的 Y 名字只有 reload 后
 ##         draw_new_leader 抽到才能确定，需在此动态写入
-##   2. emit world_ready_signal —— 让 play() 的 phase B `await ret` 通过
+##   2. emit world_ready —— 让 play() 的 phase B `await ret` 通过
 ##
 ## 注意：游戏开始首次调用应走 play_with_blackout_start 而非本方法（由 WorldMap 自行分流）
 func notify_world_ready(replace_line_index: int = -1, replace_line_text: String = "") -> void:
 	if replace_line_index >= 0 and replace_line_index < _line_labels.size():
 		_line_labels[replace_line_index].text = replace_line_text
-	world_ready_signal.emit()
+	world_ready.emit()
 
 
 # ─────────────────────────────────────
@@ -239,11 +239,11 @@ func _run_lines_and_fade_out() -> void:
 
 ## 等待一个 step（fade in / hold）完成
 ##
-## tween_factory 是构造 tween 的 Callable —— 因为 tween 在 await 之前要先 connect _step_advanced
+## tween_factory 是构造 tween 的 Callable —— 因为 tween 在 await 之前要先 connect step_advanced
 ## 调用方传 lambda 返回新建 tween，本方法接管 connect / await
 ##
 ## 跳过路径：_on_space_pressed_in_phase_c 调用 _emit_step_done_once，本方法的 await 立即返回
-## 自然完成路径：tween.finished 触发 _emit_step_done_once，同样 emit _step_advanced
+## 自然完成路径：tween.finished 触发 _emit_step_done_once，同样 emit step_advanced
 ##
 ## _step_emitted flag 防止 double emit；CONNECT_ONE_SHOT 保证 tween.finished 只触发一次
 ## SPACE 跳过时 tween.kill() 不会再 emit finished，靠 _emit_step_done_once 直接 emit step_advanced
@@ -256,24 +256,25 @@ func _await_step(tween_factory: Callable) -> void:
 	if _current_step_tween == null:
 		push_warning("OverlayTransitionUI._await_step: tween_factory 返回 null，跳过本 step")
 		_emit_step_done_once()
-		await _step_advanced
+		await step_advanced
 		return
 	_current_step_tween.finished.connect(_emit_step_done_once, CONNECT_ONE_SHOT)
-	await _step_advanced
+	await step_advanced
 	_current_step_tween = null
 
 
+## emit step_advanced 信号（dedup 守卫：避免 tween.finished 与手动跳过两条路径双触发）
 func _emit_step_done_once() -> void:
 	if _step_emitted:
 		return
 	_step_emitted = true
-	_step_advanced.emit()
+	step_advanced.emit()
 
 
 ## codex review P0-2 修复（2026-05-10）：等待 signal 或超时,谁先到都解锁
 ##
 ## 用 polling get_tree().process_frame 实现"signal vs timer 先到为胜"
-## 防止 phase B `await world_ready_signal` 在某些边界场景（_pending_respawn_intro
+## 防止 phase B `await world_ready` 在某些边界场景（_pending_respawn_intro
 ## 未被置 true / reload 异常）下永久挂起整个过渡组件
 ##
 ## 超时时 push_warning 便于排障；正常路径 < 2s 内 signal 即触发,不会进超时分支
@@ -358,7 +359,7 @@ func _input(event: InputEvent) -> void:
 ##   - 当前停留中：立即推进到下一句的 fade in
 ##   - 全部已显示（_current_line_index == size）：推进到 fade out（在 hold 阶段被跳过）
 ##
-## 实现策略：kill 当前 tween + 直接 emit _step_advanced（_emit_step_done_once 内部 dedupe）
+## 实现策略：kill 当前 tween + 直接 emit step_advanced（_emit_step_done_once 内部 dedupe）
 ## 把当前句拉满 alpha 防"半路停下"
 func _on_space_pressed_in_phase_c() -> void:
 	if _current_step_tween != null and _current_step_tween.is_valid():

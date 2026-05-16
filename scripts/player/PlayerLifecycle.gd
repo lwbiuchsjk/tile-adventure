@@ -18,7 +18,7 @@ extends Node
 ##   所有 UI 调用（OverlayTransitionUI.play / VictoryUI / VictoryJudge）通过 signal 发出，
 ##   由 WorldMap 接 sink 后调用对应 autoload / 节点。
 ##   COMA 重生流的 midpoint 闭包（含 RunState.advance_cycle + reload_current_scene +
-##   返回 OverlayTransitionUI.world_ready_signal）整体由 WorldMap 在 sink handler 内构造，
+##   返回 OverlayTransitionUI.world_ready）整体由 WorldMap 在 sink handler 内构造，
 ##   PlayerLifecycle 不引用 OverlayTransitionUI / get_tree().reload —— 彻底独立于 UI/场景。
 ##
 ## 职责切分：
@@ -33,7 +33,7 @@ extends Node
 ## 队长昏迷过渡触发（_trigger_coma_or_lose 内 respawns_left > 0 分支）
 ## 参数：黑屏文案双句 + 火苗团数据
 ## WorldMap 接 sink → 自行构造 midpoint 闭包（含 RunState.advance_cycle + reload_current_scene +
-## 返回 OverlayTransitionUI.world_ready_signal），再调 OverlayTransitionUI.play
+## 返回 OverlayTransitionUI.world_ready），再调 OverlayTransitionUI.play
 ##
 ## MVP-δ codex review P1 修复：原 signal 含 midpoint 参数 + PlayerLifecycle 内构造闭包引用
 ## OverlayTransitionUI；现 payload 减为 2 参，midpoint 全部迁到 WorldMap.sink handler 构造
@@ -238,7 +238,7 @@ func evaluate_party_state(skip_if_finished: bool = false) -> bool:
 ## MVP-δ 阶段 2 + codex review P1 修复：
 ##   PlayerLifecycle 完全不引用 OverlayTransitionUI / get_tree().reload；
 ##   原 midpoint 闭包整体迁到 WorldMap._on_player_coma_triggered 内构造（含 advance_cycle +
-##   reload_current_scene + 返回 world_ready_signal）—— 职责切分清晰：
+##   reload_current_scene + 返回 world_ready）—— 职责切分清晰：
 ##     PlayerLifecycle = 队伍/coma 状态判定 + 发信号
 ##     WorldMap        = UI 过渡 + 场景 reload + 时序协调
 ##
