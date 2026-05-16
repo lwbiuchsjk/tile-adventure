@@ -286,11 +286,11 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-_（暂无活跃条目；P1 代码健康度回看 6 批全部完成于 2026-05-16）_
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B 痛点优先批设计文档已落 2026-05-16，5 份 Resource × 86 个 const × 4 阶段独立 commit 待启动
 
 ## 预启动（方向已认可，等启动时机）
 
-- [参数调整便利化](tile-advanture-design/设计候选库.md) — D 方案分两步（Resource .tres 化 → 运行时调参面板），覆盖 WorldMap / WorldMapRenderer / NightVisionLayer 等约 200 个散落 const；待启动时机时新建 L0 路线图入口 + 拆 MVP；详见 memory `project-param-tuning-plan`
+_（暂无预启动条目；参数调整便利化已升级到「活跃」，详见 MVP-B 设计文档）_
 
 ## 已归档
 
