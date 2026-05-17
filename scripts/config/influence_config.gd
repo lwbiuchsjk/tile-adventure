@@ -17,6 +17,8 @@ extends Resource
 # Civ 化阶段 A：饱和青蓝玩家 + 饱和冷红敌方，与去饱和地形形成强对比
 # ─────────────────────────────────────────
 
+@export_group("势力色")
+
 ## 势力归属色字典（key = Faction 枚举 int）
 ## key：0=NONE 中立灰 / 1=PLAYER 饱和青蓝 #1A8FE6 / 2=ENEMY_1 饱和冷红 #FF3D4D
 ## 设计原则：饱和度 ≥ 0.76 与去饱和地形拉开明度 60+，规避撞色
@@ -32,6 +34,8 @@ extends Resource
 # 公式：d_to_edge = r - (|dx| + |dy|)
 # 外圈（d=0）OUTER → 次外（d=1）MID → 内层（d≥2）INNER
 # ─────────────────────────────────────────
+
+@export_group("影响圈三圈 alpha")
 
 ## 最外圈格 alpha —— 辐射感"亮边"
 @export_range(0.0, 1.0, 0.01) var influence_alpha_outer: float = 0.22
@@ -49,6 +53,8 @@ extends Resource
 # 地形改沼泽褐 / 暖灰绿且去饱和后，势力色原色站在地形上反而最跳，无须再暗化
 # ─────────────────────────────────────────
 
+@export_group("影响圈描边")
+
 ## 影响圈描边 alpha（势力原色 alpha 1.0）
 @export_range(0.0, 1.0, 0.01) var influence_border_alpha: float = 1.0
 
@@ -59,6 +65,8 @@ extends Resource
 # ─────────────────────────────────────────
 # 核心城镇金色描边（凸显势力首都）
 # ─────────────────────────────────────────
+
+@export_group("核心城镇金边")
 
 ## 核心城镇金色描边色
 @export var core_town_border: Color = Color(1.0, 0.85, 0.0)
@@ -72,6 +80,8 @@ extends Resource
 # 外环势力色（归属识别）→ 白色分离线（几何分离，即使色相冲突也能识别）→ 内底米白（文字承载）
 # 三层而非双层的理由：当玩家蓝 / 敌方红与地形色相近时，仅靠势力色 + 米白内底仍可能低对比度
 # ─────────────────────────────────────────
+
+@export_group("持久 slot 三层结构")
 
 ## 外环厚度（像素，占格 48 × 8%）
 @export_range(1, 12, 1) var persistent_ring_width: int = 4

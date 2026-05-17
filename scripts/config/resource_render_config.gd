@@ -20,6 +20,8 @@ extends Resource
 # UI 重构步骤 5：从冷灰 #8C8C99 改为暖浅灰 #B8B8B0（接近木箱感）+ 白描边
 # ─────────────────────────────────────────
 
+@export_group("盲盒")
+
 ## 盲盒底色（暖浅灰 #B8B8B0，更像"可拾取对象"而非占位符）
 @export var blind_box_color: Color = Color(0.72, 0.72, 0.69)
 

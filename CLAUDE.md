@@ -286,7 +286,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B 4 阶段全部跑测落地（2026-05-17，4 份 Resource × 72 字段 + 17 死 const 清理 + 27 行桥接段重写）；codex 审查 0 P0/P1/P2 + 2 P3 已修；MVP-C 运行时面板待启动评估
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 全部跑测落地（2026-05-17，共 8 份 Resource × 113 活跃字段 + 21 死 const 清理 + WorldMapRenderer 桥接段 40 → 1 行 + EnemyMovement 双源同源化首例）；两批 codex 审查累计 0 P0/P1 + 1 P2 + 4 P3 全数修复；MVP-C 运行时面板待启动评估
 
 ## 预启动（方向已认可，等启动时机）
 

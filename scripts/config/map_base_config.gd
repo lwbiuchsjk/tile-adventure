@@ -18,6 +18,8 @@ extends Resource
 # 注：terrain_colors / slot_colors 的 key 为 int 对应 MapSchema.TerrainType / SlotType 枚举值
 # ─────────────────────────────────────────
 
+@export_group("地形渲染")
+
 ## 各地形渲染颜色（纯色块占位）。Civ 风格去饱和基调，让势力色独占高饱和色相。
 ## key：0=MOUNTAIN 冷灰褐 / 1=HIGHLAND 暖灰绿 / 2=FLATLAND 淡草绿 / 3=LOWLAND 沼泽褐
 @export var terrain_colors: Dictionary = {
@@ -34,6 +36,8 @@ extends Resource
 # ─────────────────────────────────────────
 # 槽位标记
 # ─────────────────────────────────────────
+
+@export_group("槽位标记")
 
 ## Slot 标记颜色（小方块叠加在地形色上；敌方/资源已有专属常量，本字典提供兜底色）
 ## key：1=RESOURCE 金色 / 2=FUNCTION 紫色（兜底） / 3=SPAWN 红色
@@ -52,6 +56,8 @@ extends Resource
 # 信息层级：白色双通道全面压过势力范围（"立即操作 > 长期状态"）
 # ─────────────────────────────────────────
 
+@export_group("可达性高亮")
+
 ## 可达范围内填充色（半透明白，alpha 0.18）
 @export var reachable_color: Color = Color(1.0, 1.0, 1.0, 0.18)
 
@@ -66,6 +72,8 @@ extends Resource
 # 标签字号（绑定地格视觉，随 TILE_SIZE 等比放大）
 # ─────────────────────────────────────────
 
+@export_group("标签字号")
+
 ## 地图标签字号（slot 主 ID / 文字标签）
 @export_range(8, 48, 1) var label_font_size: int = 18
 
@@ -76,6 +84,8 @@ extends Resource
 # ─────────────────────────────────────────
 # 动效时长
 # ─────────────────────────────────────────
+
+@export_group("动效时长")
 
 ## 单位逐格移动动画耗时（秒/格）—— WorldMap 玩家单位 + EnemyMovement 敌方单位共用
 @export_range(0.01, 1.0, 0.01) var move_step_duration: float = 0.1

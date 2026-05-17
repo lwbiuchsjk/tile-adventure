@@ -18,11 +18,11 @@ extends Node2D
 ##     _draw_* helper 继续读成员字段 —— 函数签名零改动，_draw_tile 等热路径不走
 ##     WorldView 动态访问。
 ##   - 渲染层对世界态零写操作（已逐函数核实）。
-##   - WorldMap 的 const 经 `const X := WorldMap.X` 别名引用（常量集中化是诊断
-##     报告 P3-2 议题，本批不动）。
+##   - 调参 const 全部走独立 Resource preload（MVP-B 阶段 3+4 / MVP-B.2 全 4 阶段迁出），
+##     仅 TILE_SIZE 保留 `const X := WorldMap.X` 桥接（基线锚点不可调参）。
 
 # ─────────────────────────────────────────
-# WorldMap 常量别名（const 集中化 → P3-2；本批先别名引用，函数体可原样搬迁）
+# 调参 Resource preload + 仅存的 TILE_SIZE 桥接
 # ─────────────────────────────────────────
 ## MVP-B 阶段 4 / MVP-B.2 全 4 阶段：Resource 调参 preload（独立访问，不走 WorldMap const 桥接中转）
 const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
