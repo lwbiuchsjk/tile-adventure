@@ -211,27 +211,6 @@ const MOVE_STEP_DURATION: float = 0.1
 ## 醒目提示显示时长（秒）
 const NOTICE_DURATION: float = 2.5
 
-## 入口 4 MVP 战斗镜头 zoom 参数
-## 战场 = 队长 ±_battle_arena_range 格，本 MVP 默认 13×13；上下各留 1 格视觉余量
-const BATTLE_ZOOM_MARGIN_GRID: int = 1
-## HUD 上下保留像素（CanvasLayer 不受 Camera zoom 影响，物理像素恒定占屏）
-## 实测调整：跑测后若发现战场贴 HUD 边可调大；若空余过多可调小
-const BATTLE_ZOOM_HUD_RESERVE_PX: int = 120
-## 战斗 zoom 平滑过渡时长（秒）
-const BATTLE_ZOOM_TWEEN_DURATION: float = 0.3
-
-## 入口 4 MVP（2026-05-09 追加）：战场外压暗 overlay
-## 战斗触发时画半透明黑覆盖战场之外的区域（含 camera 视野内的地图边外）
-## 视觉作用：让玩家注意力聚焦战场，弱化战场之外的干扰元素
-const BATTLE_DIM_COLOR: Color = Color(0.0, 0.0, 0.0, 0.50)
-## overlay 覆盖范围 padding（像素），保证 camera 视野完全覆盖（含 zoom out 后的视野扩张）
-const BATTLE_DIM_PADDING_PX: int = 4096
-
-## 入口 4 MVP（2026-05-09 补）：战斗镜头倾斜角度（弧度）
-## 用户提议 15° 偏大（晕动症 + 可读性损伤），先用 5° 试 —— 不平衡感够 + 可读性几乎无损
-## HUD 在 CanvasLayer 自动保持水平，不受 Camera 旋转影响；地图 + 战斗单位整体倾斜
-const BATTLE_TILT_RAD: float = 0.0872664626  ## deg_to_rad(5.0)
-
 ## 入口 4 MVP（2026-05-09 跑测补丁）：探索态 HUD 底栏占用预留
 ## 修复：玩家贴地图底边时，HudBar 浮在地图上方 → 队长视觉被 HUD 遮挡
 ## 方案：Camera2D.offset.y 向下偏 OFFSET 让玩家在屏幕几何中心上方；同时扩展
@@ -596,52 +575,17 @@ const M4_PERSISTENT_SEPARATOR_COLOR: Color = Color(1.0, 1.0, 1.0) ## 分离线�
 const M4_PERSISTENT_SEPARATOR_WIDTH: int = 1                      ## 分离线厚度 px
 const M4_PERSISTENT_INNER_BG: Color = Color(0.90, 0.88, 0.83)     ## 内底米白  #E6E0D4
 const M4_CORE_TOWN_EMBLEM_SIZE: int = 8                           ## 核心城镇下方徽记（金色小菱形）边长 px
-const BATTLE_ARENA_BORDER_COLOR: Color = Color(1.0, 0.85, 0.0, 0.65)
-const BATTLE_ARENA_BORDER_WIDTH: float = 2.0
-const BATTLE_REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.16)
-const BATTLE_ATTACKABLE_COLOR: Color = Color(1.0, 0.20, 0.20, 0.28)
-## 入口 1.2 跑测补充（2026-05-09）：移动范围加白描边后攻击范围对应加黄描边
-## 选黄色（与 BATTLE_ARENA_BORDER 同色调）避免与敌方阵营红家族 + 红填充叠加导致边界模糊
-const BATTLE_ATTACKABLE_BORDER_COLOR: Color = Color(1.0, 0.85, 0.0, 0.85)
-const BATTLE_ATTACKABLE_BORDER_WIDTH: float = 3.5
-const BATTLE_CURRENT_ACTOR_RING: Color = Color(1.0, 1.0, 1.0, 1.0)
-const BATTLE_CURRENT_ACTOR_RING_WIDTH: float = 3.0
-const BATTLE_HP_BAR_WIDTH: int = 24
-const BATTLE_HP_BAR_HEIGHT: int = 4
-const BATTLE_HP_COLOR_FULL: Color = Color(0.20, 0.85, 0.30, 1.0)
-const BATTLE_HP_COLOR_MID: Color = Color(0.95, 0.85, 0.20, 1.0)
-const BATTLE_HP_COLOR_LOW: Color = Color(0.90, 0.25, 0.25, 1.0)
-const BATTLE_HP_BAR_BG: Color = Color(0.0, 0.0, 0.0, 0.55)
 # ─────────────────────────────────────
-# 入口 1.2 战斗内反馈（队长银三角 / 兵种字符 / 克制图标）
-# 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §8 视觉规格基准
+# 战斗调参 Resource（MVP-B 阶段 3+4 迁出）
+# WorldMap / WorldMapRenderer / BattleAnimDirector 各自 preload 同一份 .tres（独立访问无中转）
+# 编辑器内双击 .tres 在 inspector 调字段
 # ─────────────────────────────────────
-## 入口 4 MVP 队长标识改造（2026-05-09）：银三角 → HP 条金边
-## 替换原因：原银三角与克制图标共享头顶轨道 + 形状同族（▽ vs ▼/▲）→ 玩家瞬间无法区分
-## 新方案：队长 HP 条加金色描边——位置（脚下 vs 头顶）+ 颜色（金 vs 绿/橙）双重隔离
-const BATTLE_LEADER_HP_BORDER_COLOR: Color = Color(1.0, 0.84, 0.0)  ## 队长 HP 条金边色 #FFD700
-const BATTLE_LEADER_HP_BORDER_WIDTH: float = 2.0                    ## 金边线宽（px）
-const BATTLE_TROOP_LABEL_COLOR: Color = Color(1, 1, 1)              ## 兵种字符白色（高对比）
-## 入口 4 MVP（2026-05-09）：6 → 12 / 6 → 12
-## 跑测发现 TILE_SIZE 72 下 6px 图标占单位半径 12.5%（48 时占 19%），过小不易观察
-## 修正后占比 25%，与单位整体协调（仍小于头顶轨道宽度，与队长标识不冲突）
-const BATTLE_COUNTER_ICON_SIZE: float = 12.0                        ## 克制图标尺寸
-const BATTLE_COUNTER_ICON_GAP: float = 12.0                         ## 左右图标中心水平间距
-const BATTLE_COUNTER_ICON_ADV: Color = Color(0.3, 0.85, 0.3)        ## ▲ 优势绿
-const BATTLE_COUNTER_ICON_DIS: Color = Color(1.0, 0.55, 0.1)        ## ▼ 劣势警示橙
-const BATTLE_COUNTER_ICON_NEUTRAL: Color = Color(0.95, 0.95, 0.95)  ## ● 中性亮白
-const BATTLE_COUNTER_FACTOR_EPS: float = 0.001                      ## counter_factor 浮点比较误差容忍
-const BATTLE_HEAD_OFFSET: float = 8.0                               ## 单位头顶图标距 radius 上方偏移
-## 入口 1.2 补充需求 2：玩家方已行动单位的填充色（灰色），与阵营色形成"已 / 未行动"区分
-## 玩家回合开始时 BattleSession._start_player_turn 调 reset_turn_flags() 全部恢复未行动 → 自动恢复阵营色
-const BATTLE_PLAYER_ACTED_COLOR: Color = Color(0.55, 0.55, 0.55)
-# ─────────────────────────────────────
-# 战斗动画调参 Resource（MVP-B 阶段 3：22 个原 const 迁出）
-# schema: scripts/config/battle_anim_config.gd；instance: assets/config/battle_anim_config.tres
-# BattleAnimDirector 自己 preload 同一份 .tres（不走 WorldMap 中转），减少 const 桥接职责
-# 编辑器内双击 .tres 在 inspector 调字段（含致命一击 @export_group 分组）
-# ─────────────────────────────────────
+
+## 战斗动画（阶段 3：22 字段 = 11 普通 + 4 飘字色 + 7 致命一击）
 const ANIM_CFG: BattleAnimConfig = preload("res://assets/config/battle_anim_config.tres")
+
+## 战斗视觉（阶段 4：31 字段 = zoom/dim/tilt 6 + arena/range 6 + actor 2 + HP 8 + troop 1 + counter 6 + 其他 2）
+const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -1310,12 +1254,12 @@ func _start_battle_camera(battle_center: Vector2i) -> void:
 	_battle_zoom_active = true
 	_battle_center_grid = battle_center  # 入口 4 MVP（追加）：缓存战场中心供 _draw_battle_dim_overlay 使用
 	_battle_zoom_tween = create_tween().set_parallel(true)
-	_battle_zoom_tween.tween_property(_camera, "zoom", Vector2(zoom_target, zoom_target), BATTLE_ZOOM_TWEEN_DURATION) \
+	_battle_zoom_tween.tween_property(_camera, "zoom", Vector2(zoom_target, zoom_target), VISUAL_CFG.zoom_tween_duration) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	_battle_zoom_tween.tween_property(_camera, "position", center_pixel, BATTLE_ZOOM_TWEEN_DURATION) \
+	_battle_zoom_tween.tween_property(_camera, "position", center_pixel, VISUAL_CFG.zoom_tween_duration) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# 入口 4 MVP（2026-05-09 补）：战斗倾斜 5° —— 营造不平衡 / 紧张感
-	_battle_zoom_tween.tween_property(_camera, "rotation", BATTLE_TILT_RAD, BATTLE_ZOOM_TWEEN_DURATION) \
+	_battle_zoom_tween.tween_property(_camera, "rotation", VISUAL_CFG.tilt_rad, VISUAL_CFG.zoom_tween_duration) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 	# MVP-δ 阶段 2：战斗强制白天 fade —— NightVisionLayer 自管理 pending_post_battle_phase
@@ -1346,12 +1290,12 @@ func _end_battle_camera() -> void:
 	if _unit != null:
 		leader_pos = _grid_to_pixel_center(_unit.position)
 	_battle_zoom_tween = create_tween().set_parallel(true)
-	_battle_zoom_tween.tween_property(_camera, "zoom", Vector2.ONE, BATTLE_ZOOM_TWEEN_DURATION) \
+	_battle_zoom_tween.tween_property(_camera, "zoom", Vector2.ONE, VISUAL_CFG.zoom_tween_duration) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	_battle_zoom_tween.tween_property(_camera, "position", leader_pos, BATTLE_ZOOM_TWEEN_DURATION) \
+	_battle_zoom_tween.tween_property(_camera, "position", leader_pos, VISUAL_CFG.zoom_tween_duration) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# 入口 4 MVP（2026-05-09 补）：倾斜归位
-	_battle_zoom_tween.tween_property(_camera, "rotation", 0.0, BATTLE_ZOOM_TWEEN_DURATION) \
+	_battle_zoom_tween.tween_property(_camera, "rotation", 0.0, VISUAL_CFG.zoom_tween_duration) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 
@@ -1369,13 +1313,13 @@ func _end_battle_camera() -> void:
 
 ## 入口 4 MVP：战斗 zoom 目标值计算（设计文档公式）
 ## 取 viewport 实际尺寸（不依赖基线 1280×720，stretch 等比缩放在更上层处理）
-## HUD 占位用 BATTLE_ZOOM_HUD_RESERVE_PX 估值；跑测后调常量值
+## HUD 占位用 VISUAL_CFG.zoom_hud_reserve_px 估值；跑测后改 battle_visual_config.tres
 func _compute_battle_zoom_target() -> float:
 	var battle_size: int = _battle_arena_range * 2 + 1
-	var need_grids: int = battle_size + BATTLE_ZOOM_MARGIN_GRID * 2
+	var need_grids: int = battle_size + VISUAL_CFG.zoom_margin_grid * 2
 	var need_world_px: float = float(need_grids * TILE_SIZE)
 	var vp: Vector2 = get_viewport().get_visible_rect().size
-	var usable_h: float = maxf(vp.y - float(BATTLE_ZOOM_HUD_RESERVE_PX), 1.0)
+	var usable_h: float = maxf(vp.y - float(VISUAL_CFG.zoom_hud_reserve_px), 1.0)
 	var zoom_x: float = vp.x / need_world_px
 	var zoom_y: float = usable_h / need_world_px
 	# zoom 取较小者（保证两轴都能装下）；上限钳到 1.0 避免在大窗口下反向放大

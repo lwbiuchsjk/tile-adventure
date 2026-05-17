@@ -24,33 +24,9 @@ extends Node2D
 # ─────────────────────────────────────────
 # WorldMap 常量别名（const 集中化 → P3-2；本批先别名引用，函数体可原样搬迁）
 # ─────────────────────────────────────────
-const BATTLE_ARENA_BORDER_COLOR := WorldMap.BATTLE_ARENA_BORDER_COLOR
-const BATTLE_ARENA_BORDER_WIDTH := WorldMap.BATTLE_ARENA_BORDER_WIDTH
-const BATTLE_ATTACKABLE_BORDER_COLOR := WorldMap.BATTLE_ATTACKABLE_BORDER_COLOR
-const BATTLE_ATTACKABLE_BORDER_WIDTH := WorldMap.BATTLE_ATTACKABLE_BORDER_WIDTH
-const BATTLE_ATTACKABLE_COLOR := WorldMap.BATTLE_ATTACKABLE_COLOR
-const BATTLE_COUNTER_FACTOR_EPS := WorldMap.BATTLE_COUNTER_FACTOR_EPS
-const BATTLE_COUNTER_ICON_ADV := WorldMap.BATTLE_COUNTER_ICON_ADV
-const BATTLE_COUNTER_ICON_DIS := WorldMap.BATTLE_COUNTER_ICON_DIS
-const BATTLE_COUNTER_ICON_GAP := WorldMap.BATTLE_COUNTER_ICON_GAP
-const BATTLE_COUNTER_ICON_NEUTRAL := WorldMap.BATTLE_COUNTER_ICON_NEUTRAL
-const BATTLE_COUNTER_ICON_SIZE := WorldMap.BATTLE_COUNTER_ICON_SIZE
-const BATTLE_CURRENT_ACTOR_RING := WorldMap.BATTLE_CURRENT_ACTOR_RING
-const BATTLE_CURRENT_ACTOR_RING_WIDTH := WorldMap.BATTLE_CURRENT_ACTOR_RING_WIDTH
-const BATTLE_DIM_COLOR := WorldMap.BATTLE_DIM_COLOR
-const BATTLE_DIM_PADDING_PX := WorldMap.BATTLE_DIM_PADDING_PX
-const BATTLE_HEAD_OFFSET := WorldMap.BATTLE_HEAD_OFFSET
-const BATTLE_HP_BAR_BG := WorldMap.BATTLE_HP_BAR_BG
-const BATTLE_HP_BAR_HEIGHT := WorldMap.BATTLE_HP_BAR_HEIGHT
-const BATTLE_HP_BAR_WIDTH := WorldMap.BATTLE_HP_BAR_WIDTH
-const BATTLE_HP_COLOR_FULL := WorldMap.BATTLE_HP_COLOR_FULL
-const BATTLE_HP_COLOR_LOW := WorldMap.BATTLE_HP_COLOR_LOW
-const BATTLE_HP_COLOR_MID := WorldMap.BATTLE_HP_COLOR_MID
-const BATTLE_LEADER_HP_BORDER_COLOR := WorldMap.BATTLE_LEADER_HP_BORDER_COLOR
-const BATTLE_LEADER_HP_BORDER_WIDTH := WorldMap.BATTLE_LEADER_HP_BORDER_WIDTH
-const BATTLE_PLAYER_ACTED_COLOR := WorldMap.BATTLE_PLAYER_ACTED_COLOR
-const BATTLE_REACHABLE_COLOR := WorldMap.BATTLE_REACHABLE_COLOR
-const BATTLE_TROOP_LABEL_COLOR := WorldMap.BATTLE_TROOP_LABEL_COLOR
+## MVP-B 阶段 4：战斗视觉 27 个原 BATTLE_* 桥接 const 全部删除，改为本类自己 preload
+## 同一份 .tres（与 WorldMap / BattleAnimDirector 一致），preload 是 Godot 资源单例无内存损耗
+const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
 const CHALLENGED_DIM := WorldMap.CHALLENGED_DIM
 const ENEMY_BORDER_COLOR := WorldMap.ENEMY_BORDER_COLOR
 const ENEMY_GLOW_COLOR := WorldMap.ENEMY_GLOW_COLOR
@@ -876,7 +852,7 @@ func _draw_battle_overlay() -> void:
 		Vector2(arena.position.x * TILE_SIZE, arena.position.y * TILE_SIZE),
 		Vector2(arena.size.x * TILE_SIZE, arena.size.y * TILE_SIZE)
 	)
-	draw_rect(arena_px, BATTLE_ARENA_BORDER_COLOR, false, BATTLE_ARENA_BORDER_WIDTH)
+	draw_rect(arena_px, VISUAL_CFG.arena_border_color, false, VISUAL_CFG.arena_border_width)
 
 	# 2/3. 当前玩家单位的可达 / 可攻击高亮（仅玩家回合）
 	if _battle_session.is_player_turn():
@@ -892,7 +868,7 @@ func _draw_battle_overlay() -> void:
 				pos.x * TILE_SIZE + 2, pos.y * TILE_SIZE + 2,
 				TILE_SIZE - 4, TILE_SIZE - 4
 			)
-			draw_rect(rect, BATTLE_REACHABLE_COLOR)
+			draw_rect(rect, VISUAL_CFG.reachable_color)
 			# 4 邻外边界描边：邻居不在集合内 → 该侧画线
 			var px: float = float(pos.x * TILE_SIZE)
 			var py: float = float(pos.y * TILE_SIZE)
@@ -921,23 +897,23 @@ func _draw_battle_overlay() -> void:
 				p.x * TILE_SIZE + 2, p.y * TILE_SIZE + 2,
 				TILE_SIZE - 4, TILE_SIZE - 4
 			)
-			draw_rect(rect, BATTLE_ATTACKABLE_COLOR)
+			draw_rect(rect, VISUAL_CFG.attackable_color)
 			# 4 邻外边界黄描边（与移动范围同套手法）
 			var ax: float = float(p.x * TILE_SIZE)
 			var ay: float = float(p.y * TILE_SIZE)
 			var aw: float = float(TILE_SIZE)
 			if not attack_set.has(Vector2i(p.x, p.y - 1)):
 				draw_line(Vector2(ax, ay), Vector2(ax + aw, ay),
-					BATTLE_ATTACKABLE_BORDER_COLOR, BATTLE_ATTACKABLE_BORDER_WIDTH)
+					VISUAL_CFG.attackable_border_color, VISUAL_CFG.attackable_border_width)
 			if not attack_set.has(Vector2i(p.x, p.y + 1)):
 				draw_line(Vector2(ax, ay + aw), Vector2(ax + aw, ay + aw),
-					BATTLE_ATTACKABLE_BORDER_COLOR, BATTLE_ATTACKABLE_BORDER_WIDTH)
+					VISUAL_CFG.attackable_border_color, VISUAL_CFG.attackable_border_width)
 			if not attack_set.has(Vector2i(p.x - 1, p.y)):
 				draw_line(Vector2(ax, ay), Vector2(ax, ay + aw),
-					BATTLE_ATTACKABLE_BORDER_COLOR, BATTLE_ATTACKABLE_BORDER_WIDTH)
+					VISUAL_CFG.attackable_border_color, VISUAL_CFG.attackable_border_width)
 			if not attack_set.has(Vector2i(p.x + 1, p.y)):
 				draw_line(Vector2(ax + aw, ay), Vector2(ax + aw, ay + aw),
-					BATTLE_ATTACKABLE_BORDER_COLOR, BATTLE_ATTACKABLE_BORDER_WIDTH)
+					VISUAL_CFG.attackable_border_color, VISUAL_CFG.attackable_border_width)
 
 	# 4/5. 单位渲染 + HP 条（玩家方 → 敌方顺序，确保当前 actor 高亮在最上）
 	var current_actor: BattleUnit = _battle_session.current_actor()
@@ -974,18 +950,18 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 	# 投影
 	draw_circle(center + Vector2(2, 2), radius, UNIT_SHADOW_COLOR)
 	# 阵营色填充
-	# 入口 1.2 补充需求 2：玩家方已行动单位用 BATTLE_PLAYER_ACTED_COLOR（灰）代替阵营色
+	# 入口 1.2 补充需求 2：玩家方已行动单位用 VISUAL_CFG.player_acted_color（灰）代替阵营色
 	# 玩家回合开始 reset_turn_flags 后 has_attacked = false → 自动恢复阵营色
 	var fill: Color = M4_FACTION_COLORS.get(u.owner_faction, Color.MAGENTA) as Color
 	if u.owner_faction == Faction.PLAYER and u.has_attacked:
-		fill = BATTLE_PLAYER_ACTED_COLOR
+		fill = VISUAL_CFG.player_acted_color
 	draw_circle(center, radius, fill)
 	# 当前 actor 加粗白环
 	if u == current_actor and not _battle_session.is_ended():
 		draw_arc(
 			center, radius + 1.5,
 			0.0, TAU,
-			32, BATTLE_CURRENT_ACTOR_RING, BATTLE_CURRENT_ACTOR_RING_WIDTH
+			32, VISUAL_CFG.current_actor_ring_color, VISUAL_CFG.current_actor_ring_width
 		)
 	# HP 条（单位下方）—— 入口 1.2 P1-5：传 unit 而非 troop，让函数内部决定是否补间
 	# 入口 4 MVP：_draw_battle_hp_bar 内部判断队长身份并加金边（替换原银三角方案）
@@ -1023,7 +999,7 @@ func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
 	if _label_font != null and u.troop != null:
 		var full_name: String = TroopData.TROOP_TYPE_NAMES.get(u.troop.troop_type, "?") as String
 		var glyph: String = full_name.substr(0, 1) if full_name.length() > 0 else "?"
-		var label_color: Color = BATTLE_TROOP_LABEL_COLOR
+		var label_color: Color = VISUAL_CFG.troop_label_color
 		label_color.a *= alpha
 		_draw_slot_label(center, glyph, label_color)
 
@@ -1039,7 +1015,7 @@ func _draw_battle_troop_glyph(center: Vector2, troop: TroopData) -> void:
 	var full_name: String = TroopData.TROOP_TYPE_NAMES.get(troop.troop_type, "?") as String
 	# TROOP_TYPE_NAMES 形如 "剑兵" / "弓兵"，取首字以紧凑显示在单位中心
 	var glyph: String = full_name.substr(0, 1) if full_name.length() > 0 else "?"
-	_draw_slot_label(center, glyph, BATTLE_TROOP_LABEL_COLOR)
+	_draw_slot_label(center, glyph, VISUAL_CFG.troop_label_color)
 
 
 ## 克制图标 2 个：左 = 兵种克制，右 = 地形克制
@@ -1047,19 +1023,19 @@ func _draw_battle_troop_glyph(center: Vector2, troop: TroopData) -> void:
 ##   - 兵种克制：BattleResolver.get_counter_factor(actor, target) > / = / < 1.0
 ##   - 地形克制：actor 高度 - target 高度 > / = / < 0
 ##   - 形状：▲ 优势绿 / ▼ 劣势橙 / ● 中性白
-##   - 锚点 center.y - radius - BATTLE_HEAD_OFFSET（与队长银三角共用轨道，但仅敌方画）
+##   - 锚点 center.y - radius - VISUAL_CFG.head_offset（与队长银三角共用轨道，但仅敌方画）
 func _draw_counter_icons(center: Vector2, radius: float, actor: BattleUnit, target: BattleUnit) -> void:
 	if actor == null or actor.troop == null or target == null or target.troop == null:
 		return
 	if _battle_session == null or _battle_session.schema == null:
 		return
-	var anchor_y: float = center.y - radius - BATTLE_HEAD_OFFSET
+	var anchor_y: float = center.y - radius - VISUAL_CFG.head_offset
 	# 兵种克制（左）
 	var counter_factor: float = BattleResolver.get_counter_factor(
 		actor.troop.troop_type, target.troop.troop_type
 	)
-	var left_center: Vector2 = Vector2(center.x - BATTLE_COUNTER_ICON_GAP * 0.5, anchor_y)
-	_draw_counter_glyph(left_center, BATTLE_COUNTER_ICON_SIZE, _factor_to_dir(counter_factor))
+	var left_center: Vector2 = Vector2(center.x - VISUAL_CFG.counter_icon_gap * 0.5, anchor_y)
+	_draw_counter_glyph(left_center, VISUAL_CFG.counter_icon_size, _factor_to_dir(counter_factor))
 	# 地形克制（右）
 	var schema_ref: MapSchema = _battle_session.schema
 	var actor_alt: int = schema_ref.get_terrain_altitude(
@@ -1074,16 +1050,16 @@ func _draw_counter_icons(center: Vector2, radius: float, actor: BattleUnit, targ
 		alt_dir = 1
 	elif altitude_diff < 0:
 		alt_dir = -1
-	var right_center: Vector2 = Vector2(center.x + BATTLE_COUNTER_ICON_GAP * 0.5, anchor_y)
-	_draw_counter_glyph(right_center, BATTLE_COUNTER_ICON_SIZE, alt_dir)
+	var right_center: Vector2 = Vector2(center.x + VISUAL_CFG.counter_icon_gap * 0.5, anchor_y)
+	_draw_counter_glyph(right_center, VISUAL_CFG.counter_icon_size, alt_dir)
 
 
 ## counter_factor → 方向枚举
 ##   返回 1 = 优势（>1.0），-1 = 劣势（<1.0），0 = 中性（=1.0 内 EPS 容差）
 func _factor_to_dir(factor: float) -> int:
-	if factor > 1.0 + BATTLE_COUNTER_FACTOR_EPS:
+	if factor > 1.0 + VISUAL_CFG.counter_factor_eps:
 		return 1
-	if factor < 1.0 - BATTLE_COUNTER_FACTOR_EPS:
+	if factor < 1.0 - VISUAL_CFG.counter_factor_eps:
 		return -1
 	return 0
 
@@ -1093,7 +1069,7 @@ func _draw_counter_glyph(center: Vector2, size: float, dir: int) -> void:
 	var half: float = size * 0.5
 	if dir == 0:
 		# ● 中性：实心圆
-		draw_circle(center, half, BATTLE_COUNTER_ICON_NEUTRAL)
+		draw_circle(center, half, VISUAL_CFG.counter_icon_neutral)
 	elif dir > 0:
 		# ▲ 优势：底在下、顶在上的三角
 		var p_left: Vector2 = Vector2(center.x - half, center.y + half)
@@ -1101,7 +1077,7 @@ func _draw_counter_glyph(center: Vector2, size: float, dir: int) -> void:
 		var p_top: Vector2 = Vector2(center.x, center.y - half)
 		draw_polygon(
 			PackedVector2Array([p_left, p_right, p_top]),
-			PackedColorArray([BATTLE_COUNTER_ICON_ADV])
+			PackedColorArray([VISUAL_CFG.counter_icon_advantage])
 		)
 	else:
 		# ▼ 劣势：底在上、顶在下的三角
@@ -1110,7 +1086,7 @@ func _draw_counter_glyph(center: Vector2, size: float, dir: int) -> void:
 		var p_bottom: Vector2 = Vector2(center.x, center.y + half)
 		draw_polygon(
 			PackedVector2Array([p_left, p_right, p_bottom]),
-			PackedColorArray([BATTLE_COUNTER_ICON_DIS])
+			PackedColorArray([VISUAL_CFG.counter_icon_disadvantage])
 		)
 
 
@@ -1125,19 +1101,19 @@ func _draw_battle_hp_bar(center: Vector2, radius: float, unit: BattleUnit) -> vo
 	var troop: TroopData = unit.troop
 	var displayed_hp: float = _battle_view.displayed_hps.get(unit, float(troop.current_hp)) as float
 	var ratio: float = clampf(displayed_hp / float(troop.max_hp), 0.0, 1.0)
-	var bar_w: float = float(BATTLE_HP_BAR_WIDTH)
-	var bar_h: float = float(BATTLE_HP_BAR_HEIGHT)
+	var bar_w: float = float(VISUAL_CFG.hp_bar_width)
+	var bar_h: float = float(VISUAL_CFG.hp_bar_height)
 	var bar_x: float = center.x - bar_w * 0.5
 	var bar_y: float = center.y + radius + 4.0
 	var bar_rect: Rect2 = Rect2(bar_x, bar_y, bar_w, bar_h)
 	# 背景
-	draw_rect(bar_rect, BATTLE_HP_BAR_BG, true)
+	draw_rect(bar_rect, VISUAL_CFG.hp_bar_bg_color, true)
 	# 前景按 hp_ratio
-	var fg: Color = BATTLE_HP_COLOR_LOW
+	var fg: Color = VISUAL_CFG.hp_color_low
 	if ratio >= 0.66:
-		fg = BATTLE_HP_COLOR_FULL
+		fg = VISUAL_CFG.hp_color_full
 	elif ratio >= 0.33:
-		fg = BATTLE_HP_COLOR_MID
+		fg = VISUAL_CFG.hp_color_mid
 	if ratio > 0.0:
 		draw_rect(Rect2(bar_x, bar_y, bar_w * ratio, bar_h), fg, true)
 	# 入口 4 MVP：队长 HP 条金边（替换原银三角方案）
@@ -1148,8 +1124,8 @@ func _draw_battle_hp_bar(center: Vector2, radius: float, unit: BattleUnit) -> vo
 			and _battle_session != null \
 			and not _battle_session.player_units.is_empty() \
 			and unit == _battle_session.player_units[0]:
-		var border_rect: Rect2 = bar_rect.grow(BATTLE_LEADER_HP_BORDER_WIDTH)
-		draw_rect(border_rect, BATTLE_LEADER_HP_BORDER_COLOR, false, BATTLE_LEADER_HP_BORDER_WIDTH)
+		var border_rect: Rect2 = bar_rect.grow(VISUAL_CFG.leader_hp_border_width)
+		draw_rect(border_rect, VISUAL_CFG.leader_hp_border_color, false, VISUAL_CFG.leader_hp_border_width)
 
 
 
@@ -1158,7 +1134,7 @@ func _draw_battle_hp_bar(center: Vector2, radius: float, unit: BattleUnit) -> vo
 ## 战斗 zoom 期间（_battle_zoom_active = true）画 4 个半透明黑色矩形覆盖战场之外
 ## 战场区域 = 队长 ±_battle_arena_range 格 = (2*range+1)² 矩形
 ## 实装方式：以战场为中心做"挖空"——画上 / 下 / 左 / 右 4 个矩形，中间留出战场不画
-## 覆盖范围：BATTLE_DIM_PADDING_PX 远超 camera 视野（zoom 0.55 + 倾斜 5° 仍可覆盖）
+## 覆盖范围：VISUAL_CFG.dim_padding_px 远超 camera 视野（zoom 0.55 + 倾斜 5° 仍可覆盖）
 ## 调用时机：_draw() 末尾、HUD 之前
 func _draw_battle_dim_overlay() -> void:
 	if not _battle_zoom_active:
@@ -1172,17 +1148,17 @@ func _draw_battle_dim_overlay() -> void:
 	var bw: int = (2 * r + 1) * TILE_SIZE
 	var bh: int = (2 * r + 1) * TILE_SIZE
 	# Overlay 总范围（远超 camera 视野；padding 大保证 zoom out + 倾斜后仍覆盖）
-	var pad: int = BATTLE_DIM_PADDING_PX
+	var pad: int = VISUAL_CFG.dim_padding_px
 	var ox: int = bx - pad
 	var oy: int = by - pad
 	var ow: int = bw + 2 * pad
 	var oh: int = bh + 2 * pad
 	# 四矩形挖空：上 / 下（覆盖战场上下方全宽）+ 左 / 右（仅战场同高范围内）
 	# 上方
-	draw_rect(Rect2(ox, oy, ow, by - oy), BATTLE_DIM_COLOR, true)
+	draw_rect(Rect2(ox, oy, ow, by - oy), VISUAL_CFG.dim_color, true)
 	# 下方
-	draw_rect(Rect2(ox, by + bh, ow, (oy + oh) - (by + bh)), BATTLE_DIM_COLOR, true)
+	draw_rect(Rect2(ox, by + bh, ow, (oy + oh) - (by + bh)), VISUAL_CFG.dim_color, true)
 	# 左侧（仅战场同高）
-	draw_rect(Rect2(ox, by, bx - ox, bh), BATTLE_DIM_COLOR, true)
+	draw_rect(Rect2(ox, by, bx - ox, bh), VISUAL_CFG.dim_color, true)
 	# 右侧（仅战场同高）
-	draw_rect(Rect2(bx + bw, by, (ox + ow) - (bx + bw), bh), BATTLE_DIM_COLOR, true)
+	draw_rect(Rect2(bx + bw, by, (ox + ow) - (bx + bw), bh), VISUAL_CFG.dim_color, true)

@@ -42,7 +42,7 @@ extends Resource
 ## 昼夜切换 fade 时长（秒）—— DAY ↔ NIGHT 平滑过渡
 @export_range(0.0, 3.0, 0.05) var fade_duration: float = 0.6
 
-## 战斗强制白天 fade 时长（秒）—— 与战斗 zoom BATTLE_ZOOM_TWEEN_DURATION 同步
+## 战斗强制白天 fade 时长（秒）—— 与战斗 zoom（battle_visual_config.tres.zoom_tween_duration）同步
 @export_range(0.0, 3.0, 0.05) var battle_force_day_duration: float = 0.3
 
 

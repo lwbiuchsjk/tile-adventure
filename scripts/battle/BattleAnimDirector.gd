@@ -19,13 +19,17 @@ extends Node
 ##     留在 WorldMap。
 ##   - 不含敌方回合调度（_try_schedule_next_enemy_step / _run_enemy_turn_async）：
 ##     那属世界态，留在 WorldMap，本类只在动画清空时 emit anims_drained。
-##   - TILE_SIZE / BATTLE_COUNTER_FACTOR_EPS 仍读 WorldMap 的 const（编译期常量，跨 class_name 引用）
-##   - 战斗动画 22 个 const 已在 MVP-B 阶段 3 迁出到 BattleAnimConfig (.tres)，本类自己 preload
+##   - TILE_SIZE 仍读 WorldMap 的 const（编译期常量，跨 class_name 引用）
+##   - 战斗动画 22 个 const 已在 MVP-B 阶段 3 迁出到 BattleAnimConfig (.tres)
+##   - 战斗视觉中 counter_factor_eps 已在 MVP-B 阶段 4 迁出到 BattleVisualConfig (.tres)
+##   两份 .tres 由本类自己 preload（不走 WorldMap 中转，独立访问）
 
 
-## 战斗动画调参 Resource（MVP-B 阶段 3）—— 不走 WorldMap 中转，独立 preload 同一份 .tres
-## preload 是 Godot 资源单例，多处 preload 指向同一实例无内存损耗
+## 战斗动画调参 Resource（MVP-B 阶段 3）—— preload 是 Godot 资源单例无内存损耗
 const ANIM_CFG: BattleAnimConfig = preload("res://assets/config/battle_anim_config.tres")
+
+## 战斗视觉调参 Resource（MVP-B 阶段 4）—— 仅用 counter_factor_eps 一项做克制比较误差容忍
+const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
 
 
 ## 动画队列清空（_anim_count == 0 且 _anim_queue 为空）时 emit
@@ -415,9 +419,9 @@ func _run_die_anim(unit: BattleUnit) -> void:
 
 ## counter_factor → 飘字主行颜色（设计 §8 飘字色板）
 func _attack_float_color(counter_factor: float) -> Color:
-	if counter_factor > 1.0 + WorldMap.BATTLE_COUNTER_FACTOR_EPS:
+	if counter_factor > 1.0 + VISUAL_CFG.counter_factor_eps:
 		return ANIM_CFG.float_color_advantage
-	if counter_factor < 1.0 - WorldMap.BATTLE_COUNTER_FACTOR_EPS:
+	if counter_factor < 1.0 - VISUAL_CFG.counter_factor_eps:
 		return ANIM_CFG.float_color_disadvantage
 	return ANIM_CFG.float_color_neutral
 
