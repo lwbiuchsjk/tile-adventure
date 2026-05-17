@@ -1,0 +1,197 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=16 format=3]
+
+; MVP-C.1 示范场景 1：玩家方视觉（跨 3 Resource 聚合，B 方案核心价值）
+; 设计原文：tile-advanture-design/参数Resource化/MVP-C_运行时调参面板.md §5.B 示范 1
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_faction_color"]
+script = ExtResource("2_field")
+display_label = "★身份色（核心）"
+group_name = "身份色"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "faction_colors"
+dict_key = 1
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = "PLAYER 阵营色（Dict key=1）"
+
+[sub_resource type="Resource" id="F_unit_ring_width"]
+script = ExtResource("2_field")
+display_label = "单位外环宽度"
+group_name = "单位渲染"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "unit_player_ring_width"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 1.0
+slider_max = 10.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_unit_color"]
+script = ExtResource("2_field")
+display_label = "单位内底色"
+group_name = "单位渲染"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "unit_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_unit_shadow"]
+script = ExtResource("2_field")
+display_label = "单位投影色"
+group_name = "单位渲染"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "unit_shadow_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = "含 alpha"
+
+[sub_resource type="Resource" id="F_unit_margin"]
+script = ExtResource("2_field")
+display_label = "单位边距（决定圆形大小）"
+group_name = "单位渲染"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "unit_margin"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 0.0
+slider_max = 36.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_alpha_outer"]
+script = ExtResource("2_field")
+display_label = "外圈 alpha"
+group_name = "影响圈 alpha"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "influence_alpha_outer"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_alpha_mid"]
+script = ExtResource("2_field")
+display_label = "次外 alpha"
+group_name = "影响圈 alpha"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "influence_alpha_mid"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_alpha_inner"]
+script = ExtResource("2_field")
+display_label = "内圈 alpha"
+group_name = "影响圈 alpha"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "influence_alpha_inner"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_persist_ring_width"]
+script = ExtResource("2_field")
+display_label = "外环宽度"
+group_name = "持久 slot"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_ring_width"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 1.0
+slider_max = 12.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_persist_sep_color"]
+script = ExtResource("2_field")
+display_label = "分离线色"
+group_name = "持久 slot"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_separator_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_persist_sep_width"]
+script = ExtResource("2_field")
+display_label = "分离线宽"
+group_name = "持久 slot"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_separator_width"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 1.0
+slider_max = 6.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_persist_inner_bg"]
+script = ExtResource("2_field")
+display_label = "内底色"
+group_name = "持久 slot"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_inner_bg"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_move_step_duration"]
+script = ExtResource("2_field")
+display_label = "玩家逐格移动节奏"
+group_name = "移动节奏"
+target_resource_path = "res://assets/config/map_base_config.tres"
+field_name = "move_step_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.01
+slider_max = 1.0
+redraw_targets_override = []
+passive = true
+tooltip = "被动生效：下次单位移动用新值，无需 redraw"
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "player_visual"
+display_name = "玩家方视觉"
+category = "身份与势力"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_faction_color"), SubResource("F_unit_ring_width"), SubResource("F_unit_color"), SubResource("F_unit_shadow"), SubResource("F_unit_margin"), SubResource("F_alpha_outer"), SubResource("F_alpha_mid"), SubResource("F_alpha_inner"), SubResource("F_persist_ring_width"), SubResource("F_persist_sep_color"), SubResource("F_persist_sep_width"), SubResource("F_persist_inner_bg"), SubResource("F_move_step_duration")])

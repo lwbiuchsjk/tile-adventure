@@ -23,6 +23,7 @@ config/icon="res://icon.svg"
 
 OverlayTransitionUI="*res://scenes/ui/OverlayTransitionUI.tscn"
 ImGuiRoot="*res://addons/imgui-godot/data/ImGuiRoot.tscn"
+ParamPanelController="*res://scripts/ui/ParamPanelController.gd"
 
 [display]
 

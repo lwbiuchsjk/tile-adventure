@@ -286,7 +286,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 全部跑测落地（2026-05-17，共 8 份 Resource × 113 活跃字段 + 21 死 const 清理 + WorldMapRenderer 桥接段 40 → 1 行 + EnemyMovement 双源同源化首例）；两批 codex 审查累计 0 P0/P1 + 1 P2 + 4 P3 全数修复；**MVP-C 预研完成**（2026-05-17，imgui-godot v6.3.2 主选 + 4.6.2 实测通过 + B/D 组合方案，详见 [MVP-C_预研报告](tile-advanture-design/参数Resource化/MVP-C_预研报告.md)），MVP-C 设计文档撰写待新会话启动
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 全部跑测落地（2026-05-17，共 8 份 Resource × 113 活跃字段）；MVP-C 预研 + [设计文档 v1.0](tile-advanture-design/参数Resource化/MVP-C_运行时调参面板.md) 落档；**MVP-C.1 实装初版完成等桌面 F2 验收**（2026-05-17）：imgui-godot v6.3.2 Canvas 模式接入 + schema + 数据流 + 自定义 .tres dump（绕过 ResourceSaver 省略默认值）+ 4 示范场景 + reset/tooltip/copy UX 补丁 + 11 测试套件全过；codex 审查 1 P0 + 2 P1 + 2 P2 处置（2 P1 留[待跟踪](tile-advanture-design/待跟踪事项索引.md#十四mvp-c1-调参面板-codex-审查后续)）；commit 拆 2 个待 push
 
 ## 预启动（方向已认可，等启动时机）
 

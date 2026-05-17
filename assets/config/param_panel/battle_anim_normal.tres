@@ -1,0 +1,169 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=14 format=3]
+
+; MVP-C.1 示范场景 3：战斗动画 - 普通击节奏（单 Resource + 纯标量 + 全 passive）
+; 设计原文：tile-advanture-design/参数Resource化/MVP-C_运行时调参面板.md §5.B 示范 3
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_move_tween"]
+script = ExtResource("2_field")
+display_label = "移动 tween 时长"
+group_name = "时长"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "move_tween_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 2.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_thrust"]
+script = ExtResource("2_field")
+display_label = "推冲时长"
+group_name = "时长"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "thrust_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_shake"]
+script = ExtResource("2_field")
+display_label = "颤抖时长"
+group_name = "时长"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "shake_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_hp_tween"]
+script = ExtResource("2_field")
+display_label = "HP tween 时长"
+group_name = "时长"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "hp_tween_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 2.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_die"]
+script = ExtResource("2_field")
+display_label = "死亡淡出时长"
+group_name = "时长"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "die_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 2.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_float_damage"]
+script = ExtResource("2_field")
+display_label = "飘字伤害时长"
+group_name = "时长"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "float_damage_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_float_skip"]
+script = ExtResource("2_field")
+display_label = "飘字 SKIP 时长"
+group_name = "时长"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "float_skip_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_enemy_step_gap"]
+script = ExtResource("2_field")
+display_label = "敌方逐步间隔"
+group_name = "时长"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "enemy_step_gap"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 2.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_thrust_dist"]
+script = ExtResource("2_field")
+display_label = "推冲距离比"
+group_name = "推冲"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "thrust_distance_ratio"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 2.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_shake_amp"]
+script = ExtResource("2_field")
+display_label = "颤抖振幅"
+group_name = "颤抖"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "shake_amplitude"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 20.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_shake_osc"]
+script = ExtResource("2_field")
+display_label = "颤抖周期"
+group_name = "颤抖"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "shake_oscillations"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 10.0
+redraw_targets_override = []
+passive = true
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "battle_anim_normal"
+display_name = "战斗动画 - 普通击节奏"
+category = "战斗动画"
+default_redraw_targets = Array[String]([])
+fields = Array[Resource]([SubResource("F_move_tween"), SubResource("F_thrust"), SubResource("F_shake"), SubResource("F_hp_tween"), SubResource("F_die"), SubResource("F_float_damage"), SubResource("F_float_skip"), SubResource("F_enemy_step_gap"), SubResource("F_thrust_dist"), SubResource("F_shake_amp"), SubResource("F_shake_osc")])

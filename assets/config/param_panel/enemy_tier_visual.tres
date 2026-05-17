@@ -1,0 +1,183 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=15 format=3]
+
+; MVP-C.1 示范场景 2：敌方层级 Tier 4 档视觉（单 Resource + Dict 字段平铺模式）
+; 设计原文：tile-advanture-design/参数Resource化/MVP-C_运行时调参面板.md §5.B 示范 2
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_enemy_slot_color"]
+script = ExtResource("2_field")
+display_label = "敌方 slot 底色"
+group_name = "共享字段"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "enemy_slot_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_border_color"]
+script = ExtResource("2_field")
+display_label = "描边色"
+group_name = "共享字段"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_border_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_dot_color"]
+script = ExtResource("2_field")
+display_label = "米字小菱形点色"
+group_name = "共享字段"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_dot_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_dot_size_ratio"]
+script = ExtResource("2_field")
+display_label = "米字小菱形占格比"
+group_name = "共享字段"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_dot_size_ratio"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.05
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_1_border_width"]
+script = ExtResource("2_field")
+display_label = "描边宽度"
+group_name = "Tier 1"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_border_widths"
+dict_key = 0
+control_type = "SliderFloat"
+slider_min = 0.5
+slider_max = 8.0
+redraw_targets_override = []
+passive = false
+tooltip = "Dict key=0 对应 Tier 1（schema 0-indexed）"
+
+[sub_resource type="Resource" id="F_tier_1_margin"]
+script = ExtResource("2_field")
+display_label = "外菱形占格比"
+group_name = "Tier 1"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_slot_margins"
+dict_key = 0
+control_type = "SliderInt"
+slider_min = 0.0
+slider_max = 32.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_2_border_width"]
+script = ExtResource("2_field")
+display_label = "描边宽度"
+group_name = "Tier 2"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_border_widths"
+dict_key = 1
+control_type = "SliderFloat"
+slider_min = 0.5
+slider_max = 8.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_2_margin"]
+script = ExtResource("2_field")
+display_label = "外菱形占格比"
+group_name = "Tier 2"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_slot_margins"
+dict_key = 1
+control_type = "SliderInt"
+slider_min = 0.0
+slider_max = 32.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_3_border_width"]
+script = ExtResource("2_field")
+display_label = "描边宽度"
+group_name = "Tier 3"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_border_widths"
+dict_key = 2
+control_type = "SliderFloat"
+slider_min = 0.5
+slider_max = 8.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_3_margin"]
+script = ExtResource("2_field")
+display_label = "外菱形占格比"
+group_name = "Tier 3"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_slot_margins"
+dict_key = 2
+control_type = "SliderInt"
+slider_min = 0.0
+slider_max = 32.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_4_border_width"]
+script = ExtResource("2_field")
+display_label = "描边宽度"
+group_name = "Tier 4"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_border_widths"
+dict_key = 3
+control_type = "SliderFloat"
+slider_min = 0.5
+slider_max = 8.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_tier_4_margin"]
+script = ExtResource("2_field")
+display_label = "外菱形占格比"
+group_name = "Tier 4"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "tier_slot_margins"
+dict_key = 3
+control_type = "SliderInt"
+slider_min = 0.0
+slider_max = 32.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "enemy_tier_visual"
+display_name = "敌方层级 Tier 4 档视觉"
+category = "敌方表达"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_enemy_slot_color"), SubResource("F_tier_border_color"), SubResource("F_tier_dot_color"), SubResource("F_tier_dot_size_ratio"), SubResource("F_tier_1_border_width"), SubResource("F_tier_1_margin"), SubResource("F_tier_2_border_width"), SubResource("F_tier_2_margin"), SubResource("F_tier_3_border_width"), SubResource("F_tier_3_margin"), SubResource("F_tier_4_border_width"), SubResource("F_tier_4_margin")])

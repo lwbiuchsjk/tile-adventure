@@ -1,0 +1,85 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=8 format=3]
+
+; MVP-C.1 示范场景：夜晚视野 + 浓雾（单 Resource 即时 redraw）
+; 设计原文：tile-advanture-design/参数Resource化/MVP-C_运行时调参面板.md §5.C-19
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="Field_vision_radius"]
+script = ExtResource("2_field")
+display_label = "视野半径（格）"
+group_name = "视野"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "vision_radius_grids"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.5
+slider_max = 20.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="Field_fog_falloff"]
+script = ExtResource("2_field")
+display_label = "浓雾 falloff（格）"
+group_name = "视野"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "fog_falloff_grids"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 5.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="Field_overlay_layer"]
+script = ExtResource("2_field")
+display_label = "overlay canvas layer"
+group_name = "层级"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "overlay_canvas_layer"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 1.0
+slider_max = 9.0
+redraw_targets_override = []
+passive = true
+tooltip = "CanvasLayer 数值，改后下次进夜晚生效"
+
+[sub_resource type="Resource" id="Field_fog_signal_layer"]
+script = ExtResource("2_field")
+display_label = "fog signal canvas layer"
+group_name = "层级"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "fog_signal_canvas_layer"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 1.0
+slider_max = 9.0
+redraw_targets_override = []
+passive = true
+tooltip = "CanvasLayer 数值，改后下次进夜晚生效"
+
+[sub_resource type="Resource" id="Field_diamond_scale"]
+script = ExtResource("2_field")
+display_label = "菱形缩放"
+group_name = "fog signal"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "fog_signal_diamond_scale"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.05
+slider_max = 1.0
+redraw_targets_override = []
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "night_vision_fog"
+display_name = "视野 + 浓雾"
+category = "夜晚 / UI 节奏"
+default_redraw_targets = Array[String]([])
+fields = Array[Resource]([SubResource("Field_vision_radius"), SubResource("Field_fog_falloff"), SubResource("Field_overlay_layer"), SubResource("Field_fog_signal_layer"), SubResource("Field_diamond_scale")])
