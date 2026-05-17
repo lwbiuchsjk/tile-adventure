@@ -38,3 +38,7 @@ output/
 
 # MVP-C 预研：imgui-godot 接入测试（不入仓）
 test/imgui_probe/
+
+# imgui-godot Windows 编辑器临时文件（addons/imgui-godot/bin 内 dll 锁定时的备份）
+addons/imgui-godot/bin/~*
+addons/imgui-godot/bin/*.TMP

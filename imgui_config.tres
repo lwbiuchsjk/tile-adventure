@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="ImGuiConfig" load_steps=4 format=3]
+
+; MVP-C.1 调参面板 ImGui 配置
+; Renderer=Canvas 因主项目 gl_compatibility 渲染模式（Phase 2 预研的 RenderingDevice 仅适用于 Forward Plus / Mobile）
+; Scale 2.0 适配高分屏；注入项目主字体 SourceHanSansSC 解决中文显示
+; IniFilename="" 关闭 ini 持久化（避免污染 user://，折叠状态走 preset 系统）
+
+[ext_resource type="Script" path="res://addons/imgui-godot/scripts/ImGuiConfig.gd" id="1_cfg"]
+[ext_resource type="Script" path="res://addons/imgui-godot/scripts/ImGuiFont.gd" id="2_font_script"]
+[ext_resource type="FontFile" path="res://assets/font/SourceHanSansSC-Regular.otf" id="3_cjk_font"]
+
+[sub_resource type="Resource" id="ImGuiFont_CJK"]
+script = ExtResource("2_font_script")
+FontData = ExtResource("3_cjk_font")
+FontSize = 18
+Merge = false
+
+[resource]
+script = ExtResource("1_cfg")
+Scale = 2.0
+IniFilename = ""
+Renderer = "Canvas"
+Layer = 128
+AddDefaultFont = false
+Fonts = [SubResource("ImGuiFont_CJK")]

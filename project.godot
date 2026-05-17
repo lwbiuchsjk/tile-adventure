@@ -8,6 +8,10 @@
 
 config_version=5
 
+[addons]
+
+imgui/config="res://imgui_config.tres"
+
 [application]
 
 config/name="TileAdventure"
@@ -18,6 +22,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 OverlayTransitionUI="*res://scenes/ui/OverlayTransitionUI.tscn"
+ImGuiRoot="*res://addons/imgui-godot/data/ImGuiRoot.tscn"
 
 [display]
 
@@ -28,6 +33,10 @@ window/stretch/mode="canvas_items"
 [dotnet]
 
 project/assembly_name="TileAdventure"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/imgui-godot/plugin.cfg")
 
 [gui]
 
