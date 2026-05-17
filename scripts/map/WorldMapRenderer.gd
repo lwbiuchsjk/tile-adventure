@@ -24,24 +24,13 @@ extends Node2D
 # ─────────────────────────────────────────
 # WorldMap 常量别名（const 集中化 → P3-2；本批先别名引用，函数体可原样搬迁）
 # ─────────────────────────────────────────
-## MVP-B 阶段 4 / MVP-B.2 阶段 1+2+3：Resource 调参 preload（独立访问，不走 WorldMap const 桥接中转）
+## MVP-B 阶段 4 / MVP-B.2 全 4 阶段：Resource 调参 preload（独立访问，不走 WorldMap const 桥接中转）
 const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
 const MAP_BASE_CFG: MapBaseConfig = preload("res://assets/config/map_base_config.tres")
 const UNIT_ENEMY_CFG: UnitEnemyConfig = preload("res://assets/config/unit_enemy_config.tres")
 const RESOURCE_RENDER_CFG: ResourceRenderConfig = preload("res://assets/config/resource_render_config.tres")
-## 剩余桥接 const（阶段 4 待迁）—— 与 WorldMap 顶部仍存活的 M4_* 一一对应
-const M4_CORE_TOWN_BORDER := WorldMap.M4_CORE_TOWN_BORDER
-const M4_CORE_TOWN_EMBLEM_SIZE := WorldMap.M4_CORE_TOWN_EMBLEM_SIZE
-const M4_FACTION_COLORS := WorldMap.M4_FACTION_COLORS
-const M4_INFLUENCE_ALPHA_INNER := WorldMap.M4_INFLUENCE_ALPHA_INNER
-const M4_INFLUENCE_ALPHA_MID := WorldMap.M4_INFLUENCE_ALPHA_MID
-const M4_INFLUENCE_ALPHA_OUTER := WorldMap.M4_INFLUENCE_ALPHA_OUTER
-const M4_INFLUENCE_BORDER_ALPHA := WorldMap.M4_INFLUENCE_BORDER_ALPHA
-const M4_INFLUENCE_BORDER_WIDTH := WorldMap.M4_INFLUENCE_BORDER_WIDTH
-const M4_PERSISTENT_INNER_BG := WorldMap.M4_PERSISTENT_INNER_BG
-const M4_PERSISTENT_RING_WIDTH := WorldMap.M4_PERSISTENT_RING_WIDTH
-const M4_PERSISTENT_SEPARATOR_COLOR := WorldMap.M4_PERSISTENT_SEPARATOR_COLOR
-const M4_PERSISTENT_SEPARATOR_WIDTH := WorldMap.M4_PERSISTENT_SEPARATOR_WIDTH
+const INFLUENCE_CFG: InfluenceConfig = preload("res://assets/config/influence_config.tres")
+## 仅保留 TILE_SIZE 桥接（不迁，全项目尺寸锚点；MVP-B.2 设计 Q4 拍板）
 const TILE_SIZE := WorldMap.TILE_SIZE
 
 # ─────────────────────────────────────────
@@ -400,9 +389,9 @@ func _draw_persistent_influence_ranges() -> void:
 			continue
 		if slot.influence_range <= 0:
 			continue
-		var base: Color = M4_FACTION_COLORS.get(slot.owner_faction, Color.MAGENTA) as Color
+		var base: Color = INFLUENCE_CFG.faction_colors.get(slot.owner_faction, Color.MAGENTA) as Color
 		# 描边色：势力色原色 + alpha 1.0，地形已去饱和，原色最跳
-		var border: Color = Color(base.r, base.g, base.b, M4_INFLUENCE_BORDER_ALPHA)
+		var border: Color = Color(base.r, base.g, base.b, INFLUENCE_CFG.influence_border_alpha)
 		var cells: Dictionary = faction_cells[slot.owner_faction] as Dictionary
 		var r: int = slot.influence_range
 		var cx: int = slot.position.x
@@ -421,11 +410,11 @@ func _draw_persistent_influence_ranges() -> void:
 				var d_to_edge: int = r - (absi(dx) + absi(dy))
 				var fill_alpha: float
 				if d_to_edge == 0:
-					fill_alpha = M4_INFLUENCE_ALPHA_OUTER
+					fill_alpha = INFLUENCE_CFG.influence_alpha_outer
 				elif d_to_edge == 1:
-					fill_alpha = M4_INFLUENCE_ALPHA_MID
+					fill_alpha = INFLUENCE_CFG.influence_alpha_mid
 				else:
-					fill_alpha = M4_INFLUENCE_ALPHA_INNER
+					fill_alpha = INFLUENCE_CFG.influence_alpha_inner
 				var overlay: Color = Color(base.r, base.g, base.b, fill_alpha)
 				var rect: Rect2 = Rect2(
 					x * TILE_SIZE,
@@ -444,19 +433,19 @@ func _draw_persistent_influence_ranges() -> void:
 				# 上邻
 				if not cells.has(Vector2i(x, y - 1)):
 					draw_line(Vector2(px, py), Vector2(px + pw, py),
-						border, M4_INFLUENCE_BORDER_WIDTH)
+						border, INFLUENCE_CFG.influence_border_width)
 				# 下邻
 				if not cells.has(Vector2i(x, y + 1)):
 					draw_line(Vector2(px, py + pw), Vector2(px + pw, py + pw),
-						border, M4_INFLUENCE_BORDER_WIDTH)
+						border, INFLUENCE_CFG.influence_border_width)
 				# 左邻
 				if not cells.has(Vector2i(x - 1, y)):
 					draw_line(Vector2(px, py), Vector2(px, py + pw),
-						border, M4_INFLUENCE_BORDER_WIDTH)
+						border, INFLUENCE_CFG.influence_border_width)
 				# 右邻
 				if not cells.has(Vector2i(x + 1, y)):
 					draw_line(Vector2(px + pw, py), Vector2(px + pw, py + pw),
-						border, M4_INFLUENCE_BORDER_WIDTH)
+						border, INFLUENCE_CFG.influence_border_width)
 
 
 ## 绘制敌方威胁圈（入口 1.1 战斗信息传达 探索阶段）
@@ -530,26 +519,26 @@ func _draw_persistent_slots() -> void:
 			TILE_SIZE - 3,
 			TILE_SIZE - 3
 		)
-		var color: Color = M4_FACTION_COLORS.get(slot.owner_faction, Color.MAGENTA) as Color
+		var color: Color = INFLUENCE_CFG.faction_colors.get(slot.owner_faction, Color.MAGENTA) as Color
 
 		# 三层结构：外环势力色 → 白分离线 → 内底米白
 		# 即使势力色和地形色相近（如玩家蓝 ↔ 洼地蓝），白分离线也能清晰勾出据点边界
 		draw_rect(outer, color)
-		var ring: int = M4_PERSISTENT_RING_WIDTH
+		var ring: int = INFLUENCE_CFG.persistent_ring_width
 		var separator_rect: Rect2 = Rect2(
 			outer.position + Vector2(ring, ring),
 			outer.size - Vector2(ring * 2, ring * 2)
 		)
 		if separator_rect.size.x > 0 and separator_rect.size.y > 0:
-			draw_rect(separator_rect, M4_PERSISTENT_SEPARATOR_COLOR)
+			draw_rect(separator_rect, INFLUENCE_CFG.persistent_separator_color)
 			# 内底再内缩 separator_width，米白承载文字
-			var sep: int = M4_PERSISTENT_SEPARATOR_WIDTH
+			var sep: int = INFLUENCE_CFG.persistent_separator_width
 			var inner: Rect2 = Rect2(
 				separator_rect.position + Vector2(sep, sep),
 				separator_rect.size - Vector2(sep * 2, sep * 2)
 			)
 			if inner.size.x > 0 and inner.size.y > 0:
-				draw_rect(inner, M4_PERSISTENT_INNER_BG)
+				draw_rect(inner, INFLUENCE_CFG.persistent_inner_bg)
 
 		# 核心城镇第二识别特征：金色外描边 + 下方小金菱形徽记
 		# 徽记偏下（主字居中占主视觉），避免被文字压住
@@ -559,7 +548,7 @@ func _draw_persistent_slots() -> void:
 		var is_core_town: bool = slot.type == PersistentSlot.Type.CORE_TOWN
 		var is_core_town_activated: bool = is_core_town and _current_cycle_has_enemy_core
 		if is_core_town_activated:
-			draw_rect(outer, M4_CORE_TOWN_BORDER, false, 2.0)
+			draw_rect(outer, INFLUENCE_CFG.core_town_border, false, 2.0)
 			var emblem_pos: Vector2 = outer.get_center() + Vector2(0, 12)
 			_draw_core_town_emblem(emblem_pos)
 
@@ -586,7 +575,7 @@ func _draw_persistent_slots() -> void:
 ## 叠加在主字"核心"之下作为装饰层；靠形状 + 金色拉开和普通据点的区别
 ## center_px: 格子像素中心
 func _draw_core_town_emblem(center_px: Vector2) -> void:
-	var s: float = float(M4_CORE_TOWN_EMBLEM_SIZE)
+	var s: float = float(INFLUENCE_CFG.core_town_emblem_size)
 	var half: float = s / 2.0
 	# 菱形 4 顶点（上 / 右 / 下 / 左）
 	var pts: PackedVector2Array = PackedVector2Array([
@@ -595,7 +584,7 @@ func _draw_core_town_emblem(center_px: Vector2) -> void:
 		Vector2(center_px.x, center_px.y + half),
 		Vector2(center_px.x - half, center_px.y),
 	])
-	draw_colored_polygon(pts, M4_CORE_TOWN_BORDER)
+	draw_colored_polygon(pts, INFLUENCE_CFG.core_town_border)
 
 ## 绘制正在移动的敌方关卡标记（基于动画位置）
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
@@ -790,7 +779,7 @@ func _draw_unit_marker() -> void:
 	draw_circle(center + Vector2(2, 2), radius, UNIT_ENEMY_CFG.unit_shadow_color)
 
 	# 玩家蓝外环（实色大圆）—— 与玩家建筑外环同色，统一"我方"语义
-	var ring_color: Color = M4_FACTION_COLORS[Faction.PLAYER] as Color
+	var ring_color: Color = INFLUENCE_CFG.faction_colors[Faction.PLAYER] as Color
 	draw_circle(center, radius, ring_color)
 
 	# 白色内圆（半径减环宽）—— 在地形上保留对比度，并承载文字
@@ -928,7 +917,7 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 	# 阵营色填充
 	# 入口 1.2 补充需求 2：玩家方已行动单位用 VISUAL_CFG.player_acted_color（灰）代替阵营色
 	# 玩家回合开始 reset_turn_flags 后 has_attacked = false → 自动恢复阵营色
-	var fill: Color = M4_FACTION_COLORS.get(u.owner_faction, Color.MAGENTA) as Color
+	var fill: Color = INFLUENCE_CFG.faction_colors.get(u.owner_faction, Color.MAGENTA) as Color
 	if u.owner_faction == Faction.PLAYER and u.has_attacked:
 		fill = VISUAL_CFG.player_acted_color
 	draw_circle(center, radius, fill)
@@ -968,7 +957,7 @@ func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
 	if _battle_view.unit_visual_offsets.has(u):
 		center += _battle_view.unit_visual_offsets[u] as Vector2
 	var radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
-	var fill: Color = M4_FACTION_COLORS.get(u.owner_faction, Color.MAGENTA) as Color
+	var fill: Color = INFLUENCE_CFG.faction_colors.get(u.owner_faction, Color.MAGENTA) as Color
 	fill.a *= alpha
 	draw_circle(center, radius, fill)
 	# 兵种字符同步渐隐

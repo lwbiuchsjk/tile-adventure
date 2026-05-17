@@ -1,0 +1,26 @@
+[gd_resource type="Resource" script_class="InfluenceConfig" load_steps=2 format=3]
+
+; MVP-B.2 阶段 4：势力 + 影响圈 + 持久 slot 三层结构调参 Resource 实例
+; schema 在 res://scripts/config/influence_config.gd
+; 字段从 WorldMap.gd 顶部 12 个 M4_* const 迁出；编辑器内双击本文件在 inspector 调参
+
+[ext_resource type="Script" path="res://scripts/config/influence_config.gd" id="1_inf"]
+
+[resource]
+script = ExtResource("1_inf")
+faction_colors = {
+0: Color(0.55, 0.55, 0.55, 1),
+1: Color(0.1, 0.56, 0.9, 1),
+2: Color(1, 0.24, 0.3, 1),
+}
+influence_alpha_outer = 0.22
+influence_alpha_mid = 0.12
+influence_alpha_inner = 0.05
+influence_border_alpha = 1.0
+influence_border_width = 3.0
+core_town_border = Color(1, 0.85, 0, 1)
+core_town_emblem_size = 8
+persistent_ring_width = 4
+persistent_separator_color = Color(1, 1, 1, 1)
+persistent_separator_width = 1
+persistent_inner_bg = Color(0.9, 0.88, 0.83, 1)

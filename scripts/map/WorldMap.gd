@@ -390,54 +390,9 @@ var _player_lifecycle: PlayerLifecycle = null
 # ─────────────────────────────────────────
 
 ## 盲盒视觉 → MVP-B.2 阶段 3 迁移到 RESOURCE_RENDER_CFG（见本文件下方 Resource preload 段）
-## 势力归属色：持久 slot 外框 + 影响范围覆盖层共用
-## UI 重构步骤 2 + 调色迭代：
-##   v1 `#4D8CF2` 和 LOWLAND `#4D8CBF` 几乎同色，冲突严重
-##   v2 `#3D70E0` 调冷但 R 分量和洼地完全一致，只在 B 差 0.21，仍低对比度
-##   v3 饱和青蓝 `#1A8FE6`：R 大幅降 (0.10)，G 提高 (0.56)，
-##        明度约 170 vs 洼地 110，差距 60 拉开；保留蓝色身份
-## ENEMY 调色（Civ 风格地形重构后续）：
-##   地形改沼泽褐 / 暖灰绿后整体推到暖色家族，原 ENEMY_1 `#E65959`（饱和 0.62）
-##   与暖地形色相距离仅 ~35°，且饱和度低于玩家蓝（0.89），"势力色独占高饱和"被破坏；
-##   现升至 `#FF3D4D`：H=355° 略偏冷红脱开暖橙，S=0.76 与玩家蓝同档，V=1.0 最亮
-const M4_FACTION_COLORS: Dictionary = {
-	0: Color(0.55, 0.55, 0.55),   ## NONE 中立 — 灰  #8C8C8C
-	1: Color(0.10, 0.56, 0.90),   ## PLAYER — 饱和青蓝  #1A8FE6
-	2: Color(1.00, 0.24, 0.30),   ## ENEMY_1 — 饱和冷红  #FF3D4D（饱和 0.76 与玩家蓝同档）
-}
-## 影响范围覆盖层 alpha（半透明，避免遮挡地形 / 单位 / 可达高亮）
-## 沿革：
-##   - UI 重构步骤 4：从 0.15 降到 0.08，势力范围明确退为辅助层
-##   - Civ 化阶段 A：分层渐变 —— 外圈高、内圈低，营造"势力辐射"感
-##     d_to_edge = r - (|dx| + |dy|)：菱形最外圈 d=0、向内逐层 +1
-##     外圈格（d=0）= OUTER，次外（d=1）= MID，再内（d≥2）= INNER
-const M4_INFLUENCE_ALPHA_OUTER: float = 0.22  ## 最外圈格：辐射感"亮边"
-const M4_INFLUENCE_ALPHA_MID: float = 0.12    ## 次外圈格：过渡
-const M4_INFLUENCE_ALPHA_INNER: float = 0.05  ## 内圈格：极淡，让据点本体居于中心
-## 影响范围菱形外边界描边参数
-## 决策背景：填充统一色会让相邻同势力 slot 的菱形融成一片、分不清各自边界；
-## 追加描边后每个 slot 一条独立轮廓，相邻 slot 重叠处形成双线，视觉可辨
-##
-## 调色沿革：
-##   v1 纯势力色 alpha 0.55 → v2 势力色暗化 × 0.4 + alpha 0.70（BDE 阶段，对抗洼地蓝撞色）
-##   v3（Civ 化阶段 A）势力色原色 alpha 1.0 + 宽 3.0：
-##     地形改沼泽褐 / 暖灰绿且整体去饱和后，势力色原色站在地形上反而最跳，
-##     无须再暗化；加宽到 3.0 让外缘锐利识别归属
-const M4_INFLUENCE_BORDER_ALPHA: float = 1.0
-const M4_INFLUENCE_BORDER_WIDTH: float = 3.0
-## 核心城镇金色描边（凸显势力首都）
-const M4_CORE_TOWN_BORDER: Color = Color(1.0, 0.85, 0.0)
-## 持久 slot 三层结构（UI 重构步骤 1 + 调色迭代）
-## 外环势力色（归属识别）→ 白色分离线（几何分离，即使色相冲突也能识别）→ 内底米白（文字承载）
-## 核心城镇额外金色中心徽记强化"首都"仪式感
-##
-## 三层而非双层的理由：当玩家蓝 / 敌方红与地形色相近时（如玩家蓝 vs 洼地蓝），
-## 仅靠势力色 + 米白内底仍可能低对比度；加一条白色分离线确保几何边界清晰
-const M4_PERSISTENT_RING_WIDTH: int = 4                           ## 外环厚度 px（占格 48 × 8%）
-const M4_PERSISTENT_SEPARATOR_COLOR: Color = Color(1.0, 1.0, 1.0) ## 分离线纯白
-const M4_PERSISTENT_SEPARATOR_WIDTH: int = 1                      ## 分离线厚度 px
-const M4_PERSISTENT_INNER_BG: Color = Color(0.90, 0.88, 0.83)     ## 内底米白  #E6E0D4
-const M4_CORE_TOWN_EMBLEM_SIZE: int = 8                           ## 核心城镇下方徽记（金色小菱形）边长 px
+
+## 势力 / 影响圈 / 持久 slot 三层结构 → MVP-B.2 阶段 4 迁移到 INFLUENCE_CFG（见本文件下方 Resource preload 段）
+## 设计要点（玩家蓝 vs 洼地蓝撞色解决 v1-v3 / 敌方红 v5 三通道 / 影响圈分层渐变 / 持久 slot 三层结构）保留在 influence_config.gd schema 内
 # ─────────────────────────────────────
 # 调参 Resource（MVP-B 阶段 3+4 + MVP-B.2 阶段 1 迁出）
 # 使用方各自 preload 同一份 .tres（独立访问无中转）
@@ -461,6 +416,10 @@ const UNIT_ENEMY_CFG: UnitEnemyConfig = preload("res://assets/config/unit_enemy_
 ## 一次性资源点视觉（MVP-B.2 阶段 3：3 字段，仅盲盒；scope 调整后 4 个死 RESOURCE_*_COLOR 已清理）
 ## 跨 2 文件共享：WorldMap.gd（_draw_resource_slot 旧路径已死） / WorldMapRenderer.gd（盲盒主使用方）
 const RESOURCE_RENDER_CFG: ResourceRenderConfig = preload("res://assets/config/resource_render_config.tres")
+
+## 势力 + 影响圈 + 持久 slot 三层结构（MVP-B.2 阶段 4：12 字段 = 势力色 1 + 影响圈 alpha 3 + 描边 2 + 核心金边 1 + 持久 slot 三层 4 + 核心徽记 1）
+## 跨 2 文件共享：WorldMap.gd / WorldMapRenderer.gd（持久 slot 主使用方）
+const INFLUENCE_CFG: InfluenceConfig = preload("res://assets/config/influence_config.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
