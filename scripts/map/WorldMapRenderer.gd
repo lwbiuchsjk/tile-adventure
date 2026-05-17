@@ -253,7 +253,6 @@ func _draw_level_slots() -> void:
 		if _world_view.is_pack_in_battle(pos):
 			continue
 
-		var is_repelled: bool = level.is_repelled()
 		var is_defeated: bool = level.is_defeated()
 
 		# 入口 4 后段第 1 份（夜晚视野 MVP，codex P0 修复 2026-05-11）：
@@ -268,13 +267,10 @@ func _draw_level_slots() -> void:
 		if is_defeated:
 			# 已击败：变暗显示
 			slot_color = slot_color.darkened(UNIT_ENEMY_CFG.challenged_dim)
-		elif is_repelled:
-			# 已击退冷却中：半透明显示
-			slot_color = Color(slot_color.r, slot_color.g, slot_color.b, 0.4)
 
-		# 菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；击败 / 击退态用统一 MAP_BASE_CFG.slot_margin
+		# 菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；击败态用统一 MAP_BASE_CFG.slot_margin
 		var rect_margin: int = MAP_BASE_CFG.slot_margin
-		if not is_repelled and not is_defeated and UNIT_ENEMY_CFG.tier_slot_margins.has(level.tier):
+		if not is_defeated and UNIT_ENEMY_CFG.tier_slot_margins.has(level.tier):
 			rect_margin = UNIT_ENEMY_CFG.tier_slot_margins[level.tier]
 		var slot_rect: Rect2 = Rect2(
 			pos.x * TILE_SIZE + rect_margin,
@@ -285,14 +281,12 @@ func _draw_level_slots() -> void:
 		# 底色菱形
 		_draw_diamond(slot_rect, slot_color)
 
-		# 描边 + 米字（仅活跃状态）
-		var border_color: Color = UNIT_ENEMY_CFG.repelled_border_color
-		var border_width: float = UNIT_ENEMY_CFG.tier_border_widths.get(1, 2.5)
-		if not is_repelled and not is_defeated:
-			border_color = UNIT_ENEMY_CFG.tier_border_color
-			border_width = UNIT_ENEMY_CFG.tier_border_widths.get(level.tier, 2.5)
+		# 描边永远画（防御性兼容：DEFEATED slot 通常已 _level_slots.erase 不可达）
+		# 米字仅活跃状态画
+		var border_color: Color = UNIT_ENEMY_CFG.tier_border_color
+		var border_width: float = UNIT_ENEMY_CFG.tier_border_widths.get(level.tier, 2.5)
 		_draw_diamond(slot_rect, border_color, false, border_width)
-		if not is_repelled and not is_defeated:
+		if not is_defeated:
 			_draw_enemy_tier_pattern(slot_rect, level.tier)
 
 
@@ -455,7 +449,7 @@ func _draw_persistent_influence_ranges() -> void:
 ## 行为：
 ##   - 遍历 _level_slots，筛选 faction != PLAYER 且 is_interactable() 的候选
 ##     （注：LevelSlot 的归属字段是 `faction`，与 PersistentSlot 的 `owner_faction` 名不同；见 Faction.gd 头注）
-##     （is_interactable() 自动排除 REPELLED / DEFEATED 等不可触发战斗的状态）
+##     （is_interactable() 自动排除 DEFEATED 等不可触发战斗的状态）
 ##   - 对每个候选，枚举曼哈顿距离 ≤ _battle_trigger_range 的格集合，每格画半透明红
 ##   - 多个敌方威胁圈重叠时按调用顺序自然叠加（深红），无特殊合成
 ##

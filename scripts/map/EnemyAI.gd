@@ -8,7 +8,7 @@ extends Node
 ##
 ## 职责：
 ##   六步敌方回合编排——
-##     步骤 1 由 TickRegistry 自动执行（建造 tick / REPELLED 冷却），本类**不重复调用**
+##     步骤 1 由 TickRegistry 自动执行（建造 tick / 占据快照），本类**不重复调用**
 ##     步骤 2 增援判定：委托 EnemyReinforcement.spawn_batch
 ##     步骤 3 石料入账：调用 WorldView.add_stone(ENEMY_1, stone_per_turn)
 ##     步骤 4 贪心升级：候选 slot 排序（城镇 > 村庄 / 同类低级先）+ 调 BuildSystem.start_upgrade
@@ -63,7 +63,7 @@ func load_config(build_cfg: Dictionary) -> void:
 func _on_faction_turn_started(faction: int) -> void:
 	if faction != Faction.ENEMY_1:
 		return
-	# 步骤 1：TickRegistry 已由 start_faction_turn 先行触发（建造 tick + REPELLED 冷却 tick）
+	# 步骤 1：TickRegistry 已由 start_faction_turn 先行触发（建造 tick + 占据快照）
 	# 本处直接进入步骤 2-5
 	_step_reinforcement()
 	_step_stone_income()

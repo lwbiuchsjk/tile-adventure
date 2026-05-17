@@ -6,8 +6,9 @@ extends SceneTree
 ##   1. 升级优先级比较（城镇 > 村庄 / 同类等级低先）
 ##   2. EnemyReinforcement.spawn_batch 找空地 + 写入 _level_slots
 ##   3. 增援触发条件（turn_index % 5 == 0 且 > 0）
-##   4. REPELLED 冷却 tick 正确递减 + 冷却归零恢复 UNCHALLENGED
-##   5. 贪心升级按排序 + 石料耗尽停止
+##   4. 贪心升级按排序 + 石料耗尽停止
+##   （2026-05-17 REPELLED 死代码清理批：删除原"#4 REPELLED 冷却 tick"测试，
+##    mark_repelled / tick_cooldown / State.REPELLED 已全部从 LevelSlot 移除）
 
 var _failed: int = 0
 
@@ -18,7 +19,6 @@ func _init() -> void:
 	_test_upgrade_priority_cmp()
 	_test_reinforcement_spawn()
 	_test_reinforcement_trigger_condition()
-	_test_repelled_cooldown_tick()
 	_test_greedy_upgrade_exhaust_stone()
 	_test_full_entry_via_faction_signal()
 	_test_dynamic_target_selection()
@@ -98,26 +98,7 @@ func _test_reinforcement_trigger_condition() -> void:
 	_assert(trigger_points == [5, 10, 15, 20], "20 回合内 5/10/15/20 触发增援（turn=0 不触发）")
 
 
-## 4. REPELLED 冷却 tick：递减 + 归零恢复
-func _test_repelled_cooldown_tick() -> void:
-	print("-- REPELLED 冷却 tick")
-
-	var lv: LevelSlot = LevelSlot.new()
-	lv.position = Vector2i(1, 1)
-	lv.state = LevelSlot.State.REPELLED
-	lv.cooldown_turns = 2
-	lv.faction = Faction.ENEMY_1
-
-	# 模拟两次 tick
-	lv.tick_cooldown()
-	_assert(lv.state == LevelSlot.State.REPELLED, "第一次 tick 仍 REPELLED")
-	_assert(lv.cooldown_turns == 1,               "cooldown_turns == 1")
-
-	lv.tick_cooldown()
-	_assert(lv.state == LevelSlot.State.UNCHALLENGED, "冷却归零后恢复 UNCHALLENGED")
-
-
-## 5. 贪心升级：按优先级排序 + 石料耗尽停止
+## 4. 贪心升级：按优先级排序 + 石料耗尽停止
 func _test_greedy_upgrade_exhaust_stone() -> void:
 	print("-- 贪心升级耗尽石料")
 	# 加载 BuildSystem 配置，让 can_upgrade / get_upgrade_cost 能工作
@@ -153,7 +134,7 @@ func _test_greedy_upgrade_exhaust_stone() -> void:
 	BuildSystem.clear_state()
 
 
-## 6. 完整入口链路（P1-#10 审查补齐）：
+## 5. 完整入口链路（P1-#10 审查补齐）：
 ##    TurnManager.start_faction_turn(ENEMY_1) → faction_turn_started 信号 → EnemyAI 六步
 ## 验证石料每回合 +3 累加 + start_enemy_move_phase 被调用的次数
 ## 注：增援 / 升级 / 移动阶段本身在 mock 下被短路（无 schema 数据）；
@@ -190,7 +171,7 @@ func _test_full_entry_via_faction_signal() -> void:
 	world.queue_free()
 
 
-## 7. 动态目标选择（P0 第二阶段）
+## 6. 动态目标选择（P0 第二阶段）
 ##    EnemyMovement._pick_target_for / _min_target_distance：
 ##    PERCEIVE_RANGE 内有非己方持久 slot → 选 slot；无候选 → 追玩家。
 func _test_dynamic_target_selection() -> void:
@@ -236,7 +217,7 @@ func _test_dynamic_target_selection() -> void:
 	em.queue_free()
 
 
-## 8. Pathfinder blocked destination 契约（审查 P1 触发）
+## 7. Pathfinder blocked destination 契约（审查 P1 触发）
 ##    验证：end 在 blocked_positions 中时 find_path 返回空路径（不是"停在相邻格"的路径）
 ##    这是"target == player 时不能把玩家格放 blocked"的依据
 func _test_pathfinder_blocked_destination_contract() -> void:
@@ -260,8 +241,8 @@ func _test_pathfinder_blocked_destination_contract() -> void:
 		"end 在 blocked_positions → find_path 返回空路径（拒绝把 end 加入 open_set）")
 
 
-## 9. E4 退化回归：pack 与玩家相邻时 forced_battle_triggered **不再 emit**
-## 10. 可移动 pack 阵营白名单（审查 P2 收紧）
+## 8. E4 退化回归：pack 与玩家相邻时 forced_battle_triggered **不再 emit**
+## 9. 可移动 pack 阵营白名单（审查 P2 收紧）
 ##     注释写"仅 ENEMY_1 + NONE legacy"，实现也须按此白名单（不能只排除 PLAYER）
 ##     未来扩展势力（ENEMY_2 / 中立可移动势力等）不应被误收入敌方移动队列
 func _test_movable_levels_faction_whitelist() -> void:
@@ -308,7 +289,7 @@ func _test_movable_levels_faction_whitelist() -> void:
 	mock_world.queue_free()
 
 
-## 11. PERCEIVE_RANGE 边界
+## 10. PERCEIVE_RANGE 边界
 ##     默认感知半径 = 3；距离 3 可占领，距离 4 不可占领并回退追玩家。
 func _test_target_switch_range_threshold() -> void:
 	print("-- AI slot 感知半径边界")
@@ -344,7 +325,7 @@ func _test_target_switch_range_threshold() -> void:
 	em.queue_free()
 
 
-## 12. display_id 全局唯一分配（v2）
+## 11. display_id 全局唯一分配（v2）
 ##     验证：按类型全局计数、跨势力共享序列；核心保持"核心"；归属翻转不改变 ID
 ##     v2 触发点：v1 按势力分桶会让玩家占据中立/敌方 slot 后出现同 ID 重名，反人类
 func _test_display_id_assignment_stability() -> void:

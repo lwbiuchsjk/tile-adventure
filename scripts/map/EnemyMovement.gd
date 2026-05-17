@@ -364,7 +364,7 @@ func _get_blocked_positions(exclude_level: LevelSlot) -> Dictionary:
 		var lv: LevelSlot = level_slots[p] as LevelSlot
 		if lv == exclude_level:
 			continue
-		if lv.state == LevelSlot.State.UNCHALLENGED or lv.is_repelled():
+		if lv.state == LevelSlot.State.UNCHALLENGED:
 			blocked[p] = true
 	# E4 保护区：玩家曼哈顿距离 < range 的格全部 blocked（dist == range 边缘格不加）
 	if _protected_zone_range > 0:

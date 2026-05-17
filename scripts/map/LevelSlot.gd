@@ -1,20 +1,20 @@
 class_name LevelSlot
 extends RefCounted
 ## 关卡实体数据
-## 关卡以 Slot 形式分布在地图上，有三种状态：
+## 关卡以 Slot 形式分布在地图上，有两种状态：
 ##   UNCHALLENGED: 未挑战，可交互
-##   REPELLED: 已击退，冷却中，不可交互，不可通行
 ##   DEFEATED: 已击败，从地图移除
 ## 每个关卡携带 1~N 支敌方部队，战斗结算时参与伤害计算。
+##
+## ⚠ 历史枚举（2026-05-17 REPELLED 清理批清除）：
+##   - CHALLENGED：M1 重构（2026-04-22）后已不再写入；本批一并清除
+##   - REPELLED：E5 战场制重构后击退路径不可达（mark_repelled / tick_cooldown 0 调用方）；本批一并清除
+## 历史细节可经 git log 追溯。
 
 ## 关卡状态
-## ⚠ M1 重构（2026-04-22）：CHALLENGED 枚举值保留作向后兼容，
-## 新模式下不再写入（敌方 AI §4.3）。新代码统一使用 DEFEATED 表达"已击败"。
 enum State {
 	UNCHALLENGED = 0,  ## 未挑战
-	CHALLENGED   = 1,  ## 已挑战（旧值，新代码不再写入；is_defeated() 仍兼容判断）
-	REPELLED     = 2,  ## 已击退，冷却中
-	DEFEATED     = 3,  ## 已击败
+	DEFEATED     = 1,  ## 已击败
 }
 
 ## 关卡在地图上的格坐标
@@ -35,9 +35,6 @@ var tier: int = 0
 ## 关卡胜利奖励列表（初始化时预生成）
 var rewards: Array[ItemData] = []
 
-## 击退冷却剩余回合数（仅 REPELLED 状态使用）
-var cooldown_turns: int = 0
-
 # ─────────────────────────────────────────
 # M1 新增字段（敌方 AI §4.2 / 城建锚 §三）
 # ─────────────────────────────────────────
@@ -56,50 +53,22 @@ var has_moved_this_turn: bool = false
 ## 用途示例：缓存当前 A* 路径、当前目标 slot、上一回合行动类型等
 var ai_cache: Dictionary = {}
 
-## 判断是否已挑战（兼容旧接口，CHALLENGED/DEFEATED/REPELLED 均视为已挑战）
-func is_challenged() -> bool:
-	return state != State.UNCHALLENGED
-
-## 判断是否处于击退冷却状态
-func is_repelled() -> bool:
-	return state == State.REPELLED
-
 ## 判断是否已击败
 func is_defeated() -> bool:
-	return state == State.DEFEATED or state == State.CHALLENGED
+	return state == State.DEFEATED
 
-## 判断该关卡是否阻挡通行（未挑战和击退状态均阻挡）
+## 判断该关卡是否阻挡通行（仅未挑战状态阻挡）
+## 注：与 is_interactable() 当前等价；保留独立函数避免后续扩展状态时双处改动的隐性耦合
 func is_blocking() -> bool:
-	return state == State.UNCHALLENGED or state == State.REPELLED
+	return state == State.UNCHALLENGED
 
 ## 判断是否可交互（仅未挑战状态可触发战斗）
 func is_interactable() -> bool:
 	return state == State.UNCHALLENGED
 
-## 标记为已挑战（兼容旧接口，实际标记为 DEFEATED）
-func mark_challenged() -> void:
-	state = State.DEFEATED
-
 ## 标记为已击败
 func mark_defeated() -> void:
 	state = State.DEFEATED
-
-## 标记为已击退，设置冷却回合数
-func mark_repelled(cooldown: int) -> void:
-	state = State.REPELLED
-	cooldown_turns = cooldown
-
-## 冷却递减（每回合调用）
-## 返回 true 表示冷却结束，已恢复为可交互状态
-func tick_cooldown() -> bool:
-	if state != State.REPELLED:
-		return false
-	cooldown_turns -= 1
-	if cooldown_turns <= 0:
-		cooldown_turns = 0
-		state = State.UNCHALLENGED
-		return true
-	return false
 
 ## 对敌方部队应用伤害
 ## damages: 与 troops 列表一一对应的伤害值

@@ -179,8 +179,8 @@ func collect_fog_signals() -> Array:
 		var level: LevelSlot = level_slots[pos] as LevelSlot
 		if level == null:
 			continue
-		# 击败 / 击退态敌方不再是"威胁信号"，浓雾中不画（与世界层视野内一致）
-		if level.is_defeated() or level.is_repelled():
+		# 击败态敌方不再是"威胁信号"，浓雾中不画（与世界层视野内一致）
+		if level.is_defeated():
 			continue
 		# 移动中关卡由下方独立分支处理（避免 visual_pos 与 grid 位置不一致时重复画）
 		if level == moving_level:

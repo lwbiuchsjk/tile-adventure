@@ -2,7 +2,8 @@
 
 ; MVP-B.2 阶段 2：单位渲染 + 敌方关卡视觉调参 Resource 实例
 ; schema 在 res://scripts/config/unit_enemy_config.gd
-; 字段从 WorldMap.gd 顶部 15 个 const 迁出；编辑器内双击本文件在 inspector 调参
+; 字段从 WorldMap.gd 顶部迁出；编辑器内双击本文件在 inspector 调参
+; 2026-05-17 REPELLED 死代码清理批：删除 repelled_border_color（击退路径不可达）
 
 [ext_resource type="Script" path="res://scripts/config/unit_enemy_config.gd" id="1_uec"]
 
@@ -32,4 +33,3 @@ tier_slot_margins = {
 }
 enemy_move_color = Color(1, 0.35, 0.2, 1)
 enemy_glow_color = Color(1, 0.3, 0.15, 0.35)
-repelled_border_color = Color(0.6, 0.3, 0.3, 0.5)

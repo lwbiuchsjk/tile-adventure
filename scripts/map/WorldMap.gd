@@ -666,9 +666,9 @@ func _ready() -> void:
 				continue
 			BuildSystem.apply_level_fields(slot, slot.level)
 
-	# ⚠ Tick 注册顺序固定：M5 → M4 → M7 REPELLED（TickRegistry 按 FIFO 执行）
+	# ⚠ Tick 注册顺序固定：M5 → M4（TickRegistry 按 FIFO 执行）
 	# 自阵营回合开始时先跑 M5 建造完成（可能刷 max_range），
-	# 再跑 M4 占据快照（用新 max_range 增长），最后跑 M7 REPELLED 冷却递减
+	# 再跑 M4 占据快照（用新 max_range 增长）
 	TickRegistry.register(_on_build_tick)
 
 	# M4: 注册占据快照到 TickRegistry（自阵营回合开始锚点）
@@ -1422,15 +1422,14 @@ func _refresh_reachable() -> void:
 	_update_explore_action_button()
 	_renderer.queue_redraw()
 
-## 获取所有阻挡位置（击退状态的关卡格）
+## 获取所有阻挡位置（未挑战敌方格阻挡玩家通行）
 func _get_blocked_positions() -> Dictionary:
 	var blocked: Dictionary = {}
 	for pos in _level_slots:
 		var lv: LevelSlot = _level_slots[pos] as LevelSlot
-		# 设计 §3.1 主动战斗只走 [F]：UNCHALLENGED 敌方 LevelSlot 也加进玩家阻挡，
-		# 玩家不能"走到敌格上"。
-		# REPELLED 保留阻挡（击退冷却中不可通行）
-		if lv.state == LevelSlot.State.UNCHALLENGED or lv.is_repelled():
+		# 设计 §3.1 主动战斗只走 [F]：UNCHALLENGED 敌方 LevelSlot 加进玩家阻挡，
+		# 玩家不能"走到敌格上"
+		if lv.state == LevelSlot.State.UNCHALLENGED:
 			blocked[pos] = true
 	return blocked
 
@@ -1461,11 +1460,9 @@ func _on_faction_tick(faction: int) -> void:
 ## 构建 { Vector2i: 势力 ID } 字典，用于快照的驻扎判定
 ## MVP 只含两类单位：玩家唯一单位 + UNCHALLENGED 敌方关卡
 ##
-## REPELLED / DEFEATED 的敌方格**不算驻扎单位**（P1 审查项决议）：
-##   REPELLED 虽仍占据物理格子（阻挡移动，见 _get_blocked_positions），
-##   但该敌方部队已退场（不能战斗、不产出），语义上是"空壳占格"；
-##   DEFEATED 则直接从 _level_slots 清除或标 is_defeated，更无驻扎意义。
-## 故两者均不计入驻扎判定，对应格子按"无单位"参与 snapshot_turn_end 结算。
+## DEFEATED 的敌方格**不算驻扎单位**（P1 审查项决议）：
+##   已击败 slot 从 _level_slots 清除或标 is_defeated，无驻扎意义；
+##   对应格子按"无单位"参与 snapshot_turn_end 结算。
 func _build_units_by_pos() -> Dictionary:
 	var out: Dictionary = {}
 	if _unit != null:
@@ -1822,11 +1819,11 @@ func _on_turn_end_settlement() -> void:
 			))
 
 	# M7 敌方回合触发：end 当前（PLAYER）+ start ENEMY_1
-	# start_faction_turn 内部会：TickRegistry.run_ticks（建造 tick / REPELLED 冷却 tick）→ 计数 +1 → emit signal
+	# start_faction_turn 内部会：TickRegistry.run_ticks（建造 tick / 占据快照）→ 计数 +1 → emit signal
 	# signal 被 EnemyAI 接收，执行六步 2-5（步骤 1 已由 TickRegistry 完成）
 	#
 	# enemy_movement_enabled == false（调试开关）：
-	#   仍必须调 start_faction_turn(ENEMY_1) 让 TickRegistry 跑敌方建造 tick / REPELLED 冷却 tick，
+	#   仍必须调 start_faction_turn(ENEMY_1) 让 TickRegistry 跑敌方建造 tick / 占据快照，
 	#   否则敌方状态冻结；只短路移动阶段（由 start_enemy_move_phase 内部检查开关提前 phase_finished）
 	_turn_manager.end_faction_turn()
 	_turn_manager.current_faction = Faction.ENEMY_1
@@ -2073,7 +2070,7 @@ func _is_in_battle() -> bool:
 ##
 ## 命中条件：
 ##   - 在距离阈值内
-##   - level.is_interactable() = true（UNCHALLENGED 且非冷却）
+##   - level.is_interactable() = true（UNCHALLENGED）
 func _get_packs_in_range(origin: Vector2i, search_range: int) -> Array[LevelSlot]:
 	var result: Array[LevelSlot] = []
 	for pos in _level_slots:

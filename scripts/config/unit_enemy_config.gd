@@ -101,7 +101,7 @@ extends Resource
 
 
 # ─────────────────────────────────────────
-# 敌方动态（移动 / 光晕 / 击退冷却）
+# 敌方动态（移动 / 光晕）
 # ─────────────────────────────────────────
 
 @export_group("敌方动态")
@@ -111,6 +111,3 @@ extends Resource
 
 ## 敌方关卡移动时的外圈光晕颜色
 @export var enemy_glow_color: Color = Color(1.0, 0.30, 0.15, 0.35)
-
-## 击退冷却关卡边框颜色（暗淡）
-@export var repelled_border_color: Color = Color(0.6, 0.3, 0.3, 0.5)
