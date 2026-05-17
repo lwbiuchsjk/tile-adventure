@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="ResourceRenderConfig" load_steps=2 format=3]
+
+; MVP-B.2 阶段 3：一次性资源点视觉调参 Resource 实例（scope 调整后 3 字段）
+; schema 在 res://scripts/config/resource_render_config.gd
+; 字段从 WorldMap.gd 顶部活跃 3 个 BLIND_BOX_* const 迁出；4 个 RESOURCE_*_COLOR 死代码已清理
+; 编辑器内双击本文件在 inspector 调参
+
+[ext_resource type="Script" path="res://scripts/config/resource_render_config.gd" id="1_rrc"]
+
+[resource]
+script = ExtResource("1_rrc")
+blind_box_color = Color(0.72, 0.72, 0.69, 1)
+blind_box_outline = Color(1, 1, 1, 0.85)
+blind_box_outline_width = 2.0

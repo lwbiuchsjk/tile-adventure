@@ -71,13 +71,9 @@ const TILE_SIZE: int = 72
 ## 单位渲染 / 已挑战变暗 / 敌方层级视觉 → MVP-B.2 阶段 2 迁移到 UNIT_ENEMY_CFG（见本文件下方 Resource preload 段）
 ## 设计要点（圆形棋子 / 敌方红 v5 三通道 / 米字小菱形累积点亮 / 占格梯度 67%-92%）保留在 unit_enemy_config.gd schema 内
 
-## 一次性资源点底色（按类型区分）
-const RESOURCE_SUPPLY_COLOR: Color = Color(0.80, 0.27, 0.53)   ## 补给：品红  #CC4488（规避蓝绿色地形）
-const RESOURCE_HP_COLOR: Color = Color(0.88, 0.47, 0.19)       ## 兵力：橙色  #E07830（规避绿色地形）
-const RESOURCE_EXP_COLOR: Color = Color(0.60, 0.40, 0.80)      ## 经验：紫色  #9966CC（规避蓝色地形）
-const RESOURCE_STONE_COLOR: Color = Color(0.55, 0.55, 0.60)    ## 石料：灰岩  #8C8C99（规避资源色相冲突）
-# 注：M1 重构后 ResourceSlot 仅承载一次性产出，原"持久金色 + 范围金光叠加"颜色常量已移除；
-# 持久 slot 视觉 / 影响范围覆盖层现走 M4 新常量（M4_FACTION_COLORS / M4_INFLUENCE_ALPHA_OUTER/MID/INNER）。
+# MVP-B.2 阶段 3 scope 调整（2026-05-17）：原 RESOURCE_SUPPLY/HP/EXP/STONE_COLOR 4 个无活跃使用方
+# （M6 视觉统一为盲盒态后，_draw_resource_slots 只画盲盒不区分类型色）—— 死代码清理，未迁 Resource。
+# 历史背景：M1 重构后 ResourceSlot 仅承载一次性产出，持久 slot 视觉走 M4 新常量。
 
 ## 敌方动态（移动 / 光晕 / 击退冷却）→ MVP-B.2 阶段 2 迁移到 UNIT_ENEMY_CFG（见本文件下方 Resource preload 段）
 
@@ -393,12 +389,7 @@ var _player_lifecycle: PlayerLifecycle = null
 # 渲染常量（MVP-γ 阶段 2：随 _draw 区块迁回；WorldMapRenderer 经 const 别名引用）
 # ─────────────────────────────────────────
 
-## 即时资源点盲盒色（M6 视觉统一：采集前不显示具体类型，避免与"等权采集"规则冲突）
-## UI 重构步骤 5：从冷灰 #8C8C99 改为暖浅灰 #B8B8B0（接近木箱感）+ 白描边，
-## 让资源点更像"可拾取对象"而非占位符
-const RESOURCE_BLIND_BOX_COLOR: Color = Color(0.72, 0.72, 0.69)        ## 暖浅灰  #B8B8B0
-const RESOURCE_BLIND_BOX_OUTLINE: Color = Color(1.0, 1.0, 1.0, 0.85)   ## 白描边 alpha 0.85
-const RESOURCE_BLIND_BOX_OUTLINE_WIDTH: float = 2.0
+## 盲盒视觉 → MVP-B.2 阶段 3 迁移到 RESOURCE_RENDER_CFG（见本文件下方 Resource preload 段）
 ## 势力归属色：持久 slot 外框 + 影响范围覆盖层共用
 ## UI 重构步骤 2 + 调色迭代：
 ##   v1 `#4D8CF2` 和 LOWLAND `#4D8CBF` 几乎同色，冲突严重
@@ -466,6 +457,10 @@ const MAP_BASE_CFG: MapBaseConfig = preload("res://assets/config/map_base_config
 ## 单位渲染 + 敌方关卡视觉（MVP-B.2 阶段 2：15 字段 = unit 4 + challenged 1 + enemy_slot/border 2 + tier 4 + enemy 动态 3）
 ## 跨 2 文件共享：WorldMap.gd / WorldMapRenderer.gd
 const UNIT_ENEMY_CFG: UnitEnemyConfig = preload("res://assets/config/unit_enemy_config.tres")
+
+## 一次性资源点视觉（MVP-B.2 阶段 3：3 字段，仅盲盒；scope 调整后 4 个死 RESOURCE_*_COLOR 已清理）
+## 跨 2 文件共享：WorldMap.gd（_draw_resource_slot 旧路径已死） / WorldMapRenderer.gd（盲盒主使用方）
+const RESOURCE_RENDER_CFG: ResourceRenderConfig = preload("res://assets/config/resource_render_config.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────

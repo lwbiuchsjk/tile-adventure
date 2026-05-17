@@ -24,11 +24,12 @@ extends Node2D
 # ─────────────────────────────────────────
 # WorldMap 常量别名（const 集中化 → P3-2；本批先别名引用，函数体可原样搬迁）
 # ─────────────────────────────────────────
-## MVP-B 阶段 4 / MVP-B.2 阶段 1+2：Resource 调参 preload（独立访问，不走 WorldMap const 桥接中转）
+## MVP-B 阶段 4 / MVP-B.2 阶段 1+2+3：Resource 调参 preload（独立访问，不走 WorldMap const 桥接中转）
 const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
 const MAP_BASE_CFG: MapBaseConfig = preload("res://assets/config/map_base_config.tres")
 const UNIT_ENEMY_CFG: UnitEnemyConfig = preload("res://assets/config/unit_enemy_config.tres")
-## 剩余桥接 const（阶段 3/4 待迁）—— 与 WorldMap 顶部仍存活的 const 一一对应
+const RESOURCE_RENDER_CFG: ResourceRenderConfig = preload("res://assets/config/resource_render_config.tres")
+## 剩余桥接 const（阶段 4 待迁）—— 与 WorldMap 顶部仍存活的 M4_* 一一对应
 const M4_CORE_TOWN_BORDER := WorldMap.M4_CORE_TOWN_BORDER
 const M4_CORE_TOWN_EMBLEM_SIZE := WorldMap.M4_CORE_TOWN_EMBLEM_SIZE
 const M4_FACTION_COLORS := WorldMap.M4_FACTION_COLORS
@@ -41,9 +42,6 @@ const M4_PERSISTENT_INNER_BG := WorldMap.M4_PERSISTENT_INNER_BG
 const M4_PERSISTENT_RING_WIDTH := WorldMap.M4_PERSISTENT_RING_WIDTH
 const M4_PERSISTENT_SEPARATOR_COLOR := WorldMap.M4_PERSISTENT_SEPARATOR_COLOR
 const M4_PERSISTENT_SEPARATOR_WIDTH := WorldMap.M4_PERSISTENT_SEPARATOR_WIDTH
-const RESOURCE_BLIND_BOX_COLOR := WorldMap.RESOURCE_BLIND_BOX_COLOR
-const RESOURCE_BLIND_BOX_OUTLINE := WorldMap.RESOURCE_BLIND_BOX_OUTLINE
-const RESOURCE_BLIND_BOX_OUTLINE_WIDTH := WorldMap.RESOURCE_BLIND_BOX_OUTLINE_WIDTH
 const TILE_SIZE := WorldMap.TILE_SIZE
 
 # ─────────────────────────────────────────
@@ -331,8 +329,8 @@ func _draw_resource_slots() -> void:
 			TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1
 		)
 		# 箱体：浅灰底 + 白描边 + 内部 "?"
-		draw_rect(rs_rect, RESOURCE_BLIND_BOX_COLOR)
-		draw_rect(rs_rect, RESOURCE_BLIND_BOX_OUTLINE, false, RESOURCE_BLIND_BOX_OUTLINE_WIDTH)
+		draw_rect(rs_rect, RESOURCE_RENDER_CFG.blind_box_color)
+		draw_rect(rs_rect, RESOURCE_RENDER_CFG.blind_box_outline, false, RESOURCE_RENDER_CFG.blind_box_outline_width)
 
 		if _label_font != null:
 			_draw_slot_label(
