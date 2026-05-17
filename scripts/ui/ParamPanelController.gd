@@ -439,48 +439,36 @@ func _dump_resource_fields(instance: Resource) -> PackedStringArray:
 	return lines
 
 
-## Variant serializer：处理 schema 用到的类型（float / int / Color / Dictionary / String / bool）
-## 保持与 Godot ResourceSaver 文本风格一致（整数浮点写为 "1" 而非 "1.0"）
+## Variant serializer：用 var_to_str 输出 Godot 字面量风格，与 ResourceSaver 文本风格一致
+##
+## 关键洞察：
+##   1. `str(Color.r)` 输出 14 位全精度（如 "0.55000001192093"），噪音；
+##      `var_to_str(Color)` 用 Godot 内部"最少可还原 float32 精度"算法，输出 `Color(0.55, 0.55, 0.55, 1)`
+##   2. Dict 多行格式手写（var_to_str 默认单行，与原 .tres 多行不一致引入 diff 噪音）
+##   3. ImGui ColorEdit3 float-mode 输出本身含长尾（user 选 "0.1" 可能拿到 0.100000046 这种 float32 中间值），
+##      dump Color 时主动 snappedf 到 0.001 精度（人眼分辨不出 1/1000 vs 1/256 ≈ 0.004 差别），
+##      避免 var_to_str 忠实输出 ImGui 长尾导致 diff 噪音；其他 float 字段（如 tilt_rad）保留精度不截
 func _serialize_value(val: Variant) -> String:
-	if val is Color:
-		var c: Color = val as Color
-		return "Color(%s, %s, %s, %s)" % [_fmt_color_component(c.r), _fmt_color_component(c.g), _fmt_color_component(c.b), _fmt_color_component(c.a)]
 	if val is Dictionary:
+		# 多行格式匹配 .tres 原风格；内部 key / value 递归调本函数（Color 也截断）
 		var d: Dictionary = val as Dictionary
 		var parts: PackedStringArray = ["{"]
 		for k in d.keys():
-			parts.append("%s: %s," % [_serialize_value(k), _serialize_value(d[k])])
+			parts.append("%s: %s," % [var_to_str(k), _serialize_value(d[k])])
 		parts.append("}")
 		return "\n".join(parts)
-	if val is bool:
-		return "true" if val else "false"
-	if val is String or val is StringName:
-		# P2 修复：完整转义 —— 先 \ 再 " 再 \n（顺序重要，避免重复处理）
-		var s: String = str(val)
-		s = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-		return '"%s"' % s
-	if val is int:
-		return str(val)
-	if val is float:
-		return _fmt_num(val)
-	# fallback：未处理类型用 str() —— 后续如需 Vector2 / Array 等再扩
-	return str(val)
-
-
-## float 格式化：用 str() + 保留 ".0" 后缀
-## Godot ResourceSaver 风格：Dict 内浮点 2.0 写 "2.0"，Color 内整数浮点 1.0 写 "1"（Color 特殊处理）
-## 本函数用于非 Color 字段；Color 内 component 用 _fmt_color_component
-func _fmt_num(n: float) -> String:
-	var s: String = str(n)
-	# str(1.0) 在 GDScript 4 输出 "1"，需要加 ".0" 保持浮点字面
-	if not s.contains(".") and not s.contains("e"):
-		s += ".0"
-	return s
-
-
-## Color component 格式化：整数浮点 1.0 → "1"（与原 .tres Color(1, 1, 1, 1) 风格一致）
-func _fmt_color_component(n: float) -> String:
-	return str(n)
+	if val is Color:
+		# Color 各分量截断到 0.001 精度避免 ImGui float-mode 输入产生 0.100000046 长尾噪音
+		var c: Color = val as Color
+		var snap: Color = Color(
+			snappedf(c.r, 0.001),
+			snappedf(c.g, 0.001),
+			snappedf(c.b, 0.001),
+			snappedf(c.a, 0.001)
+		)
+		return var_to_str(snap)
+	# float / int / String / bool / Vector2 等其他类型 var_to_str 输出 Godot 字面量
+	return var_to_str(val)
 
 
 # ─────────────────────────────────────────
