@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="UnitEnemyConfig" load_steps=2 format=3]
+
+; MVP-B.2 阶段 2：单位渲染 + 敌方关卡视觉调参 Resource 实例
+; schema 在 res://scripts/config/unit_enemy_config.gd
+; 字段从 WorldMap.gd 顶部 15 个 const 迁出；编辑器内双击本文件在 inspector 调参
+
+[ext_resource type="Script" path="res://scripts/config/unit_enemy_config.gd" id="1_uec"]
+
+[resource]
+script = ExtResource("1_uec")
+unit_color = Color(1, 1, 1, 1)
+unit_shadow_color = Color(0, 0, 0, 0.3)
+unit_margin = 12
+unit_player_ring_width = 3
+challenged_dim = 0.4
+enemy_slot_color = Color(1, 0.24, 0.3, 1)
+enemy_border_color = Color(1, 0.25, 0.2, 0.8)
+tier_border_color = Color(0.1, 0, 0.03, 1)
+tier_border_widths = {
+0: 2.0,
+1: 2.5,
+2: 3.0,
+3: 3.5,
+}
+tier_dot_color = Color(1, 0.84, 0, 1)
+tier_dot_size_ratio = 0.3
+tier_slot_margins = {
+0: 12,
+1: 9,
+2: 6,
+3: 3,
+}
+enemy_move_color = Color(1, 0.35, 0.2, 1)
+enemy_glow_color = Color(1, 0.3, 0.15, 0.35)
+repelled_border_color = Color(0.6, 0.3, 0.3, 0.5)

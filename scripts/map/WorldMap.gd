@@ -68,76 +68,8 @@ const TILE_SIZE: int = 72
 ## 地形 / 槽位 / 可达性高亮渲染常量 → MVP-B.2 阶段 1 迁移到 MAP_BASE_CFG（见本文件下方 Resource preload 段）
 ## 设计要点（地形 Civ 风格去饱和 / 可达性"立即操作 > 长期状态"层级）保留在 map_base_config.gd schema 内
 
-## 单位标记内底色（白色，承载"我"字 + 在地形上保留对比度）
-const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
-
-## UI 重构步骤 3：单位投影（圆形棋子感）
-## 旧的"白主体 + 深灰描边"已被"圆形 + 玩家蓝外环 + 白心"替代——
-## 形状区分（圆 vs 方/菱）+ 玩家蓝身份语义双管齐下，避免单位被白色可达边吞没、
-## 也避免与同样"蓝边白心"的玩家建筑混淆（建筑是方形）
-const UNIT_SHADOW_COLOR: Color = Color(0.0, 0.0, 0.0, 0.30)   ## 投影半透黑
-
-## 单位标记边距（像素）—— 圆形半径 = (TILE_SIZE - UNIT_MARGIN*2) / 2
-## 入口 4 MVP：8 → 12 保持半径占比 (TILE_SIZE-2*UNIT_MARGIN)/TILE_SIZE = 0.667 不变
-const UNIT_MARGIN: int = 12
-
-## 玩家单位外环厚度（px）—— 环色复用 M4_FACTION_COLORS[Faction.PLAYER]，保证 UI 一致
-## 环宽 3 略薄于建筑 4，因为单位整体小一档（半径 16 vs 建筑半边长 24）
-const UNIT_PLAYER_RING_WIDTH: int = 3
-
-## 已挑战关卡变暗系数（同一轮内已挑战但尚未切换的关卡）
-const CHALLENGED_DIM: float = 0.4
-
-## 敌方关卡底色 —— 统一为标准敌方红，与持久敌方建筑势力色同源
-## 沿革：
-##   v1 暗红 #CC4040 单色 + tier 跨色相边框（绿/黄/红/紫）
-##   v2 饱和冷红 #FF3D4D 单色 + tier 红色家族边框 —— tier 中描边色与底色相同消失（致命 bug）
-##   v3（R-Bold）底色按 tier 明度梯度（浅红粉 → 黑红）+ 主字"弱/中/强/超" —— 文字 14px 在小空间糊
-##   v4（米字小菱形 + 尺寸梯度）—— 但底色 4 档梯度让"超档黑红"被白小菱形覆盖出现反语义
-##   v5（当前）底色统一 #FF3D4D —— 强度完全靠 3 个独立直觉通道（尺寸 + 小菱形数 + 描边宽度）；
-##              底色不再与小菱形数量"打架"，与持久敌方建筑共享"敌方"身份红
-const ENEMY_SLOT_COLOR: Color = Color(1.00, 0.24, 0.30)
-
-## 敌方菱形描边 —— 统一黑红色，宽度按 tier 梯度
-## 黑红 #1A0008 与红底高对比；宽度梯度收窄到 2.0/2.5/3.0/3.5（v4 的 4.5 过粗压迫小菱形）
-const TIER_BORDER_COLOR: Color = Color(0.10, 0.00, 0.03, 1.0)
-const TIER_BORDER_WIDTHS: Dictionary = {
-	0: 2.0,
-	1: 2.5,
-	2: 3.0,
-	3: 3.5,
-}
-
-## 敌方关卡边框颜色（兜底，仅 level.tier 越界时使用）
-const ENEMY_BORDER_COLOR: Color = Color(1.0, 0.25, 0.20, 0.8)
-
-## 敌方强度图形化（米字 4 小菱形）
-## 外菱形以"米字"线四等分，4 个小菱形（上/下/左/右）按 tier 累积点亮：
-##   tier 0 弱：上 1 个（独立 tip）
-##   tier 1 中：上+下 2 个（垂直对称）
-##   tier 2 强：上+左+右 3 个（T 型，左右对称）
-##   tier 3 超：4 个全亮（恰好组合成完整内嵌菱形）
-## 小菱形配色：金色填充（无描边） —— 红+金经典威慑配色，与玩家/敌方核心金边同源（"金=重要标识"），
-##             与玩家蓝白阵营形成"蓝白文明 vs 红金军阀"对位
-## 小菱形尺寸：外菱形 0.3 倍居中分布
-##   v5 初版 0.4 倍，4 个小菱形仍偏大、底色显示区域偏小；
-##   缩到 0.3 倍后底色 70%+ 区域可见，1 个 vs 3 个的差异更直接（"少且小"vs"分散漂浮"语义不模糊）
-const ENEMY_TIER_DOT_COLOR: Color = Color(1.0, 0.84, 0.0)         ## 金色 #FFD700
-const ENEMY_TIER_DOT_SIZE_RATIO: float = 0.3
-
-## 敌方外菱形按 tier 的格内边距（像素）—— 尺寸梯度通道
-## 占格比例：弱 67% / 中 75% / 强 83% / 超 92%
-##   弱档显著最小（67%）+ 小菱形居中（不在米字 4 方向），与其他档形成"位置 + 尺寸"双重区分
-##   1 个居中小菱形 vs 3 个 T 型小菱形语义完全不同，远观一眼可辨
-## margin = (TILE_SIZE - TILE_SIZE * 占比) / 2
-## 入口 4 MVP（codex 审查 P2 修复 2026-05-09）：TILE_SIZE 48→72 后按比例重算 margin
-##   旧值（48 基线）8/6/4/2 在 72 下实际占格变为 78/83/89/94%，弱档识别度被压缩
-const ENEMY_TIER_SLOT_MARGINS: Dictionary = {
-	0: 12,  ## 67% 占格 —— 弱档显著最小（72 - 72*0.67)/2 ≈ 12）
-	1: 9,   ## 75%（(72 - 72*0.75)/2 = 9）
-	2: 6,   ## 83%（(72 - 72*0.83)/2 ≈ 6）
-	3: 3,   ## 92%（(72 - 72*0.92)/2 ≈ 3）
-}
+## 单位渲染 / 已挑战变暗 / 敌方层级视觉 → MVP-B.2 阶段 2 迁移到 UNIT_ENEMY_CFG（见本文件下方 Resource preload 段）
+## 设计要点（圆形棋子 / 敌方红 v5 三通道 / 米字小菱形累积点亮 / 占格梯度 67%-92%）保留在 unit_enemy_config.gd schema 内
 
 ## 一次性资源点底色（按类型区分）
 const RESOURCE_SUPPLY_COLOR: Color = Color(0.80, 0.27, 0.53)   ## 补给：品红  #CC4488（规避蓝绿色地形）
@@ -147,14 +79,7 @@ const RESOURCE_STONE_COLOR: Color = Color(0.55, 0.55, 0.60)    ## 石料：灰�
 # 注：M1 重构后 ResourceSlot 仅承载一次性产出，原"持久金色 + 范围金光叠加"颜色常量已移除；
 # 持久 slot 视觉 / 影响范围覆盖层现走 M4 新常量（M4_FACTION_COLORS / M4_INFLUENCE_ALPHA_OUTER/MID/INNER）。
 
-## 敌方关卡移动时的高亮颜色（亮红橙）
-const ENEMY_MOVE_COLOR: Color = Color(1.0, 0.35, 0.20)
-
-## 敌方关卡移动时的外圈光晕颜色
-const ENEMY_GLOW_COLOR: Color = Color(1.0, 0.30, 0.15, 0.35)
-
-## 击退冷却关卡边框颜色（暗淡）
-const REPELLED_BORDER_COLOR: Color = Color(0.6, 0.3, 0.3, 0.5)
+## 敌方动态（移动 / 光晕 / 击退冷却）→ MVP-B.2 阶段 2 迁移到 UNIT_ENEMY_CFG（见本文件下方 Resource preload 段）
 
 ## 字号 / 单位移动 / 醒目提示时长 → MVP-B.2 阶段 1 迁移到 MAP_BASE_CFG（见本文件下方 Resource preload 段）
 
@@ -537,6 +462,10 @@ const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visua
 ## 地图基础（MVP-B.2 阶段 1：11 字段 = 地形 2 + 槽位 2 + 可达性 3 + 字号 2 + 时长 2）
 ## 跨 3 文件共享：WorldMap.gd / WorldMapRenderer.gd / EnemyMovement.gd 各自独立 preload
 const MAP_BASE_CFG: MapBaseConfig = preload("res://assets/config/map_base_config.tres")
+
+## 单位渲染 + 敌方关卡视觉（MVP-B.2 阶段 2：15 字段 = unit 4 + challenged 1 + enemy_slot/border 2 + tier 4 + enemy 动态 3）
+## 跨 2 文件共享：WorldMap.gd / WorldMapRenderer.gd
+const UNIT_ENEMY_CFG: UnitEnemyConfig = preload("res://assets/config/unit_enemy_config.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -969,7 +898,7 @@ func _init_subsystems() -> void:
 	_night_vision.name = "NightVisionLayer"
 	add_child(_night_vision)
 	_night_vision.setup(_turn_manager, _camera, _world_view, TILE_SIZE,
-		ENEMY_SLOT_COLOR, ENEMY_MOVE_COLOR)
+		UNIT_ENEMY_CFG.enemy_slot_color, UNIT_ENEMY_CFG.enemy_move_color)
 
 	# 入口 4 MVP（2026-05-09）：探索态行动栏 HBoxContainer（攻击 + 扎营平行排布）
 	# 居中屏幕底部偏上；child 数 0 / 1 / 2 都自然布局

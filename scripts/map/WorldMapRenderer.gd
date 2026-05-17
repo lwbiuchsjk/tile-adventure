@@ -24,18 +24,11 @@ extends Node2D
 # ─────────────────────────────────────────
 # WorldMap 常量别名（const 集中化 → P3-2；本批先别名引用，函数体可原样搬迁）
 # ─────────────────────────────────────────
-## MVP-B 阶段 4 / MVP-B.2 阶段 1：Resource 调参 preload（独立访问，不走 WorldMap const 桥接中转）
+## MVP-B 阶段 4 / MVP-B.2 阶段 1+2：Resource 调参 preload（独立访问，不走 WorldMap const 桥接中转）
 const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
 const MAP_BASE_CFG: MapBaseConfig = preload("res://assets/config/map_base_config.tres")
-## 剩余桥接 const（阶段 2/3/4 待迁）—— 与 WorldMap 顶部仍存活的 const 一一对应
-const CHALLENGED_DIM := WorldMap.CHALLENGED_DIM
-const ENEMY_BORDER_COLOR := WorldMap.ENEMY_BORDER_COLOR
-const ENEMY_GLOW_COLOR := WorldMap.ENEMY_GLOW_COLOR
-const ENEMY_MOVE_COLOR := WorldMap.ENEMY_MOVE_COLOR
-const ENEMY_SLOT_COLOR := WorldMap.ENEMY_SLOT_COLOR
-const ENEMY_TIER_DOT_COLOR := WorldMap.ENEMY_TIER_DOT_COLOR
-const ENEMY_TIER_DOT_SIZE_RATIO := WorldMap.ENEMY_TIER_DOT_SIZE_RATIO
-const ENEMY_TIER_SLOT_MARGINS := WorldMap.ENEMY_TIER_SLOT_MARGINS
+const UNIT_ENEMY_CFG: UnitEnemyConfig = preload("res://assets/config/unit_enemy_config.tres")
+## 剩余桥接 const（阶段 3/4 待迁）—— 与 WorldMap 顶部仍存活的 const 一一对应
 const M4_CORE_TOWN_BORDER := WorldMap.M4_CORE_TOWN_BORDER
 const M4_CORE_TOWN_EMBLEM_SIZE := WorldMap.M4_CORE_TOWN_EMBLEM_SIZE
 const M4_FACTION_COLORS := WorldMap.M4_FACTION_COLORS
@@ -48,17 +41,10 @@ const M4_PERSISTENT_INNER_BG := WorldMap.M4_PERSISTENT_INNER_BG
 const M4_PERSISTENT_RING_WIDTH := WorldMap.M4_PERSISTENT_RING_WIDTH
 const M4_PERSISTENT_SEPARATOR_COLOR := WorldMap.M4_PERSISTENT_SEPARATOR_COLOR
 const M4_PERSISTENT_SEPARATOR_WIDTH := WorldMap.M4_PERSISTENT_SEPARATOR_WIDTH
-const REPELLED_BORDER_COLOR := WorldMap.REPELLED_BORDER_COLOR
 const RESOURCE_BLIND_BOX_COLOR := WorldMap.RESOURCE_BLIND_BOX_COLOR
 const RESOURCE_BLIND_BOX_OUTLINE := WorldMap.RESOURCE_BLIND_BOX_OUTLINE
 const RESOURCE_BLIND_BOX_OUTLINE_WIDTH := WorldMap.RESOURCE_BLIND_BOX_OUTLINE_WIDTH
-const TIER_BORDER_COLOR := WorldMap.TIER_BORDER_COLOR
-const TIER_BORDER_WIDTHS := WorldMap.TIER_BORDER_WIDTHS
 const TILE_SIZE := WorldMap.TILE_SIZE
-const UNIT_COLOR := WorldMap.UNIT_COLOR
-const UNIT_MARGIN := WorldMap.UNIT_MARGIN
-const UNIT_PLAYER_RING_WIDTH := WorldMap.UNIT_PLAYER_RING_WIDTH
-const UNIT_SHADOW_COLOR := WorldMap.UNIT_SHADOW_COLOR
 
 # ─────────────────────────────────────────
 # 注入引用（WorldMap._init_subsystems 经 setup 注入）
@@ -291,18 +277,18 @@ func _draw_level_slots() -> void:
 		if DayNightState.is_night(_turn_manager) and (not _battle_force_day) and _world_view.is_in_fog(center_world):
 			continue
 
-		var slot_color: Color = ENEMY_SLOT_COLOR
+		var slot_color: Color = UNIT_ENEMY_CFG.enemy_slot_color
 		if is_defeated:
 			# 已击败：变暗显示
-			slot_color = slot_color.darkened(CHALLENGED_DIM)
+			slot_color = slot_color.darkened(UNIT_ENEMY_CFG.challenged_dim)
 		elif is_repelled:
 			# 已击退冷却中：半透明显示
 			slot_color = Color(slot_color.r, slot_color.g, slot_color.b, 0.4)
 
 		# 菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；击败 / 击退态用统一 MAP_BASE_CFG.slot_margin
 		var rect_margin: int = MAP_BASE_CFG.slot_margin
-		if not is_repelled and not is_defeated and ENEMY_TIER_SLOT_MARGINS.has(level.tier):
-			rect_margin = ENEMY_TIER_SLOT_MARGINS[level.tier]
+		if not is_repelled and not is_defeated and UNIT_ENEMY_CFG.tier_slot_margins.has(level.tier):
+			rect_margin = UNIT_ENEMY_CFG.tier_slot_margins[level.tier]
 		var slot_rect: Rect2 = Rect2(
 			pos.x * TILE_SIZE + rect_margin,
 			pos.y * TILE_SIZE + rect_margin,
@@ -313,11 +299,11 @@ func _draw_level_slots() -> void:
 		_draw_diamond(slot_rect, slot_color)
 
 		# 描边 + 米字（仅活跃状态）
-		var border_color: Color = REPELLED_BORDER_COLOR
-		var border_width: float = TIER_BORDER_WIDTHS.get(1, 2.5)
+		var border_color: Color = UNIT_ENEMY_CFG.repelled_border_color
+		var border_width: float = UNIT_ENEMY_CFG.tier_border_widths.get(1, 2.5)
 		if not is_repelled and not is_defeated:
-			border_color = TIER_BORDER_COLOR
-			border_width = TIER_BORDER_WIDTHS.get(level.tier, 2.5)
+			border_color = UNIT_ENEMY_CFG.tier_border_color
+			border_width = UNIT_ENEMY_CFG.tier_border_widths.get(level.tier, 2.5)
 		_draw_diamond(slot_rect, border_color, false, border_width)
 		if not is_repelled and not is_defeated:
 			_draw_enemy_tier_pattern(slot_rect, level.tier)
@@ -629,7 +615,7 @@ func _draw_enemy_move_marker() -> void:
 		TILE_SIZE - glow_margin * 2 - 1,
 		TILE_SIZE - glow_margin * 2 - 1
 	)
-	_draw_diamond(glow_rect, ENEMY_GLOW_COLOR)
+	_draw_diamond(glow_rect, UNIT_ENEMY_CFG.enemy_glow_color)
 	# 核心菱形标记（标准大小，亮红橙色）
 	var rect: Rect2 = Rect2(
 		enemy_vis_pos.x - TILE_SIZE / 2 + MAP_BASE_CFG.slot_margin,
@@ -637,9 +623,9 @@ func _draw_enemy_move_marker() -> void:
 		TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1,
 		TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1
 	)
-	_draw_diamond(rect, ENEMY_MOVE_COLOR)
+	_draw_diamond(rect, UNIT_ENEMY_CFG.enemy_move_color)
 	# 菱形边框描边
-	_draw_diamond(rect, ENEMY_BORDER_COLOR, false, 1.0)
+	_draw_diamond(rect, UNIT_ENEMY_CFG.enemy_border_color, false, 1.0)
 
 ## 绘制菱形（以 Rect2 区域的中心为菱形中心，四个顶点取矩形边中点）
 ## filled=true 时填充，filled=false 时仅描边
@@ -669,7 +655,7 @@ func _draw_diamond(rect: Rect2, color: Color, filled: bool = true, width: float 
 
 ## 绘制敌方 tier 米字小菱形图形（按 tier 累积点亮）
 ## 弱档（tier 0）特殊处理：单菱形**居外菱形正中**，与外菱形已显著缩小（67% 占格）共同强化"弱"语义
-## 中/强/超档：按米字 4 方向（上/下/左/右）累积点亮，每个小菱形为外菱形 ENEMY_TIER_DOT_SIZE_RATIO 倍尺寸
+## 中/强/超档：按米字 4 方向（上/下/左/右）累积点亮，每个小菱形为外菱形 UNIT_ENEMY_CFG.tier_dot_size_ratio 倍尺寸
 ##
 ## 点亮策略：
 ##   tier 0 弱：1 个**居中**小菱形 —— "小且单点居中"语义
@@ -687,13 +673,13 @@ func _draw_enemy_tier_pattern(outer_rect: Rect2, tier: int) -> void:
 	var w: float = outer_rect.size.x
 	var h: float = outer_rect.size.y
 	# 小菱形尺寸 + 半边距
-	var dot_size: Vector2 = Vector2(w, h) * ENEMY_TIER_DOT_SIZE_RATIO
+	var dot_size: Vector2 = Vector2(w, h) * UNIT_ENEMY_CFG.tier_dot_size_ratio
 	var dot_half: Vector2 = dot_size * 0.5
 	# 弱档：居外菱形正中
 	if tier == 0:
 		var center_pt: Vector2 = Vector2(px + w / 2.0, py + h / 2.0)
 		var center_rect: Rect2 = Rect2(center_pt - dot_half, dot_size)
-		_draw_diamond(center_rect, ENEMY_TIER_DOT_COLOR)
+		_draw_diamond(center_rect, UNIT_ENEMY_CFG.tier_dot_color)
 		return
 	# 中/强/超：米字 4 方向中心点（上/下偏移 h/4，左/右偏移 w/4）
 	var top_center: Vector2 = Vector2(px + w / 2.0, py + h / 4.0)
@@ -723,7 +709,7 @@ func _draw_enemy_tier_pattern(outer_rect: Rect2, tier: int) -> void:
 		return
 	# 每个小菱形：金色实心填充，无描边
 	for r in lit:
-		_draw_diamond(r, ENEMY_TIER_DOT_COLOR)
+		_draw_diamond(r, UNIT_ENEMY_CFG.tier_dot_color)
 
 
 ## UI 重构步骤 9：地形亮度噪声辅助函数
@@ -800,17 +786,17 @@ func _draw_slot_label(center_px: Vector2, text: String, color: Color) -> void:
 ##   - 圆形契合"棋子"语义
 func _draw_unit_marker() -> void:
 	var center: Vector2 = Vector2(_unit_visual_pos.x, _unit_visual_pos.y)
-	var radius: float = float(TILE_SIZE - UNIT_MARGIN * 2) * 0.5
+	var radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
 
 	# 投影：右下偏移 2px、半透明黑；圆形棋子感
-	draw_circle(center + Vector2(2, 2), radius, UNIT_SHADOW_COLOR)
+	draw_circle(center + Vector2(2, 2), radius, UNIT_ENEMY_CFG.unit_shadow_color)
 
 	# 玩家蓝外环（实色大圆）—— 与玩家建筑外环同色，统一"我方"语义
 	var ring_color: Color = M4_FACTION_COLORS[Faction.PLAYER] as Color
 	draw_circle(center, radius, ring_color)
 
 	# 白色内圆（半径减环宽）—— 在地形上保留对比度，并承载文字
-	draw_circle(center, radius - UNIT_PLAYER_RING_WIDTH, UNIT_COLOR)
+	draw_circle(center, radius - UNIT_ENEMY_CFG.unit_player_ring_width, UNIT_ENEMY_CFG.unit_color)
 
 	# "我"字居中
 	if _label_font != null:
@@ -938,9 +924,9 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 	)
 	if _battle_view.unit_visual_offsets.has(u):
 		center += _battle_view.unit_visual_offsets[u] as Vector2
-	var radius: float = float(TILE_SIZE - UNIT_MARGIN * 2) * 0.5
+	var radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
 	# 投影
-	draw_circle(center + Vector2(2, 2), radius, UNIT_SHADOW_COLOR)
+	draw_circle(center + Vector2(2, 2), radius, UNIT_ENEMY_CFG.unit_shadow_color)
 	# 阵营色填充
 	# 入口 1.2 补充需求 2：玩家方已行动单位用 VISUAL_CFG.player_acted_color（灰）代替阵营色
 	# 玩家回合开始 reset_turn_flags 后 has_attacked = false → 自动恢复阵营色
@@ -983,7 +969,7 @@ func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
 	)
 	if _battle_view.unit_visual_offsets.has(u):
 		center += _battle_view.unit_visual_offsets[u] as Vector2
-	var radius: float = float(TILE_SIZE - UNIT_MARGIN * 2) * 0.5
+	var radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
 	var fill: Color = M4_FACTION_COLORS.get(u.owner_faction, Color.MAGENTA) as Color
 	fill.a *= alpha
 	draw_circle(center, radius, fill)
