@@ -65,49 +65,8 @@ const CONFIG_BATTLE_UNIT: String = "res://assets/config/battle_unit_config.csv"
 ## 入口 4 第 1 份 MVP（地格放大与镜头）：48 → 72；基线分辨率 1280×720 下单屏 17×10 格
 const TILE_SIZE: int = 72
 
-## 各地形渲染颜色（纯色块占位）
-## key 使用整数字面量对应 MapSchema.TerrainType 枚举值
-## Civ 风格地形重构（B-α 沼泽褐）：地形整体去饱和退到背景层，把色相焦点让给势力色
-##   设计原则：地形 = 安静的自然基调；势力色（蓝/红/黄）独占高饱和色相
-##   MOUNTAIN 冷灰褐；HIGHLAND/FLATLAND 同绿系靠明度分层并大幅去饱和；
-##   LOWLAND 改用沼泽褐，色相完全脱离玩家青蓝（根治洼地蓝 vs 玩家蓝撞色）
-const TERRAIN_COLORS: Dictionary = {
-	0: Color(0.29, 0.25, 0.20),  ## MOUNTAIN：冷灰褐：高山  #4A3F33（保留：本就低饱和中性）
-	1: Color(0.72, 0.76, 0.61),  ## HIGHLAND：暖灰绿：高地  #B8C29B（原 #9BC262 大幅去饱和，明度保留）
-	2: Color(0.58, 0.70, 0.53),  ## FLATLAND：淡草绿：平地  #93B388（原 #6EA577 去饱和，占格最多须最安静）
-	3: Color(0.35, 0.30, 0.23),  ## LOWLAND：沼泽褐：洼地  #5A4D3A（原 #3C7AAC，色相 180° 旋至褐系，与玩家蓝彻底脱钩）
-}
-
-## Civ 风格地形重构：地形轻量明暗噪声（步骤 9 延续）
-## 每格基于 (x, y) 哈希给地形色加 ±4% 亮度微扰，避免整齐色块的表格感
-## 噪声幅度从 0.05 降到 0.04 —— 地形去饱和后相对噪声更显眼，略降以保持安静
-## 同 seed 每格噪声一致，不闪烁；不引入真实贴图语义
-const TERRAIN_NOISE_RANGE: float = 0.04
-
-## Slot 标记颜色（小方块叠加在地形色上）
-## key 使用整数字面量对应 MapSchema.SlotType 枚举值（非敌方/资源用途的兜底色）
-const SLOT_COLORS: Dictionary = {
-	1: Color(1.00, 0.85, 0.00),  ## RESOURCE：金色  #FFD900
-	2: Color(0.80, 0.40, 1.00),  ## FUNCTION：紫色（兜底，敌方格已覆盖为 ENEMY_SLOT_COLOR）
-	3: Color(1.00, 0.30, 0.30),  ## SPAWN：红色  #FF4D4D
-}
-
-## Slot 标记在格内的边距（像素）
-const SLOT_MARGIN: int = 10
-
-## 可达范围高亮色（半透明白色叠加）
-## 沿革：
-##   - UI 重构步骤 7：从 alpha 0.25 降到 0.08（弱化整格铺色），由边界描边主导识别
-##   - Civ 化阶段 A 后续：势力范围升级为"硬外缘 alpha 1.0 宽 3.0 + 内向渐变 0.22/0.12/0.05"
-##     视觉强度颠倒——"立即操作"的可达范围被"长期状态"的势力范围压在背景层
-##   - 当前：白色双通道全面加强，恢复"立即操作 > 长期状态"信息层级
-##     填充 0.08 → 0.18；描边色浅蓝白 #B8D9FF → 纯白；alpha 0.70 → 1.0；宽 2.0 → 3.5（略超势力范围 3.0）
-const REACHABLE_COLOR: Color = Color(1.0, 1.0, 1.0, 0.18)
-
-## 可达范围边界描边（合集化 —— 4 邻居不在集合内的方向画外边）
-## 纯白 alpha 1.0 + 宽 3.5，与势力色（青蓝 / 玫红）色相完全脱钩，强度压过势力范围一档
-const REACHABLE_BORDER_COLOR: Color = Color(1.0, 1.0, 1.0, 1.0)    ## #FFFFFF alpha 1.0
-const REACHABLE_BORDER_WIDTH: float = 3.5
+## 地形 / 槽位 / 可达性高亮渲染常量 → MVP-B.2 阶段 1 迁移到 MAP_BASE_CFG（见本文件下方 Resource preload 段）
+## 设计要点（地形 Civ 风格去饱和 / 可达性"立即操作 > 长期状态"层级）保留在 map_base_config.gd schema 内
 
 ## 单位标记内底色（白色，承载"我"字 + 在地形上保留对比度）
 const UNIT_COLOR: Color = Color(1.0, 1.0, 1.0)
@@ -197,19 +156,7 @@ const ENEMY_GLOW_COLOR: Color = Color(1.0, 0.30, 0.15, 0.35)
 ## 击退冷却关卡边框颜色（暗淡）
 const REPELLED_BORDER_COLOR: Color = Color(0.6, 0.3, 0.3, 0.5)
 
-## 地图标签字号（绑定地格视觉，随 TILE_SIZE 等比放大）
-## 入口 4 MVP：12 → 18（TILE_SIZE 48→72，比例 1.5）
-const LABEL_FONT_SIZE: int = 18
-
-## 持久 slot 等级角标字号（右上角 L0/1/2/3，小字与主 ID 分离）
-## 入口 4 MVP：9 → 14（按 TILE_SIZE 比例 1.5 取整）
-const LEVEL_BADGE_FONT_SIZE: int = 14
-
-## 单位逐格移动动画耗时（秒/格）
-const MOVE_STEP_DURATION: float = 0.1
-
-## 醒目提示显示时长（秒）
-const NOTICE_DURATION: float = 2.5
+## 字号 / 单位移动 / 醒目提示时长 → MVP-B.2 阶段 1 迁移到 MAP_BASE_CFG（见本文件下方 Resource preload 段）
 
 ## 入口 4 MVP（2026-05-09 跑测补丁）：探索态 HUD 底栏占用预留
 ## 修复：玩家贴地图底边时，HudBar 浮在地图上方 → 队长视觉被 HUD 遮挡
@@ -576,16 +523,20 @@ const M4_PERSISTENT_SEPARATOR_WIDTH: int = 1                      ## 分离线�
 const M4_PERSISTENT_INNER_BG: Color = Color(0.90, 0.88, 0.83)     ## 内底米白  #E6E0D4
 const M4_CORE_TOWN_EMBLEM_SIZE: int = 8                           ## 核心城镇下方徽记（金色小菱形）边长 px
 # ─────────────────────────────────────
-# 战斗调参 Resource（MVP-B 阶段 3+4 迁出）
-# WorldMap / WorldMapRenderer / BattleAnimDirector 各自 preload 同一份 .tres（独立访问无中转）
+# 调参 Resource（MVP-B 阶段 3+4 + MVP-B.2 阶段 1 迁出）
+# 使用方各自 preload 同一份 .tres（独立访问无中转）
 # 编辑器内双击 .tres 在 inspector 调字段
 # ─────────────────────────────────────
 
-## 战斗动画（阶段 3：22 字段 = 11 普通 + 4 飘字色 + 7 致命一击）
+## 战斗动画（MVP-B 阶段 3：22 字段 = 11 普通 + 4 飘字色 + 7 致命一击）
 const ANIM_CFG: BattleAnimConfig = preload("res://assets/config/battle_anim_config.tres")
 
-## 战斗视觉（阶段 4：31 字段 = zoom/dim/tilt 6 + arena/range 6 + actor 2 + HP 8 + troop 1 + counter 6 + 其他 2）
+## 战斗视觉（MVP-B 阶段 4：31 字段 = zoom/dim/tilt 6 + arena/range 6 + actor 2 + HP 8 + troop 1 + counter 6 + 其他 2）
 const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
+
+## 地图基础（MVP-B.2 阶段 1：11 字段 = 地形 2 + 槽位 2 + 可达性 3 + 字号 2 + 时长 2）
+## 跨 3 文件共享：WorldMap.gd / WorldMapRenderer.gd / EnemyMovement.gd 各自独立 preload
+const MAP_BASE_CFG: MapBaseConfig = preload("res://assets/config/map_base_config.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -1392,13 +1343,16 @@ func _show_defeat_text() -> void:
 		_notice_bar.visible = true
 
 ## 显示醒目提示文字（短暂显示后自动隐藏）
-func _show_notice(text: String, duration: float = NOTICE_DURATION) -> void:
+## MVP-B.2 阶段 1：default 改 sentinel -1.0 = 用 MAP_BASE_CFG.notice_duration
+## （GDScript default 参数不能是 Resource 属性访问，必须编译期常量）
+func _show_notice(text: String, duration: float = -1.0) -> void:
 	if _finish_label == null:
 		return
 	_finish_label.text = text
 	if _notice_bar != null:
 		_notice_bar.visible = true
-	var timer: SceneTreeTimer = get_tree().create_timer(duration)
+	var effective_duration: float = MAP_BASE_CFG.notice_duration if duration < 0.0 else duration
+	var timer: SceneTreeTimer = get_tree().create_timer(effective_duration)
 	timer.timeout.connect(_on_notice_timeout)
 
 ## 醒目提示超时回调
@@ -1527,7 +1481,7 @@ func _start_move_animation(path: Array[Vector2i]) -> void:
 	for i in range(1, path.size()):
 		var target_pixel: Vector2 = _grid_to_pixel_center(path[i])
 		# 每步动画：移动视觉位置到下一格中心
-		_move_tween.tween_property(self, "_unit_visual_pos", target_pixel, MOVE_STEP_DURATION)
+		_move_tween.tween_property(self, "_unit_visual_pos", target_pixel, MAP_BASE_CFG.move_step_duration)
 		# 每步回调：同步 Camera 位置并重绘
 		_move_tween.tween_callback(_on_move_step)
 

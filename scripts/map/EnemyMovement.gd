@@ -9,8 +9,8 @@ signal phase_finished
 ## 请求父节点重绘（动画帧更新）
 signal redraw_requested
 
-## 逐格动画速度（秒/格）
-const MOVE_STEP_DURATION: float = 0.1
+## 逐格动画速度 → MVP-B.2 阶段 1 迁入 MAP_BASE_CFG.move_step_duration（顺手消除与 WorldMap.gd 的双源隐患）
+const MAP_BASE_CFG: MapBaseConfig = preload("res://assets/config/map_base_config.tres")
 ## 视口跳过判定的软边界（单位：格）
 ## 视口可见矩形向外扩展该格数后再做"全路径在外"判定，避免边缘格"中心刚好出框"被误跳过造成视觉断层
 ## 0 = 严格按视口边界；1 = 留 1 格缓冲（推荐默认）
@@ -456,7 +456,7 @@ func _start_animation(path: Array[Vector2i]) -> void:
 	_move_tween = create_tween()
 	for i in range(1, path.size()):
 		var target_pixel: Vector2 = _grid_to_pixel_center(path[i])
-		_move_tween.tween_property(self, "_visual_pos", target_pixel, MOVE_STEP_DURATION)
+		_move_tween.tween_property(self, "_visual_pos", target_pixel, MAP_BASE_CFG.move_step_duration)
 		_move_tween.tween_callback(func() -> void: redraw_requested.emit())
 
 	_move_tween.tween_callback(_on_move_finished)

@@ -24,9 +24,10 @@ extends Node2D
 # ─────────────────────────────────────────
 # WorldMap 常量别名（const 集中化 → P3-2；本批先别名引用，函数体可原样搬迁）
 # ─────────────────────────────────────────
-## MVP-B 阶段 4：战斗视觉 27 个原 BATTLE_* 桥接 const 全部删除，改为本类自己 preload
-## 同一份 .tres（与 WorldMap / BattleAnimDirector 一致），preload 是 Godot 资源单例无内存损耗
+## MVP-B 阶段 4 / MVP-B.2 阶段 1：Resource 调参 preload（独立访问，不走 WorldMap const 桥接中转）
 const VISUAL_CFG: BattleVisualConfig = preload("res://assets/config/battle_visual_config.tres")
+const MAP_BASE_CFG: MapBaseConfig = preload("res://assets/config/map_base_config.tres")
+## 剩余桥接 const（阶段 2/3/4 待迁）—— 与 WorldMap 顶部仍存活的 const 一一对应
 const CHALLENGED_DIM := WorldMap.CHALLENGED_DIM
 const ENEMY_BORDER_COLOR := WorldMap.ENEMY_BORDER_COLOR
 const ENEMY_GLOW_COLOR := WorldMap.ENEMY_GLOW_COLOR
@@ -35,8 +36,6 @@ const ENEMY_SLOT_COLOR := WorldMap.ENEMY_SLOT_COLOR
 const ENEMY_TIER_DOT_COLOR := WorldMap.ENEMY_TIER_DOT_COLOR
 const ENEMY_TIER_DOT_SIZE_RATIO := WorldMap.ENEMY_TIER_DOT_SIZE_RATIO
 const ENEMY_TIER_SLOT_MARGINS := WorldMap.ENEMY_TIER_SLOT_MARGINS
-const LABEL_FONT_SIZE := WorldMap.LABEL_FONT_SIZE
-const LEVEL_BADGE_FONT_SIZE := WorldMap.LEVEL_BADGE_FONT_SIZE
 const M4_CORE_TOWN_BORDER := WorldMap.M4_CORE_TOWN_BORDER
 const M4_CORE_TOWN_EMBLEM_SIZE := WorldMap.M4_CORE_TOWN_EMBLEM_SIZE
 const M4_FACTION_COLORS := WorldMap.M4_FACTION_COLORS
@@ -49,17 +48,10 @@ const M4_PERSISTENT_INNER_BG := WorldMap.M4_PERSISTENT_INNER_BG
 const M4_PERSISTENT_RING_WIDTH := WorldMap.M4_PERSISTENT_RING_WIDTH
 const M4_PERSISTENT_SEPARATOR_COLOR := WorldMap.M4_PERSISTENT_SEPARATOR_COLOR
 const M4_PERSISTENT_SEPARATOR_WIDTH := WorldMap.M4_PERSISTENT_SEPARATOR_WIDTH
-const REACHABLE_BORDER_COLOR := WorldMap.REACHABLE_BORDER_COLOR
-const REACHABLE_BORDER_WIDTH := WorldMap.REACHABLE_BORDER_WIDTH
-const REACHABLE_COLOR := WorldMap.REACHABLE_COLOR
 const REPELLED_BORDER_COLOR := WorldMap.REPELLED_BORDER_COLOR
 const RESOURCE_BLIND_BOX_COLOR := WorldMap.RESOURCE_BLIND_BOX_COLOR
 const RESOURCE_BLIND_BOX_OUTLINE := WorldMap.RESOURCE_BLIND_BOX_OUTLINE
 const RESOURCE_BLIND_BOX_OUTLINE_WIDTH := WorldMap.RESOURCE_BLIND_BOX_OUTLINE_WIDTH
-const SLOT_COLORS := WorldMap.SLOT_COLORS
-const SLOT_MARGIN := WorldMap.SLOT_MARGIN
-const TERRAIN_COLORS := WorldMap.TERRAIN_COLORS
-const TERRAIN_NOISE_RANGE := WorldMap.TERRAIN_NOISE_RANGE
 const TIER_BORDER_COLOR := WorldMap.TIER_BORDER_COLOR
 const TIER_BORDER_WIDTHS := WorldMap.TIER_BORDER_WIDTHS
 const TILE_SIZE := WorldMap.TILE_SIZE
@@ -145,7 +137,7 @@ func _draw() -> void:
 	# 第 1.75 层：敌方威胁圈（入口 1.1；半透明红色叠层，曼哈顿圆 ≤ _battle_trigger_range）
 	# 设计依据：tile-advanture-design/战斗信息传达_探索阶段_MVP.md §5 改动 1
 	# 渲染顺序在持久 slot 影响范围之后、持久 slot 本体之前，确保后续玩家移动范围
-	# （REACHABLE_COLOR 白 alpha 0.18）压在威胁圈（红 alpha 0.20）之上时自然叠加为粉色，
+	# （MAP_BASE_CFG.reachable_color 白 alpha 0.18）压在威胁圈（红 alpha 0.20）之上时自然叠加为粉色，
 	# 保留"既能去又危险"的可识别性
 	_draw_enemy_threat_zones()
 
@@ -158,7 +150,7 @@ func _draw() -> void:
 
 	# 第二层：可达范围高亮
 	# UI 重构步骤 7：可达范围双通道渲染
-	#   - 整格铺 REACHABLE_COLOR（alpha 0.08，轻量背景提示）
+	#   - 整格铺 MAP_BASE_CFG.reachable_color（alpha 0.08，轻量背景提示）
 	#   - 外边界描边（只画邻居不在集合内的那条边），蓝白冷调
 	# 视觉效果：弱铺色提供"整体可达感"，描边提供"清晰边界"
 	for tile_pos in _reachable_tiles:
@@ -171,7 +163,7 @@ func _draw() -> void:
 			TILE_SIZE - 1,
 			TILE_SIZE - 1
 		)
-		draw_rect(rect, REACHABLE_COLOR)
+		draw_rect(rect, MAP_BASE_CFG.reachable_color)
 
 		# 边界描边：4 邻居中不在集合内的方向画一条边
 		var px: float = float(pos.x * TILE_SIZE)
@@ -180,19 +172,19 @@ func _draw() -> void:
 		# 上邻
 		if not _reachable_tiles.has(Vector2i(pos.x, pos.y - 1)):
 			draw_line(Vector2(px, py), Vector2(px + pw, py),
-				REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+				MAP_BASE_CFG.reachable_border_color, MAP_BASE_CFG.reachable_border_width)
 		# 下邻
 		if not _reachable_tiles.has(Vector2i(pos.x, pos.y + 1)):
 			draw_line(Vector2(px, py + pw), Vector2(px + pw, py + pw),
-				REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+				MAP_BASE_CFG.reachable_border_color, MAP_BASE_CFG.reachable_border_width)
 		# 左邻
 		if not _reachable_tiles.has(Vector2i(pos.x - 1, pos.y)):
 			draw_line(Vector2(px, py), Vector2(px, py + pw),
-				REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+				MAP_BASE_CFG.reachable_border_color, MAP_BASE_CFG.reachable_border_width)
 		# 右邻
 		if not _reachable_tiles.has(Vector2i(pos.x + 1, pos.y)):
 			draw_line(Vector2(px + pw, py), Vector2(px + pw, py + pw),
-				REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+				MAP_BASE_CFG.reachable_border_color, MAP_BASE_CFG.reachable_border_width)
 
 	# 第三层：敌方关卡移动动画标记
 	if _enemy_movement.get_moving_level() != null:
@@ -227,7 +219,7 @@ func _draw() -> void:
 ## 绘制单格地形色块及 Slot 标记
 func _draw_tile(x: int, y: int) -> void:
 	var terrain: MapSchema.TerrainType = _schema.get_terrain(x, y)
-	var base_color: Color = TERRAIN_COLORS.get(terrain, Color.MAGENTA) as Color
+	var base_color: Color = MAP_BASE_CFG.terrain_colors.get(terrain, Color.MAGENTA) as Color
 
 	# UI 重构步骤 9：基于 (x, y) 哈希给地形加轻量亮度噪声 ±5%
 	# 同 seed 结果一致（不闪烁），只为打破整齐色块的"表格感"
@@ -258,12 +250,12 @@ func _draw_tile(x: int, y: int) -> void:
 		# 敌方关卡格本格在此层不画（由 _draw_level_slots 在更高层处理）
 		if _world_view.get_level_at(pos) != null:
 			return
-		var slot_color: Color = SLOT_COLORS.get(slot, Color.WHITE) as Color
+		var slot_color: Color = MAP_BASE_CFG.slot_colors.get(slot, Color.WHITE) as Color
 		var slot_rect: Rect2 = Rect2(
-			x * TILE_SIZE + SLOT_MARGIN,
-			y * TILE_SIZE + SLOT_MARGIN,
-			TILE_SIZE - SLOT_MARGIN * 2 - 1,
-			TILE_SIZE - SLOT_MARGIN * 2 - 1
+			x * TILE_SIZE + MAP_BASE_CFG.slot_margin,
+			y * TILE_SIZE + MAP_BASE_CFG.slot_margin,
+			TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1,
+			TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1
 		)
 		draw_rect(slot_rect, slot_color)
 
@@ -307,8 +299,8 @@ func _draw_level_slots() -> void:
 			# 已击退冷却中：半透明显示
 			slot_color = Color(slot_color.r, slot_color.g, slot_color.b, 0.4)
 
-		# 菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；击败 / 击退态用统一 SLOT_MARGIN
-		var rect_margin: int = SLOT_MARGIN
+		# 菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；击败 / 击退态用统一 MAP_BASE_CFG.slot_margin
+		var rect_margin: int = MAP_BASE_CFG.slot_margin
 		if not is_repelled and not is_defeated and ENEMY_TIER_SLOT_MARGINS.has(level.tier):
 			rect_margin = ENEMY_TIER_SLOT_MARGINS[level.tier]
 		var slot_rect: Rect2 = Rect2(
@@ -347,10 +339,10 @@ func _draw_resource_slots() -> void:
 		var p: Vector2i = pos as Vector2i
 
 		var rs_rect: Rect2 = Rect2(
-			p.x * TILE_SIZE + SLOT_MARGIN,
-			p.y * TILE_SIZE + SLOT_MARGIN,
-			TILE_SIZE - SLOT_MARGIN * 2 - 1,
-			TILE_SIZE - SLOT_MARGIN * 2 - 1
+			p.x * TILE_SIZE + MAP_BASE_CFG.slot_margin,
+			p.y * TILE_SIZE + MAP_BASE_CFG.slot_margin,
+			TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1,
+			TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1
 		)
 		# 箱体：浅灰底 + 白描边 + 内部 "?"
 		draw_rect(rs_rect, RESOURCE_BLIND_BOX_COLOR)
@@ -640,10 +632,10 @@ func _draw_enemy_move_marker() -> void:
 	_draw_diamond(glow_rect, ENEMY_GLOW_COLOR)
 	# 核心菱形标记（标准大小，亮红橙色）
 	var rect: Rect2 = Rect2(
-		enemy_vis_pos.x - TILE_SIZE / 2 + SLOT_MARGIN,
-		enemy_vis_pos.y - TILE_SIZE / 2 + SLOT_MARGIN,
-		TILE_SIZE - SLOT_MARGIN * 2 - 1,
-		TILE_SIZE - SLOT_MARGIN * 2 - 1
+		enemy_vis_pos.x - TILE_SIZE / 2 + MAP_BASE_CFG.slot_margin,
+		enemy_vis_pos.y - TILE_SIZE / 2 + MAP_BASE_CFG.slot_margin,
+		TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1,
+		TILE_SIZE - MAP_BASE_CFG.slot_margin * 2 - 1
 	)
 	_draw_diamond(rect, ENEMY_MOVE_COLOR)
 	# 菱形边框描边
@@ -735,19 +727,19 @@ func _draw_enemy_tier_pattern(outer_rect: Rect2, tier: int) -> void:
 
 
 ## UI 重构步骤 9：地形亮度噪声辅助函数
-## 基于 (x, y) 的确定性哈希返回 ±TERRAIN_NOISE_RANGE 范围内的亮度偏移
+## 基于 (x, y) 的确定性哈希返回 ±MAP_BASE_CFG.terrain_noise_range 范围内的亮度偏移
 ## 同 seed 结果一致，不闪烁；目的只为打破"整齐表格感"
 func _terrain_brightness_noise(x: int, y: int) -> float:
 	# 素数混合 → [0, 100) 整数 → 归一化到 [-1, 1]
 	var h: int = (x * 73856093) ^ (y * 19349663)
 	var bucket: int = absi(h) % 100
 	var normalized: float = (float(bucket) / 50.0) - 1.0    # [-1, 1]
-	return normalized * TERRAIN_NOISE_RANGE
+	return normalized * MAP_BASE_CFG.terrain_noise_range
 
 
 ## 绘制持久 slot 等级角标（格子右上角小字 "L0/1/2/3"）
 ## grid_pos —— 该 slot 的格坐标，函数内自行算像素偏移
-## 字体使用 LEVEL_BADGE_FONT_SIZE（9px）；颜色与主字同深色以保持一致
+## 字体使用 MAP_BASE_CFG.level_badge_font_size（9px）；颜色与主字同深色以保持一致
 ## 位置：格子右上距边 2-3px，不覆盖势力金边 / 外框
 func _draw_level_badge(grid_pos: Vector2i, level: int) -> void:
 	if _label_font == null:
@@ -756,7 +748,7 @@ func _draw_level_badge(grid_pos: Vector2i, level: int) -> void:
 	# 角标宽度估算（英文+数字约为字号 × 字符数 × 0.5）；右上靠边距 3px
 	var badge_px: Vector2 = Vector2(
 		grid_pos.x * TILE_SIZE + TILE_SIZE - 3,
-		grid_pos.y * TILE_SIZE + 3 + LEVEL_BADGE_FONT_SIZE
+		grid_pos.y * TILE_SIZE + 3 + MAP_BASE_CFG.level_badge_font_size
 	)
 	# 右对齐：draw_string 的起点是 baseline-left；向左偏移一个字串宽度
 	# 无需精确文本宽度测量——用负 offset 让 CENTER 区域右对齐到 badge_px
@@ -766,7 +758,7 @@ func _draw_level_badge(grid_pos: Vector2i, level: int) -> void:
 		text,
 		HORIZONTAL_ALIGNMENT_RIGHT,
 		16,
-		LEVEL_BADGE_FONT_SIZE,
+		MAP_BASE_CFG.level_badge_font_size,
 		Color(0.05, 0.05, 0.05)
 	)
 
@@ -776,8 +768,8 @@ func _draw_level_badge(grid_pos: Vector2i, level: int) -> void:
 func _draw_slot_label(center_px: Vector2, text: String, color: Color) -> void:
 	if _label_font == null:
 		return
-	var ascent: float = _label_font.get_ascent(LABEL_FONT_SIZE)
-	var descent: float = _label_font.get_descent(LABEL_FONT_SIZE)
+	var ascent: float = _label_font.get_ascent(MAP_BASE_CFG.label_font_size)
+	var descent: float = _label_font.get_descent(MAP_BASE_CFG.label_font_size)
 	# 基线 = 中心点 + (ascent - descent) / 2，使文字视觉上精确居中
 	var baseline_y: float = center_px.y + (ascent - descent) / 2.0
 	# 文字区域从中心点左侧半格开始，宽度一格，CENTER 对齐实现水平居中
@@ -788,7 +780,7 @@ func _draw_slot_label(center_px: Vector2, text: String, color: Color) -> void:
 		text,
 		HORIZONTAL_ALIGNMENT_CENTER,
 		TILE_SIZE,
-		LABEL_FONT_SIZE,
+		MAP_BASE_CFG.label_font_size,
 		color
 	)
 
@@ -875,16 +867,16 @@ func _draw_battle_overlay() -> void:
 			var pw: float = float(TILE_SIZE)
 			if not reach_set.has(Vector2i(pos.x, pos.y - 1)):
 				draw_line(Vector2(px, py), Vector2(px + pw, py),
-					REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+					MAP_BASE_CFG.reachable_border_color, MAP_BASE_CFG.reachable_border_width)
 			if not reach_set.has(Vector2i(pos.x, pos.y + 1)):
 				draw_line(Vector2(px, py + pw), Vector2(px + pw, py + pw),
-					REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+					MAP_BASE_CFG.reachable_border_color, MAP_BASE_CFG.reachable_border_width)
 			if not reach_set.has(Vector2i(pos.x - 1, pos.y)):
 				draw_line(Vector2(px, py), Vector2(px, py + pw),
-					REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+					MAP_BASE_CFG.reachable_border_color, MAP_BASE_CFG.reachable_border_width)
 			if not reach_set.has(Vector2i(pos.x + 1, pos.y)):
 				draw_line(Vector2(px + pw, py), Vector2(px + pw, py + pw),
-					REACHABLE_BORDER_COLOR, REACHABLE_BORDER_WIDTH)
+					MAP_BASE_CFG.reachable_border_color, MAP_BASE_CFG.reachable_border_width)
 		# 可攻击目标格（红 alpha 0.28 填充 + 4 邻外边界黄描边）
 		# 与移动范围白描边对称的双通道风格；黄描边避免与敌方阵营红 + 红填充叠加导致边界模糊
 		var targets: Array[BattleUnit] = _battle_session.get_attackable_targets()
@@ -1006,7 +998,7 @@ func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
 
 ## 兵种字符：单位中心绘制 "剑/弓/枪/骑/盾" 单字（取自 TroopData.TROOP_TYPE_NAMES 首字）
 ## 设计依据：tile-advanture-design/战斗信息传达_战斗内_MVP.md §8 视觉规格基准
-##   - 字号 LABEL_FONT_SIZE=12（落在设计要求 12-14 区间）
+##   - 字号 MAP_BASE_CFG.label_font_size=12（落在设计要求 12-14 区间）
 ##   - 颜色白 Color(1,1,1) 与单位阵营色填充对比
 ##   - 玩家方 / 敌方均显示
 func _draw_battle_troop_glyph(center: Vector2, troop: TroopData) -> void:

@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="MapBaseConfig" load_steps=2 format=3]
+
+; MVP-B.2 阶段 1：地图基础视觉与节奏调参 Resource 实例
+; schema 在 res://scripts/config/map_base_config.gd
+; 字段从 WorldMap.gd 顶部 11 个 const 迁出；编辑器内双击本文件在 inspector 调参
+; 跨 3 文件共享：WorldMap.gd / WorldMapRenderer.gd / EnemyMovement.gd 各自独立 preload 本文件
+
+[ext_resource type="Script" path="res://scripts/config/map_base_config.gd" id="1_mbc"]
+
+[resource]
+script = ExtResource("1_mbc")
+terrain_colors = {
+0: Color(0.29, 0.25, 0.2, 1),
+1: Color(0.72, 0.76, 0.61, 1),
+2: Color(0.58, 0.7, 0.53, 1),
+3: Color(0.35, 0.3, 0.23, 1),
+}
+terrain_noise_range = 0.04
+slot_colors = {
+1: Color(1, 0.85, 0, 1),
+2: Color(0.8, 0.4, 1, 1),
+3: Color(1, 0.3, 0.3, 1),
+}
+slot_margin = 10
+reachable_color = Color(1, 1, 1, 0.18)
+reachable_border_color = Color(1, 1, 1, 1)
+reachable_border_width = 3.5
+label_font_size = 18
+level_badge_font_size = 14
+move_step_duration = 0.1
+notice_duration = 2.5
