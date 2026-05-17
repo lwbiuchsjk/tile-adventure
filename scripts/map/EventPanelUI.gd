@@ -34,7 +34,7 @@ signal closed
 # ─────────────────────────────────────
 # 动态创建项的字号
 # 视觉规格主体（panel bg/border/shadow/字号字色/margin/min_size 等）已在 α.5 .tscn 化批
-# 迁进 scenes/ui/EventPanel.tscn（StyleBox + Theme override）；本 .gd 内仅留按钮字号，
+# 迁进 scenes/ui/EventPanelUI.tscn（StyleBox + Theme override）；本 .gd 内仅留按钮字号，
 # 因为按钮是 _add_action_button 动态创建、不在 .tscn 节点树内。MVP-B 阶段 2 一并清理
 # 了 15 个死 const（α.5 .tscn 化遗留），EventPanel 走 .tscn 单源调参路径
 # ─────────────────────────────────────

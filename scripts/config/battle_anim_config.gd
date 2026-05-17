@@ -85,8 +85,8 @@ extends Resource
 ## 致命一击目标颤抖时长（普通 0.20）
 @export_range(0.0, 2.0, 0.05) var killing_shake_duration: float = 0.60
 
-## 致命一击颤抖振幅 ±px（普通 2.0）
-@export_range(0.0, 40.0, 0.5) var killing_shake_amplitude: float = 6.0
+## 致命一击颤抖振幅 ±px（普通 2.0）—— 2026-05-17 跑测调参：6.0 → 12.0，"致命感更猛"作新基线
+@export_range(0.0, 40.0, 0.5) var killing_shake_amplitude: float = 12.0
 
 ## 致命一击颤抖正弦周期数（普通 3.0）
 @export_range(0.0, 20.0, 0.5) var killing_shake_oscillations: float = 5.0
