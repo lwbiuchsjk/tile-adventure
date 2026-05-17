@@ -35,3 +35,6 @@ tools/local_env.json
 
 # Web export output (CI handles export and deploy)
 output/
+
+# MVP-C 预研：imgui-godot 接入测试（不入仓）
+test/imgui_probe/

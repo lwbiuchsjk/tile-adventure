@@ -286,7 +286,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 全部跑测落地（2026-05-17，共 8 份 Resource × 113 活跃字段 + 21 死 const 清理 + WorldMapRenderer 桥接段 40 → 1 行 + EnemyMovement 双源同源化首例）；两批 codex 审查累计 0 P0/P1 + 1 P2 + 4 P3 全数修复；MVP-C 运行时面板待启动评估
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 全部跑测落地（2026-05-17，共 8 份 Resource × 113 活跃字段 + 21 死 const 清理 + WorldMapRenderer 桥接段 40 → 1 行 + EnemyMovement 双源同源化首例）；两批 codex 审查累计 0 P0/P1 + 1 P2 + 4 P3 全数修复；**MVP-C 预研完成**（2026-05-17，imgui-godot v6.3.2 主选 + 4.6.2 实测通过 + B/D 组合方案，详见 [MVP-C_预研报告](tile-advanture-design/参数Resource化/MVP-C_预研报告.md)），MVP-C 设计文档撰写待新会话启动
 
 ## 预启动（方向已认可，等启动时机）
 
