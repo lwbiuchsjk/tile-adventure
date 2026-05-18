@@ -52,6 +52,30 @@ var _opened_snapshot: Dictionary = {}
 
 
 # ─────────────────────────────────────────
+# Preset UI 状态（MVP-C.2 阶段 3）
+# ─────────────────────────────────────────
+
+## preset 缓存：scene_id(String) → Array[ParamPreset]（按文件名字母序）
+## 避免每帧扫盘 + load；缓存失效时机：新建 / 删除 / 重命名后调 _refresh_preset_cache
+var _preset_cache: Dictionary = {}
+
+## 当前选中的 preset 路径：scene_id(String) → preset_path(String)
+## "" = 无 preset 选中（即 Combo 显示「默认」表示当前是手动调过的状态）
+var _active_preset_path: Dictionary = {}
+
+## Combo 当前选中 index 缓存：scene_id(String) → Array[int]（ImGui Combo binding）
+## index 0 固定 = 「默认」；1..N = preset 列表
+var _preset_combo_state: Dictionary = {}
+
+## 新建 / 重命名 popup 输入缓冲：scene_id(String) → Array[String]（ImGui InputText binding）
+var _preset_name_buffer: Dictionary = {}
+
+## 切换 preset 待确认动作：scene_id(String) → String（待切换的 preset_path；空 = 待切到「默认」）
+## has_unsaved_dirty 时弹 confirm popup，用户确认后取此值执行
+var _preset_pending_switch: Dictionary = {}
+
+
+# ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
 
@@ -172,6 +196,9 @@ func _render_panel() -> void:
 
 ## 渲染单个场景的字段列表（连续相同 group_name 自动 SeparatorText 分隔）
 func _render_scene(scene: ParamPanelScene) -> void:
+	# MVP-C.2 阶段 3：场景顶部 preset 下拉栏（Combo + 新建 / 删除 / 重命名）
+	_render_preset_bar(scene)
+	ImGui.Separator()
 	var current_group: String = ""
 	for field_any in scene.fields:
 		var field: ParamFieldMapping = field_any as ParamFieldMapping
@@ -188,6 +215,8 @@ func _render_scene(scene: ParamPanelScene) -> void:
 		if group == null:
 			continue
 		_render_dict_combo_group(scene, group)
+	# popup 渲染必须在 OpenPopup 同帧内调（且在同一 ImGui ID 栈），统一在场景末尾渲染
+	_render_preset_popups(scene)
 
 
 ## 渲染单个字段控件（按 control_type 分发）+ hover 路径 tooltip + [↻] [复制] 按钮
@@ -237,6 +266,260 @@ func _render_field(scene: ParamPanelScene, field: ParamFieldMapping) -> void:
 		print("[ParamPanel] 已复制：%s" % copy_text)
 	if ImGui.IsItemHovered():
 		ImGui.SetTooltip("复制「字段位置」到剪贴板（便于粘贴到 git log 命令）")
+
+
+# ─────────────────────────────────────────
+# Preset UI（MVP-C.2 阶段 3）：场景顶部下拉栏 + 4 个模态对话框
+#
+# UI 布局：[Preset: 默认 ▼] [新建] [删除] [重命名]
+# 4 个 popup：preset_new_<scene_id> / preset_delete_<scene_id> / preset_rename_<scene_id> / preset_switch_<scene_id>
+# popup 命名按 scene_id 隔离，避免跨场景串扰
+# ─────────────────────────────────────────
+
+
+## 渲染场景顶部 preset 下拉栏：Combo + 新建 / 删除 / 重命名 三按钮
+## Combo 选择切换：检查 has_unsaved_dirty → 是则 OpenPopup confirm；否则直接 apply_preset
+## 「默认」= index 0，表示不应用任何 preset（保持当前状态；不会触发 apply）
+func _render_preset_bar(scene: ParamPanelScene) -> void:
+	var sid: String = scene.scene_id
+	# 1. 准备 preset 列表 + Combo 选项
+	var presets: Array = _get_or_load_preset_cache(sid)
+	var combo_items: PackedStringArray = ["默认"]
+	for p_any in presets:
+		var p: ParamPreset = p_any as ParamPreset
+		combo_items.append(p.display_name if p.display_name != "" else "(无名)")
+	# 2. 维护 Combo state（[selected_index]）
+	if not _preset_combo_state.has(sid):
+		_preset_combo_state[sid] = [0]
+	var state_arr: Array = _preset_combo_state[sid]
+	# 同步外部切换（apply / cancel）：根据 _active_preset_path 重新定位 index
+	var active_path: String = _active_preset_path.get(sid, "") as String
+	var resolved_index: int = 0
+	if active_path != "":
+		for i in presets.size():
+			var p: ParamPreset = presets[i] as ParamPreset
+			# 比对路径需用与 list 返回一致的形式
+			if _preset_path_for(p, sid) == active_path:
+				resolved_index = i + 1
+				break
+	state_arr[0] = resolved_index
+	# 3. Combo + 三按钮
+	ImGui.SetNextItemWidth(180.0)
+	if ImGui.Combo("##preset_combo_%s" % sid, state_arr, combo_items):
+		_handle_preset_combo_change(scene, presets, state_arr[0] as int)
+	ImGui.SameLine()
+	if ImGui.Button("新建##preset_new_btn_%s" % sid):
+		# 初始化输入缓冲为默认名建议（如「v3」自动递增 = 当前 preset 数 + 1）
+		_preset_name_buffer[sid] = ["v%d" % (presets.size() + 1)]
+		ImGui.OpenPopup("preset_new_%s" % sid)
+	ImGui.SameLine()
+	# 删除 / 重命名仅在 active preset 非空时启用
+	var has_active: bool = active_path != ""
+	if not has_active:
+		ImGui.BeginDisabled()
+	if ImGui.Button("删除##preset_del_btn_%s" % sid):
+		ImGui.OpenPopup("preset_delete_%s" % sid)
+	ImGui.SameLine()
+	if ImGui.Button("重命名##preset_ren_btn_%s" % sid):
+		# 初始化为当前 preset display_name
+		var current_name: String = _get_active_preset_display_name(sid, presets)
+		_preset_name_buffer[sid] = [current_name]
+		ImGui.OpenPopup("preset_rename_%s" % sid)
+	if not has_active:
+		ImGui.EndDisabled()
+
+
+## Combo 切换分发：
+##   - 选 index=0「默认」= 不 apply（_active_preset_path 清空）
+##   - 选 index≥1 = 检查 has_unsaved_dirty → 否则直接 apply / 是则弹 confirm
+func _handle_preset_combo_change(scene: ParamPanelScene, presets: Array, new_index: int) -> void:
+	var sid: String = scene.scene_id
+	if new_index == 0:
+		# 切回「默认」：清 active path，不 apply 任何 preset（保持当前状态）
+		_active_preset_path[sid] = ""
+		return
+	if new_index < 1 or new_index > presets.size():
+		push_warning("[ParamPanel] preset Combo index 越界 %d / %d" % [new_index, presets.size()])
+		return
+	var preset: ParamPreset = presets[new_index - 1] as ParamPreset
+	var preset_path: String = _preset_path_for(preset, sid)
+	# 未保存检查
+	if has_unsaved_dirty():
+		_preset_pending_switch[sid] = preset_path
+		ImGui.OpenPopup("preset_switch_%s" % sid)
+		return
+	# 无未保存，直接 apply
+	apply_preset(scene, preset)
+	_active_preset_path[sid] = preset_path
+
+
+## 渲染 4 个 popup（OpenPopup 在按钮回调触发；BeginPopupModal 在此处定义内容）
+##
+## ImGui popup 模型：OpenPopup 在 ID 栈某层触发，BeginPopupModal 同层级匹配
+## 同一帧内必须调 BeginPopupModal（即使未 open）以参与 popup 栈，否则 popup 不显示
+func _render_preset_popups(scene: ParamPanelScene) -> void:
+	var sid: String = scene.scene_id
+	_render_preset_new_popup(scene, sid)
+	_render_preset_delete_popup(scene, sid)
+	_render_preset_rename_popup(scene, sid)
+	_render_preset_switch_confirm_popup(scene, sid)
+
+
+## 新建 popup：InputText 输入 preset 名 → 确定 → capture + sanitize + save + refresh cache + 选中新 preset
+func _render_preset_new_popup(scene: ParamPanelScene, sid: String) -> void:
+	if not ImGui.BeginPopupModal("preset_new_%s" % sid, [], ImGui.WindowFlags_AlwaysAutoResize):
+		return
+	ImGui.Text("新建 preset（保存当前场景所有字段值为快照）")
+	if not _preset_name_buffer.has(sid):
+		_preset_name_buffer[sid] = [""]
+	var arr: Array = _preset_name_buffer[sid]
+	ImGui.SetNextItemWidth(220.0)
+	# Enter 触发提交：ImGui.InputTextFlags_EnterReturnsTrue
+	var submitted: bool = ImGui.InputText("##preset_new_input_%s" % sid, arr, 64,
+		ImGui.InputTextFlags_EnterReturnsTrue)
+	var confirm_clicked: bool = ImGui.Button("确定##preset_new_ok_%s" % sid)
+	ImGui.SameLine()
+	if ImGui.Button("取消##preset_new_cancel_%s" % sid):
+		ImGui.CloseCurrentPopup()
+		ImGui.EndPopup()
+		return
+	if submitted or confirm_clicked:
+		var raw: String = str(arr[0])
+		var fname: String = sanitize_preset_filename(raw)
+		if fname == "":
+			ImGui.TextColored(Color(1.0, 0.3, 0.3, 1.0), "[err] 名字为空或全是非法字符")
+		else:
+			var preset: ParamPreset = capture_scene_as_preset(scene, raw)
+			var err: int = save_preset_to_disk(preset, fname)
+			if err == OK:
+				_refresh_preset_cache(sid)
+				# 选中新 preset：从新 cache 中找匹配路径
+				var new_path: String = "%s%s.tres" % [_preset_dir_for_scene(sid), fname]
+				_active_preset_path[sid] = new_path
+				ImGui.CloseCurrentPopup()
+			else:
+				ImGui.TextColored(Color(1.0, 0.3, 0.3, 1.0), "[err] 保存失败 err=%d" % err)
+	ImGui.EndPopup()
+
+
+## 删除 popup：confirm「确定删除 <名字>？」→ 确定 → delete_preset + refresh + 清 active
+func _render_preset_delete_popup(scene: ParamPanelScene, sid: String) -> void:
+	if not ImGui.BeginPopupModal("preset_delete_%s" % sid, [], ImGui.WindowFlags_AlwaysAutoResize):
+		return
+	var presets: Array = _get_or_load_preset_cache(sid)
+	var active_name: String = _get_active_preset_display_name(sid, presets)
+	ImGui.Text("确定删除 preset「%s」？此操作不可撤销（文件被删）" % active_name)
+	if ImGui.Button("删除##preset_del_ok_%s" % sid):
+		var active_path: String = _active_preset_path.get(sid, "") as String
+		if active_path != "":
+			var err: int = delete_preset(active_path)
+			if err == OK:
+				_active_preset_path[sid] = ""
+				_refresh_preset_cache(sid)
+		ImGui.CloseCurrentPopup()
+	ImGui.SameLine()
+	if ImGui.Button("取消##preset_del_cancel_%s" % sid):
+		ImGui.CloseCurrentPopup()
+	ImGui.EndPopup()
+
+
+## 重命名 popup：InputText 输入新 display_name → 确定 → rename_preset（只改 display_name，文件名不动）
+func _render_preset_rename_popup(scene: ParamPanelScene, sid: String) -> void:
+	if not ImGui.BeginPopupModal("preset_rename_%s" % sid, [], ImGui.WindowFlags_AlwaysAutoResize):
+		return
+	ImGui.Text("重命名 preset display_name（文件名不动，保 git history 友好）")
+	if not _preset_name_buffer.has(sid):
+		_preset_name_buffer[sid] = [""]
+	var arr: Array = _preset_name_buffer[sid]
+	ImGui.SetNextItemWidth(220.0)
+	var submitted: bool = ImGui.InputText("##preset_ren_input_%s" % sid, arr, 64,
+		ImGui.InputTextFlags_EnterReturnsTrue)
+	var confirm_clicked: bool = ImGui.Button("确定##preset_ren_ok_%s" % sid)
+	ImGui.SameLine()
+	if ImGui.Button("取消##preset_ren_cancel_%s" % sid):
+		ImGui.CloseCurrentPopup()
+		ImGui.EndPopup()
+		return
+	if submitted or confirm_clicked:
+		var new_name: String = str(arr[0]).strip_edges()
+		if new_name == "":
+			ImGui.TextColored(Color(1.0, 0.3, 0.3, 1.0), "[err] 新名字不能为空")
+		else:
+			var active_path: String = _active_preset_path.get(sid, "") as String
+			if active_path != "":
+				var err: int = rename_preset(active_path, new_name)
+				if err == OK:
+					_refresh_preset_cache(sid)
+					ImGui.CloseCurrentPopup()
+				else:
+					ImGui.TextColored(Color(1.0, 0.3, 0.3, 1.0), "[err] 重命名失败 err=%d" % err)
+	ImGui.EndPopup()
+
+
+## 切换 confirm popup：has_unsaved_dirty 时弹「未保存改动会丢失，确认切换？」
+func _render_preset_switch_confirm_popup(scene: ParamPanelScene, sid: String) -> void:
+	if not ImGui.BeginPopupModal("preset_switch_%s" % sid, [], ImGui.WindowFlags_AlwaysAutoResize):
+		return
+	ImGui.Text("未保存的改动会丢失，确认切换 preset？")
+	ImGui.Text("（若想保留改动，先 F2 写回原 .tres，或新建 preset 保存当前状态）")
+	if ImGui.Button("确认切换##preset_switch_ok_%s" % sid):
+		var target_path: String = _preset_pending_switch.get(sid, "") as String
+		if target_path != "":
+			var preset: ParamPreset = load_preset_from_disk(target_path)
+			if preset != null:
+				apply_preset(scene, preset)
+				_active_preset_path[sid] = target_path
+		_preset_pending_switch.erase(sid)
+		ImGui.CloseCurrentPopup()
+	ImGui.SameLine()
+	if ImGui.Button("取消##preset_switch_cancel_%s" % sid):
+		_preset_pending_switch.erase(sid)
+		# 取消则 Combo 状态需回退到 _active_preset_path 对应 index（下次 _render_preset_bar 自动同步）
+		ImGui.CloseCurrentPopup()
+	ImGui.EndPopup()
+
+
+## 取或加载 preset cache（首次访问时扫盘 + load）
+func _get_or_load_preset_cache(scene_id: String) -> Array:
+	if _preset_cache.has(scene_id):
+		return _preset_cache[scene_id] as Array
+	_refresh_preset_cache(scene_id)
+	return _preset_cache[scene_id] as Array
+
+
+## 强制刷新某 scene_id 的 preset cache（新建 / 删除 / 重命名后调）
+func _refresh_preset_cache(scene_id: String) -> void:
+	var paths: Array[String] = list_presets_for_scene(scene_id)
+	var presets: Array = []
+	for p in paths:
+		var preset: ParamPreset = load_preset_from_disk(p)
+		if preset != null:
+			presets.append(preset)
+	_preset_cache[scene_id] = presets
+
+
+## 给 preset 反推磁盘路径（用于 active_path 比对）
+## preset 自身不存路径字段；通过 scene_id + display_name 反推不安全（display_name 与文件名解耦），
+## 改用 list_presets_for_scene 返回的路径列表 + cache 索引位置对应
+func _preset_path_for(preset: ParamPreset, scene_id: String) -> String:
+	var paths: Array[String] = list_presets_for_scene(scene_id)
+	var cache: Array = _preset_cache.get(scene_id, []) as Array
+	for i in cache.size():
+		if cache[i] == preset and i < paths.size():
+			return paths[i]
+	return ""
+
+
+## 取当前 active preset 的 display_name（用于 popup 文本显示）
+func _get_active_preset_display_name(scene_id: String, presets: Array) -> String:
+	var active_path: String = _active_preset_path.get(scene_id, "") as String
+	if active_path == "":
+		return ""
+	for p_any in presets:
+		var p: ParamPreset = p_any as ParamPreset
+		if _preset_path_for(p, scene_id) == active_path:
+			return p.display_name
+	return ""
 
 
 ## 渲染 DictComboGroup：先选 dict_key，再用运行时字段副本复用普通字段控件链路
