@@ -647,3 +647,216 @@ func _read_field_value(instance: Resource, field: ParamFieldMapping) -> Variant:
 		push_warning("[ParamPanel] dict '%s' 无 key=%s（available keys: %s）" % [field.field_name, str(field.dict_key), str(dict.keys())])
 		return null
 	return dict[field.dict_key]
+
+
+# ─────────────────────────────────────────
+# Preset backend（MVP-C.2 阶段 2）
+#
+# 设计原文：tile-advanture-design/参数Resource化/MVP-C_运行时调参面板.md §7 preset 系统设计
+#
+# 职责：提供 capture / save / load / apply / list / delete / rename / dirty-check 等纯逻辑接口；
+# UI 集成（下拉栏 / 新建按钮 / confirm 对话框）属阶段 3 范围。
+# ─────────────────────────────────────────
+
+## preset 子目录根（每 scene_id 一级子目录）
+const PRESET_ROOT: String = "res://assets/config/presets/"
+
+
+## 把当前场景所有字段的 preload 实例当前值打包成 ParamPreset 实例（不写盘）
+## 复用 _get_snapshot_fields 把 dict_combo_groups.linked_fields 按所有候选 dict_key 展开
+##
+## 注意：Color / float / int / String / bool 是值类型，直接赋值不会共享引用；
+##       Dictionary / Array 是引用类型须 deep duplicate（与 _capture_snapshot 同套路），
+##       否则 apply preset 后用户改字段会污染 preset 内的快照值
+func capture_scene_as_preset(scene: ParamPanelScene, display_name: String) -> ParamPreset:
+	var preset: ParamPreset = ParamPreset.new()
+	preset.scene_id = scene.scene_id
+	preset.display_name = display_name
+	var snapshots: Array[FieldSnapshot] = []
+	for field in _get_snapshot_fields(scene):
+		var instance: Resource = load(field.target_resource_path)
+		if instance == null:
+			continue
+		var snap: FieldSnapshot = FieldSnapshot.new()
+		snap.target_resource_path = field.target_resource_path
+		snap.field_name = field.field_name
+		snap.dict_key = field.dict_key
+		var val: Variant = _read_field_value(instance, field)
+		# 值类型直接赋；引用类型 deep duplicate 避免污染
+		if val is Dictionary:
+			snap.value = (val as Dictionary).duplicate(true)
+		elif val is Array:
+			snap.value = (val as Array).duplicate(true)
+		else:
+			snap.value = val
+		snapshots.append(snap)
+	preset.field_snapshots = snapshots
+	return preset
+
+
+## 写 preset 到 `<PRESET_ROOT><scene_id>/<filename>.tres`
+## filename 由调用方（阶段 3 UI）通过 InputText 取得 + sanitize_preset_filename 清洗
+## 子目录不存在自动 make_dir_recursive
+##
+## 用 ResourceSaver.save（不走 C.1 自定义 dump）：
+##   - preset 是新建文件无原 header 可保留
+##   - field_snapshots 全部显式赋值不存在"==default 瘦身"问题
+func save_preset_to_disk(preset: ParamPreset, filename: String) -> int:
+	if preset == null:
+		return ERR_INVALID_PARAMETER
+	if preset.scene_id == "":
+		push_error("[ParamPanel] preset.scene_id 为空，无法定位子目录")
+		return ERR_INVALID_PARAMETER
+	if filename == "":
+		return ERR_INVALID_PARAMETER
+	var dir_path: String = _preset_dir_for_scene(preset.scene_id)
+	# 确保子目录存在（DirAccess.make_dir_recursive_absolute 接收绝对路径，含 res:// 前缀）
+	var err: int = DirAccess.make_dir_recursive_absolute(dir_path)
+	if err != OK and err != ERR_ALREADY_EXISTS:
+		push_error("[ParamPanel] preset 子目录创建失败 %s (err=%d)" % [dir_path, err])
+		return err
+	var save_path: String = "%s%s.tres" % [dir_path, filename]
+	err = ResourceSaver.save(preset, save_path)
+	if err != OK:
+		push_error("[ParamPanel] preset 写盘失败 %s (err=%d)" % [save_path, err])
+	return err
+
+
+## 读 preset .tres 为 ParamPreset 实例
+## 校验：scene_id 必须与所在子目录名一致（设计文档 §7 要求），不一致 print warning 但仍返回
+func load_preset_from_disk(preset_path: String) -> ParamPreset:
+	var res: Resource = load(preset_path)
+	if res == null:
+		push_error("[ParamPanel] preset 加载失败 %s" % preset_path)
+		return null
+	if not res is ParamPreset:
+		push_error("[ParamPanel] %s 不是 ParamPreset 类型" % preset_path)
+		return null
+	var preset: ParamPreset = res as ParamPreset
+	# 校验子目录与 scene_id 一致：先取父目录名
+	var parent_dir: String = preset_path.get_base_dir().get_file()
+	if parent_dir != preset.scene_id:
+		push_warning("[ParamPanel] preset %s 的 scene_id='%s' 与所在子目录名='%s' 不一致" % [preset_path, preset.scene_id, parent_dir])
+	return preset
+
+
+## 应用 preset 到 preload 实例：逐 FieldSnapshot 写值 + 收集 redraw 并集 + 触发 redraw
+##
+## 流程（沿用 §7 切换 preset 流程）：
+## 1. 逐 FieldSnapshot 写入 preload 实例属性（标 dirty 让后续 F2 决定是否持久化到原 .tres）
+## 2. 收集对应场景 default_redraw_targets ∪ 各字段 redraw_targets_override 并集去重
+## 3. 触发 redraw（走 _pending_redraw + _flush_pending_redraw 帧末 defer）
+## 4. 清相关 _control_state 让控件下帧重新从新值读
+##
+## 关于"不自动 F2"：apply 后字段在内存中已是 preset 值，_dirty_resources 标了；
+## 用户后续手动 F2 写回到原 .tres 才持久化（符合 §7「不自动 Ctrl+S」语义）
+func apply_preset(scene: ParamPanelScene, preset: ParamPreset) -> void:
+	if scene == null or preset == null:
+		return
+	# 1+2. 逐字段写实例 + 收集 redraw 目标
+	# 用临时 ParamFieldMapping 复用 _on_field_changed 链路（自动标 dirty + 加 pending redraw + 处理 override）
+	for snap_any in preset.field_snapshots:
+		var snap: FieldSnapshot = snap_any as FieldSnapshot
+		if snap == null:
+			continue
+		var instance: Resource = load(snap.target_resource_path)
+		if instance == null:
+			continue
+		# 寻找场景内对应的 ParamFieldMapping 以取得 redraw_targets_override / passive 配置
+		var matched_field: ParamFieldMapping = _find_field_for_snapshot(scene, snap)
+		if matched_field == null:
+			# 字段不在当前场景目录（preset 老版本残留？）— 仍写实例 + 标 dirty，但用场景级 default redraw
+			matched_field = ParamFieldMapping.new()
+			matched_field.target_resource_path = snap.target_resource_path
+			matched_field.field_name = snap.field_name
+			matched_field.dict_key = snap.dict_key
+			matched_field.passive = false
+			push_warning("[ParamPanel] preset 内字段 %s::%s 在当前场景 '%s' 未找到映射，按 default_redraw_targets 处理" % [snap.field_name, str(snap.dict_key), scene.scene_id])
+		_on_field_changed(scene, matched_field, snap.value)
+		# 清此字段控件缓存（下帧重新从新值读）
+		_control_state.erase(_make_state_key(matched_field))
+	# 3. _on_field_changed 已把 redraw 加进 _pending_redraw，下帧 _flush_pending_redraw 自动触发；
+	#    无需手动调；保留 _pending_redraw → _flush_pending_redraw 帧末合并去重路径
+	# 4. apply 完不 _capture_snapshot：reset 基准仍是「面板打开前 / 上次 F2 后」状态，
+	#    用户切 preset 不重置 reset 基准（符合"试调几个 preset 后能 reset 回原始"语义）
+
+
+## 检查当前是否有未保存改动（_dirty_resources 非空）
+## 阶段 3 UI 在切换 preset 前调用此检查 → 是则弹 confirm 对话框
+func has_unsaved_dirty() -> bool:
+	return not _dirty_resources.is_empty()
+
+
+## 列出某 scene_id 子目录下所有 preset 路径（按文件名字母序）
+## 子目录不存在返回空数组（首次启动正常）
+func list_presets_for_scene(scene_id: String) -> Array[String]:
+	var result: Array[String] = []
+	var dir_path: String = _preset_dir_for_scene(scene_id)
+	var dir: DirAccess = DirAccess.open(dir_path)
+	if dir == null:
+		return result
+	dir.list_dir_begin()
+	var fname: String = dir.get_next()
+	while fname != "":
+		if fname.ends_with(".tres") and not dir.current_is_dir():
+			result.append("%s%s" % [dir_path, fname])
+		fname = dir.get_next()
+	dir.list_dir_end()
+	result.sort()
+	return result
+
+
+## 删除某 preset 文件（不撤销已 apply 的字段值）
+func delete_preset(preset_path: String) -> int:
+	if not FileAccess.file_exists(preset_path):
+		return ERR_FILE_NOT_FOUND
+	var err: int = DirAccess.remove_absolute(preset_path)
+	if err != OK:
+		push_error("[ParamPanel] preset 删除失败 %s (err=%d)" % [preset_path, err])
+	return err
+
+
+## 重命名 preset：仅改 display_name 字段，不动文件名（保 git history 友好，符合 §7 D6 拍板）
+func rename_preset(preset_path: String, new_display_name: String) -> int:
+	if new_display_name == "":
+		return ERR_INVALID_PARAMETER
+	var preset: ParamPreset = load_preset_from_disk(preset_path)
+	if preset == null:
+		return ERR_CANT_OPEN
+	preset.display_name = new_display_name
+	var err: int = ResourceSaver.save(preset, preset_path)
+	if err != OK:
+		push_error("[ParamPanel] preset 重命名（写回 display_name）失败 %s (err=%d)" % [preset_path, err])
+	return err
+
+
+## sanitize preset 文件名：替换 Windows / Linux 文件系统非法字符为下划线
+## 调用方（阶段 3 UI）从 InputText 取用户输入 → sanitize → 喂给 save_preset_to_disk
+func sanitize_preset_filename(name: String) -> String:
+	if name == "":
+		return ""
+	var sanitized: String = name
+	var illegal: Array[String] = ["/", "\\", ":", "*", "?", "\"", "<", ">", "|", "\n", "\r", "\t"]
+	for ch in illegal:
+		sanitized = sanitized.replace(ch, "_")
+	# 去首尾空白 + 限长（防极端长名占 inode）
+	sanitized = sanitized.strip_edges()
+	if sanitized.length() > 64:
+		sanitized = sanitized.substr(0, 64)
+	return sanitized
+
+
+## 计算某 scene_id 的 preset 子目录绝对路径（含尾部 /）
+func _preset_dir_for_scene(scene_id: String) -> String:
+	return "%s%s/" % [PRESET_ROOT, scene_id]
+
+
+## 在场景内查找与 FieldSnapshot 匹配的 ParamFieldMapping（按 target_resource_path + field_name + dict_key 比对）
+## 含 dict_combo_groups.linked_fields 展开后的运行时字段
+func _find_field_for_snapshot(scene: ParamPanelScene, snap: FieldSnapshot) -> ParamFieldMapping:
+	for field in _get_snapshot_fields(scene):
+		if field.target_resource_path == snap.target_resource_path \
+				and field.field_name == snap.field_name \
+				and str(field.dict_key) == str(snap.dict_key):
+			return field
+	return null
