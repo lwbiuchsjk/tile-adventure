@@ -1,0 +1,113 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=10 format=3]
+
+; MVP-C.2 阶段 1：致命击升级
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "致命推冲时长"
+group_name = "推冲"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "killing_thrust_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 2.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "致命推冲距离比"
+group_name = "推冲"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "killing_thrust_distance_ratio"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_003"]
+script = ExtResource("2_field")
+display_label = "致命颤抖时长"
+group_name = "颤抖"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "killing_shake_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 2.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_004"]
+script = ExtResource("2_field")
+display_label = "致命颤抖振幅"
+group_name = "颤抖"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "killing_shake_amplitude"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 40.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_005"]
+script = ExtResource("2_field")
+display_label = "致命颤抖周期"
+group_name = "颤抖"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "killing_shake_oscillations"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 20.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_006"]
+script = ExtResource("2_field")
+display_label = "致命 HP tween 时长"
+group_name = "HP / 飘字"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "killing_hp_tween_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_007"]
+script = ExtResource("2_field")
+display_label = "致命飘字时长"
+group_name = "HP / 飘字"
+target_resource_path = "res://assets/config/battle_anim_config.tres"
+field_name = "killing_float_damage_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 5.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "critical_hit"
+display_name = "致命击升级"
+category = "战斗动画"
+default_redraw_targets = Array[String]([])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003"), SubResource("F_004"), SubResource("F_005"), SubResource("F_006"), SubResource("F_007")])
+dict_combo_groups = Array[Resource]([])

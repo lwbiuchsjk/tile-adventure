@@ -1,12 +1,11 @@
 [gd_resource type="Resource" script_class="ParamPanelScene" load_steps=8 format=3]
 
-; MVP-C.1 示范场景：夜晚视野 + 浓雾（单 Resource 即时 redraw）
-; 设计原文：tile-advanture-design/参数Resource化/MVP-C_运行时调参面板.md §5.C-19
+; MVP-C.2 阶段 1：视野 + 浓雾
 
 [ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
 [ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
 
-[sub_resource type="Resource" id="Field_vision_radius"]
+[sub_resource type="Resource" id="F_001"]
 script = ExtResource("2_field")
 display_label = "视野半径（格）"
 group_name = "视野"
@@ -16,11 +15,11 @@ dict_key = null
 control_type = "SliderFloat"
 slider_min = 0.5
 slider_max = 20.0
-redraw_targets_override = []
-passive = false
+redraw_targets_override = Array[String]([])
+passive = true
 tooltip = ""
 
-[sub_resource type="Resource" id="Field_fog_falloff"]
+[sub_resource type="Resource" id="F_002"]
 script = ExtResource("2_field")
 display_label = "浓雾 falloff（格）"
 group_name = "视野"
@@ -30,11 +29,11 @@ dict_key = null
 control_type = "SliderFloat"
 slider_min = 0.0
 slider_max = 5.0
-redraw_targets_override = []
-passive = false
+redraw_targets_override = Array[String]([])
+passive = true
 tooltip = ""
 
-[sub_resource type="Resource" id="Field_overlay_layer"]
+[sub_resource type="Resource" id="F_003"]
 script = ExtResource("2_field")
 display_label = "overlay canvas layer"
 group_name = "层级"
@@ -44,11 +43,11 @@ dict_key = null
 control_type = "SliderInt"
 slider_min = 1.0
 slider_max = 9.0
-redraw_targets_override = []
+redraw_targets_override = Array[String]([])
 passive = true
-tooltip = "CanvasLayer 数值，改后下次进夜晚生效"
+tooltip = ""
 
-[sub_resource type="Resource" id="Field_fog_signal_layer"]
+[sub_resource type="Resource" id="F_004"]
 script = ExtResource("2_field")
 display_label = "fog signal canvas layer"
 group_name = "层级"
@@ -58,11 +57,11 @@ dict_key = null
 control_type = "SliderInt"
 slider_min = 1.0
 slider_max = 9.0
-redraw_targets_override = []
+redraw_targets_override = Array[String]([])
 passive = true
-tooltip = "CanvasLayer 数值，改后下次进夜晚生效"
+tooltip = ""
 
-[sub_resource type="Resource" id="Field_diamond_scale"]
+[sub_resource type="Resource" id="F_005"]
 script = ExtResource("2_field")
 display_label = "菱形缩放"
 group_name = "fog signal"
@@ -72,14 +71,15 @@ dict_key = null
 control_type = "SliderFloat"
 slider_min = 0.05
 slider_max = 1.0
-redraw_targets_override = []
-passive = false
+redraw_targets_override = Array[String]([])
+passive = true
 tooltip = ""
 
 [resource]
 script = ExtResource("1_scene")
-scene_id = "night_vision_fog"
+scene_id = "night_vision"
 display_name = "视野 + 浓雾"
-category = "夜晚 / UI 节奏"
+category = "夜晚UI节奏"
 default_redraw_targets = Array[String]([])
-fields = Array[Resource]([SubResource("Field_vision_radius"), SubResource("Field_fog_falloff"), SubResource("Field_overlay_layer"), SubResource("Field_fog_signal_layer"), SubResource("Field_diamond_scale")])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003"), SubResource("F_004"), SubResource("F_005")])
+dict_combo_groups = Array[Resource]([])

@@ -42,9 +42,9 @@ extends Resource
 # 控件类型与范围
 # ─────────────────────────────────────────
 
-## 控件类型："ColorEdit3" / "ColorEdit4" / "SliderFloat" / "SliderInt"
-## MVP-C.2 扩展："Combo" / "InputText"
-@export_enum("ColorEdit3", "ColorEdit4", "SliderFloat", "SliderInt") var control_type: String = "SliderFloat"
+## 控件类型："ColorEdit3" / "ColorEdit4" / "SliderFloat" / "SliderInt" / "InputText"
+## MVP-C.2 扩展："Combo"（仅 DictComboGroup 内部用，不通过此字段）/ "InputText"（字符串字段，如 OverlayTransitionConfig.icon_fallback）
+@export_enum("ColorEdit3", "ColorEdit4", "SliderFloat", "SliderInt", "InputText") var control_type: String = "SliderFloat"
 
 ## Slider 下限（仅 SliderFloat / SliderInt 用；未填则后续可查 Resource schema 的 @export_range）
 @export var slider_min: float = 0.0

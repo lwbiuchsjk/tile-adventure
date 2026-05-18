@@ -30,3 +30,7 @@ extends Resource
 
 ## 字段映射列表（顺序决定 UI 渲染顺序）
 @export var fields: Array[ParamFieldMapping] = []
+
+## 紧凑 Combo 组：多字段共 key 的 Dict 场景折叠
+## 渲染顺序：先 fields，后 dict_combo_groups
+@export var dict_combo_groups: Array[DictComboGroup] = []

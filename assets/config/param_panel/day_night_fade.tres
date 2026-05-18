@@ -1,0 +1,43 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=5 format=3]
+
+; MVP-C.2 阶段 1：昼夜 fade
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "昼夜切换 fade 时长"
+group_name = "fade"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "fade_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "战斗强制白天时长"
+group_name = "fade"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "battle_force_day_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "day_night_fade"
+display_name = "昼夜 fade"
+category = "夜晚UI节奏"
+default_redraw_targets = Array[String]([])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002")])
+dict_combo_groups = Array[Resource]([])

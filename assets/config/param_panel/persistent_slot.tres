@@ -1,0 +1,71 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=7 format=3]
+
+; MVP-C.2 阶段 1：持久 slot 三层结构
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "外环宽"
+group_name = "三层"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_ring_width"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 1.0
+slider_max = 12.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "分离线色"
+group_name = "三层"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_separator_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_003"]
+script = ExtResource("2_field")
+display_label = "分离线宽"
+group_name = "三层"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_separator_width"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 1.0
+slider_max = 6.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_004"]
+script = ExtResource("2_field")
+display_label = "内底色"
+group_name = "三层"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_inner_bg"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "persistent_slot"
+display_name = "持久 slot 三层结构"
+category = "持久slot与影响圈"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003"), SubResource("F_004")])
+dict_combo_groups = Array[Resource]([])

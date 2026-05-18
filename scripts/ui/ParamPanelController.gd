@@ -71,10 +71,7 @@ func _capture_snapshot() -> void:
 	_opened_snapshot.clear()
 	for scene_any in _scenes:
 		var scene: ParamPanelScene = scene_any as ParamPanelScene
-		for field_any in scene.fields:
-			var field: ParamFieldMapping = field_any as ParamFieldMapping
-			if field == null:
-				continue
+		for field in _get_snapshot_fields(scene):
 			var instance: Resource = load(field.target_resource_path)
 			if instance == null:
 				continue
@@ -186,6 +183,11 @@ func _render_scene(scene: ParamPanelScene) -> void:
 				ImGui.SeparatorText(field.group_name)
 			current_group = field.group_name
 		_render_field(scene, field)
+	for group_any in scene.dict_combo_groups:
+		var group: DictComboGroup = group_any as DictComboGroup
+		if group == null:
+			continue
+		_render_dict_combo_group(scene, group)
 
 
 ## 渲染单个字段控件（按 control_type 分发）+ hover 路径 tooltip + [↻] [复制] 按钮
@@ -204,6 +206,8 @@ func _render_field(scene: ParamPanelScene, field: ParamFieldMapping) -> void:
 			_render_color_edit(scene, field, instance, state_key, false)
 		"ColorEdit4":
 			_render_color_edit(scene, field, instance, state_key, true)
+		"InputText":
+			_render_input_text(scene, field, instance, state_key)
 		_:
 			ImGui.Text("%s [未支持控件: %s]" % [field.display_label, field.control_type])
 	# hover 控件 → 弹路径 tooltip + 用户自定义 tooltip（B1 需求：位置查看）
@@ -233,6 +237,32 @@ func _render_field(scene: ParamPanelScene, field: ParamFieldMapping) -> void:
 		print("[ParamPanel] 已复制：%s" % copy_text)
 	if ImGui.IsItemHovered():
 		ImGui.SetTooltip("复制「字段位置」到剪贴板（便于粘贴到 git log 命令）")
+
+
+## 渲染 DictComboGroup：先选 dict_key，再用运行时字段副本复用普通字段控件链路
+func _render_dict_combo_group(scene: ParamPanelScene, group: DictComboGroup) -> void:
+	if group.dict_keys.is_empty() or group.linked_fields.is_empty():
+		return
+	if group.group_label != "":
+		ImGui.SeparatorText(group.group_label)
+	var combo_key: String = _make_combo_state_key(scene, group)
+	if not _control_state.has(combo_key):
+		_control_state[combo_key] = [0]
+	var current_index_arr: Array = _control_state[combo_key]
+	var old_index: int = clampi(int(current_index_arr[0]), 0, group.dict_keys.size() - 1)
+	current_index_arr[0] = old_index
+	var labels: PackedStringArray = _get_combo_display_names(group)
+	if ImGui.Combo("%s##%s" % [group.group_label, combo_key], current_index_arr, labels):
+		# Combo 切 key 后清掉所有联动字段缓存；下帧会从新 dict_key 重新读值。
+		_invalidate_combo_linked_field_state(group)
+	var selected_index: int = clampi(int(current_index_arr[0]), 0, group.dict_keys.size() - 1)
+	var selected_key: Variant = group.dict_keys[selected_index]
+	for field_any in group.linked_fields:
+		var linked_field: ParamFieldMapping = field_any as ParamFieldMapping
+		if linked_field == null:
+			continue
+		var runtime_field: ParamFieldMapping = _make_combo_runtime_field(linked_field, selected_key, group.group_label)
+		_render_field(scene, runtime_field)
 
 
 ## ImGui label 加 "##<state_key>" 后缀：## 后内容不显示但参与 widget ID 计算
@@ -291,6 +321,20 @@ func _render_color_edit(scene: ParamPanelScene, field: ParamFieldMapping, instan
 		if changed:
 			# 保留原 alpha（如字段是 Color 含 alpha 但 ColorEdit3 不编辑）
 			_on_field_changed(scene, field, Color(arr[0], arr[1], arr[2], current_color.a))
+
+
+## String 字段渲染：用于 OverlayTransitionConfig.icon_fallback 这类短文本参数
+func _render_input_text(scene: ParamPanelScene, field: ParamFieldMapping, instance: Resource, state_key: String) -> void:
+	if not _control_state.has(state_key):
+		var raw: Variant = _read_field_value(instance, field)
+		if raw == null:
+			ImGui.TextColored(Color(1.0, 0.3, 0.3, 1.0), "[err] %s 值为 null" % field.display_label)
+			return
+		_control_state[state_key] = [str(raw)]
+	var arr: Array = _control_state[state_key]
+	# imgui-godot v6.3.2 binding：InputText(label, text_array, buffer_size)，buffer 为 String 字节长度上限
+	if ImGui.InputText(_make_imgui_label(field, state_key), arr, 256):
+		_on_field_changed(scene, field, str(arr[0]))
 
 
 # ─────────────────────────────────────────
@@ -503,10 +547,7 @@ func _reset_all() -> void:
 	var redraw_targets_union: Dictionary = {}
 	for scene_any in _scenes:
 		var scene: ParamPanelScene = scene_any as ParamPanelScene
-		for field_any in scene.fields:
-			var field: ParamFieldMapping = field_any as ParamFieldMapping
-			if field == null:
-				continue
+		for field in _get_snapshot_fields(scene):
 			var key: String = _make_state_key(field)
 			if not _opened_snapshot.has(key):
 				continue
@@ -531,6 +572,62 @@ func _reset_all() -> void:
 # ─────────────────────────────────────────
 # Helper
 # ─────────────────────────────────────────
+
+## 收集需要进入快照 / 全部重置的字段；Combo 联动字段按所有候选 dict_key 展开
+func _get_snapshot_fields(scene: ParamPanelScene) -> Array[ParamFieldMapping]:
+	var result: Array[ParamFieldMapping] = []
+	for field_any in scene.fields:
+		var field: ParamFieldMapping = field_any as ParamFieldMapping
+		if field != null:
+			result.append(field)
+	for group_any in scene.dict_combo_groups:
+		var group: DictComboGroup = group_any as DictComboGroup
+		if group == null:
+			continue
+		for key in group.dict_keys:
+			for field_any in group.linked_fields:
+				var linked_field: ParamFieldMapping = field_any as ParamFieldMapping
+				if linked_field == null:
+					continue
+				result.append(_make_combo_runtime_field(linked_field, key, group.group_label))
+	return result
+
+
+## 生成 Combo 联动字段运行时副本，只覆盖 dict_key / 分组名，不修改 .tres 中的模板字段
+func _make_combo_runtime_field(field: ParamFieldMapping, dict_key: Variant, group_label: String) -> ParamFieldMapping:
+	var runtime_field: ParamFieldMapping = field.duplicate(true) as ParamFieldMapping
+	runtime_field.dict_key = dict_key
+	if runtime_field.group_name == "" and group_label != "":
+		runtime_field.group_name = group_label
+	return runtime_field
+
+
+## Combo 控件自身的状态 key：按 scene_id + group_label 隔离，避免不同场景同名组互相污染
+func _make_combo_state_key(scene: ParamPanelScene, group: DictComboGroup) -> String:
+	return "%s:combo:%s" % [scene.scene_id, group.group_label]
+
+
+## 生成 Combo 下拉展示名；数量不一致时回退到 dict_key 的字符串值，保证面板仍可用
+func _get_combo_display_names(group: DictComboGroup) -> PackedStringArray:
+	var labels: PackedStringArray = []
+	for i in group.dict_keys.size():
+		if i < group.key_display_names.size() and group.key_display_names[i] != "":
+			labels.append(group.key_display_names[i])
+		else:
+			labels.append(str(group.dict_keys[i]))
+	return labels
+
+
+## 清理 Combo 联动字段全部候选 key 的控件缓存，避免切 key 后继续显示上一 key 的 binding 数组
+func _invalidate_combo_linked_field_state(group: DictComboGroup) -> void:
+	for key in group.dict_keys:
+		for field_any in group.linked_fields:
+			var linked_field: ParamFieldMapping = field_any as ParamFieldMapping
+			if linked_field == null:
+				continue
+			var runtime_field: ParamFieldMapping = _make_combo_runtime_field(linked_field, key, group.group_label)
+			_control_state.erase(_make_state_key(runtime_field))
+
 
 func _make_state_key(field: ParamFieldMapping) -> String:
 	return "%s::%s::%s" % [field.target_resource_path, field.field_name, str(field.dict_key)]

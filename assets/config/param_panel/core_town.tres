@@ -1,0 +1,43 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=5 format=3]
+
+; MVP-C.2 阶段 1：核心城镇标识
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "金边色"
+group_name = "标识"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "core_town_border"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "徽记大小"
+group_name = "标识"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "core_town_emblem_size"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 2.0
+slider_max = 24.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "core_town"
+display_name = "核心城镇标识"
+category = "持久slot与影响圈"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002")])
+dict_combo_groups = Array[Resource]([])

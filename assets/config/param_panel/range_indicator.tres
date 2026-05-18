@@ -1,0 +1,99 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=9 format=3]
+
+; MVP-C.2 阶段 1：范围标识
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "可达填充色"
+group_name = "可达"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "reachable_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "可攻击填充色"
+group_name = "攻击"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "attackable_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_003"]
+script = ExtResource("2_field")
+display_label = "可攻击描边色"
+group_name = "攻击"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "attackable_border_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_004"]
+script = ExtResource("2_field")
+display_label = "可攻击描边宽"
+group_name = "攻击"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "attackable_border_width"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 10.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_005"]
+script = ExtResource("2_field")
+display_label = "圈色"
+group_name = "当前行动者"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "current_actor_ring_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_006"]
+script = ExtResource("2_field")
+display_label = "圈宽"
+group_name = "当前行动者"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "current_actor_ring_width"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 10.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "range_indicator"
+display_name = "范围标识"
+category = "战斗视觉"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003"), SubResource("F_004"), SubResource("F_005"), SubResource("F_006")])
+dict_combo_groups = Array[Resource]([])

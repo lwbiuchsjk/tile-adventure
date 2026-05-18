@@ -1,0 +1,57 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=6 format=3]
+
+; MVP-C.2 阶段 1：闪烁敌人（浓雾外）
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "base alpha"
+group_name = "闪烁"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "blink_base_alpha"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "振幅"
+group_name = "闪烁"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "blink_amp"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_003"]
+script = ExtResource("2_field")
+display_label = "周期（秒）"
+group_name = "闪烁"
+target_resource_path = "res://assets/config/night_vision_config.tres"
+field_name = "blink_period"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.1
+slider_max = 10.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "blinking_enemy"
+display_name = "闪烁敌人（浓雾外）"
+category = "夜晚UI节奏"
+default_redraw_targets = Array[String]([])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003")])
+dict_combo_groups = Array[Resource]([])

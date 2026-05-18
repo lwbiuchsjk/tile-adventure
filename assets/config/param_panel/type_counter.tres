@@ -1,0 +1,141 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=12 format=3]
+
+; MVP-C.2 阶段 1：兵种克制
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "图标大小"
+group_name = "图标几何"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "counter_icon_size"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 2.0
+slider_max = 40.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "图标间距"
+group_name = "图标几何"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "counter_icon_gap"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 2.0
+slider_max = 40.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_003"]
+script = ExtResource("2_field")
+display_label = "克制（▲）色"
+group_name = "图标色"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "counter_icon_advantage"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_004"]
+script = ExtResource("2_field")
+display_label = "被克（▼）色"
+group_name = "图标色"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "counter_icon_disadvantage"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_005"]
+script = ExtResource("2_field")
+display_label = "中性（●）色"
+group_name = "图标色"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "counter_icon_neutral"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_006"]
+script = ExtResource("2_field")
+display_label = "克制系数 eps"
+group_name = "阈值"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "counter_factor_eps"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0001
+slider_max = 0.01
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = "克制判定阈值，过小可能误判"
+
+[sub_resource type="Resource" id="F_007"]
+script = ExtResource("2_field")
+display_label = "兵种字色"
+group_name = "兵种字"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "troop_label_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_008"]
+script = ExtResource("2_field")
+display_label = "头部偏移"
+group_name = "头偏移"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "head_offset"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 30.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_009"]
+script = ExtResource("2_field")
+display_label = "已行动灰"
+group_name = "行动后"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "player_acted_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "type_counter"
+display_name = "兵种克制"
+category = "战斗视觉"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003"), SubResource("F_004"), SubResource("F_005"), SubResource("F_006"), SubResource("F_007"), SubResource("F_008"), SubResource("F_009")])
+dict_combo_groups = Array[Resource]([])

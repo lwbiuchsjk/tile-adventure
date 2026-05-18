@@ -5,6 +5,9 @@ extends SceneTree
 ## 不实际写 .tres 文件（避免污染源文件）；只验证 dump 输出文本
 
 const ControllerScript: GDScript = preload("res://scripts/ui/ParamPanelController.gd")
+const ParamPanelSceneScript: GDScript = preload("res://scripts/config/param_panel_scene.gd")
+const ParamFieldMappingScript: GDScript = preload("res://scripts/config/param_field_mapping.gd")
+const DictComboGroupScript: GDScript = preload("res://scripts/config/dict_combo_group.gd")
 
 
 func _init() -> void:
@@ -49,6 +52,9 @@ func _init() -> void:
 	ok = _test_e2e_roundtrip(panel, "res://assets/config/map_base_config.tres") and ok
 	ok = _test_e2e_roundtrip(panel, "res://assets/config/overlay_transition_config.tres") and ok
 	ok = _test_e2e_roundtrip(panel, "res://assets/config/resource_render_config.tres") and ok
+	# MVP-C.2：DictComboGroup schema + ParamPanelScene.dict_combo_groups roundtrip
+	ok = _test_dict_combo_group_schema() and ok
+	ok = _test_param_scene_combo_roundtrip() and ok
 	if ok:
 		print("[test_param_panel_dump] 全部通过")
 		quit(0)
@@ -203,3 +209,84 @@ func _test_dict_keys(panel: Node, path: String, field_name: String, expected_key
 			return false
 	print("[PASS] %s.%s Dict %d 个 key 全在" % [path.get_file(), field_name, expected_keys.size()])
 	return true
+
+
+## MVP-C.2 schema 验证：DictComboGroup 实例字段写入后值保持一致
+func _test_dict_combo_group_schema() -> bool:
+	var group: DictComboGroup = DictComboGroupScript.new()
+	group.group_label = "Tier 选择"
+	group.dict_keys = [0, 1, 2, 3]
+	group.key_display_names.assign(["Tier 1", "Tier 2", "Tier 3", "Tier 4"])
+	group.linked_fields.assign([
+		_make_combo_test_field("描边宽度", "tier_border_widths", "SliderFloat"),
+		_make_combo_test_field("外菱形占格比", "tier_slot_margins", "SliderInt"),
+	])
+	if group.group_label != "Tier 选择":
+		print("[FAIL] DictComboGroup.group_label 写入失败")
+		return false
+	if group.dict_keys.size() != 4 or group.dict_keys[3] != 3:
+		print("[FAIL] DictComboGroup.dict_keys 写入失败")
+		return false
+	if group.key_display_names[2] != "Tier 3":
+		print("[FAIL] DictComboGroup.key_display_names 写入失败")
+		return false
+	if group.linked_fields.size() != 2 or group.linked_fields[0].dict_key != null:
+		print("[FAIL] DictComboGroup.linked_fields 写入失败")
+		return false
+	print("[PASS] DictComboGroup schema 字段写入一致")
+	return true
+
+
+## MVP-C.2 roundtrip 验证：含 dict_combo_groups 的 ParamPanelScene .tres 可保存并重新加载
+func _test_param_scene_combo_roundtrip() -> bool:
+	var scene: ParamPanelScene = ParamPanelSceneScript.new()
+	scene.scene_id = "test_combo_scene"
+	scene.display_name = "测试 Combo 场景"
+	scene.category = "测试"
+	scene.default_redraw_targets.assign(["WorldMapRenderer"])
+	var group: DictComboGroup = DictComboGroupScript.new()
+	group.group_label = "Tier 选择"
+	group.dict_keys = [0, 1, 2, 3]
+	group.key_display_names.assign(["Tier 1", "Tier 2", "Tier 3", "Tier 4"])
+	group.linked_fields.assign([
+		_make_combo_test_field("描边宽度", "tier_border_widths", "SliderFloat"),
+		_make_combo_test_field("外菱形占格比", "tier_slot_margins", "SliderInt"),
+	])
+	scene.dict_combo_groups.assign([group])
+	var tmp_path: String = "user://test_param_scene_combo.tres"
+	var err: Error = ResourceSaver.save(scene, tmp_path)
+	if err != OK:
+		print("[FAIL] ParamPanelScene combo roundtrip 保存失败 err=", err)
+		return false
+	var loaded: Resource = ResourceLoader.load(tmp_path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if not loaded is ParamPanelScene:
+		print("[FAIL] ParamPanelScene combo roundtrip 加载类型错误")
+		return false
+	var loaded_scene: ParamPanelScene = loaded as ParamPanelScene
+	if loaded_scene.dict_combo_groups.size() != 1:
+		print("[FAIL] ParamPanelScene combo roundtrip group 数错误")
+		return false
+	var loaded_group: DictComboGroup = loaded_scene.dict_combo_groups[0] as DictComboGroup
+	if loaded_group.group_label != "Tier 选择" or loaded_group.linked_fields.size() != 2:
+		print("[FAIL] ParamPanelScene combo roundtrip group 内容错误")
+		return false
+	if loaded_group.linked_fields[1].field_name != "tier_slot_margins":
+		print("[FAIL] ParamPanelScene combo roundtrip linked field 内容错误")
+		return false
+	print("[PASS] ParamPanelScene dict_combo_groups roundtrip 通过")
+	return true
+
+
+## 构造 DictComboGroup 测试字段；dict_key 必须留空，运行时由 Combo 选中 key 覆盖
+func _make_combo_test_field(label: String, field_name: String, control_type: String) -> ParamFieldMapping:
+	var field: ParamFieldMapping = ParamFieldMappingScript.new()
+	field.display_label = label
+	field.group_name = ""
+	field.target_resource_path = "res://assets/config/unit_enemy_config.tres"
+	field.field_name = field_name
+	field.dict_key = null
+	field.control_type = control_type
+	field.slider_min = 0.0
+	field.slider_max = 8.0
+	field.passive = false
+	return field

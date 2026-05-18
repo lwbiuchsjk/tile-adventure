@@ -1,0 +1,141 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=12 format=3]
+
+; MVP-C.2 阶段 1：OverlayTransition
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "fade in 时长"
+group_name = "fade 时长"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "fade_in_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "fade out 时长"
+group_name = "fade 时长"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "fade_out_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_003"]
+script = ExtResource("2_field")
+display_label = "line fade in"
+group_name = "fade 时长"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "line_fade_in_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_004"]
+script = ExtResource("2_field")
+display_label = "line hold"
+group_name = "fade 时长"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "line_hold_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 10.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_005"]
+script = ExtResource("2_field")
+display_label = "icon fade in"
+group_name = "fade 时长"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "icon_fade_in_duration"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 3.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_006"]
+script = ExtResource("2_field")
+display_label = "icon fallback 字符"
+group_name = "文本"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "icon_fallback"
+dict_key = null
+control_type = "InputText"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_007"]
+script = ExtResource("2_field")
+display_label = "line 字号"
+group_name = "文本"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "line_font_size"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 8.0
+slider_max = 96.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_008"]
+script = ExtResource("2_field")
+display_label = "line 字色"
+group_name = "文本"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "line_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[sub_resource type="Resource" id="F_009"]
+script = ExtResource("2_field")
+display_label = "Phase B 超时"
+group_name = "超时"
+target_resource_path = "res://assets/config/overlay_transition_config.tres"
+field_name = "phase_b_timeout_sec"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.5
+slider_max = 30.0
+redraw_targets_override = Array[String]([])
+passive = true
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "overlay_transition"
+display_name = "OverlayTransition"
+category = "夜晚UI节奏"
+default_redraw_targets = Array[String]([])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003"), SubResource("F_004"), SubResource("F_005"), SubResource("F_006"), SubResource("F_007"), SubResource("F_008"), SubResource("F_009")])
+dict_combo_groups = Array[Resource]([])

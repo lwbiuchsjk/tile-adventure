@@ -286,7 +286,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 全部跑测落地（2026-05-17，共 8 份 Resource × 113 活跃字段）；MVP-C 预研 + [设计文档 v1.0](tile-advanture-design/参数Resource化/MVP-C_运行时调参面板.md) 落档；**MVP-C.1 实装初版完成等桌面 F2 验收**（2026-05-17）：imgui-godot v6.3.2 Canvas 模式接入 + schema + 数据流 + 自定义 .tres dump（绕过 ResourceSaver 省略默认值）+ 4 示范场景 + reset/tooltip/copy UX 补丁 + 11 测试套件全过；codex 审查 1 P0 + 2 P1 + 2 P2 处置（2 P1 留[待跟踪](tile-advanture-design/待跟踪事项索引.md#十四mvp-c1-调参面板-codex-审查后续)）；commit 拆 2 个待 push
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 + **MVP-C.1 全部跑测落地**（2026-05-18 F2 桌面验收通过，共 8 份 Resource × 113 活跃字段 + imgui-godot Canvas 模式运行时面板）；MVP-C.1 4 commit 已 push（`24afc9a` / `bcf5043` / `64869eb` / `18594ca`）；codex 2 P1 留[待跟踪 §十四](tile-advanture-design/待跟踪事项索引.md#十四mvp-c1-调参面板-codex-审查后续)；**MVP-C.2 待启动**（25 场景补全 + preset + Dict Combo + UX 打磨；含处理 P1.1 redraw schema 扩展）
 
 ## 预启动（方向已认可，等启动时机）
 

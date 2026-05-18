@@ -1,0 +1,43 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=5 format=3]
+
+; MVP-C.2 阶段 1：战场 arena
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "边框色"
+group_name = "边框"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "arena_border_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "边框宽"
+group_name = "边框"
+target_resource_path = "res://assets/config/battle_visual_config.tres"
+field_name = "arena_border_width"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 10.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "battle_arena"
+display_name = "战场 arena"
+category = "战斗视觉"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002")])
+dict_combo_groups = Array[Resource]([])

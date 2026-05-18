@@ -1,0 +1,43 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=5 format=3]
+
+; MVP-C.2 阶段 1：敌方动态
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "移动色"
+group_name = "移动"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "enemy_move_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "光晕色（含 alpha）"
+group_name = "光晕"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "enemy_glow_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "enemy_dynamic"
+display_name = "敌方动态"
+category = "敌方表达"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002")])
+dict_combo_groups = Array[Resource]([])

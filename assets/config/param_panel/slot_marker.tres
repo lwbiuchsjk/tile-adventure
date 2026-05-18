@@ -1,0 +1,71 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=7 format=3]
+
+; MVP-C.2 阶段 1：槽位标记
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "资源槽色"
+group_name = "槽位色 Dict"
+target_resource_path = "res://assets/config/map_base_config.tres"
+field_name = "slot_colors"
+dict_key = 1
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "功能槽色（兜底）"
+group_name = "槽位色 Dict"
+target_resource_path = "res://assets/config/map_base_config.tres"
+field_name = "slot_colors"
+dict_key = 2
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_003"]
+script = ExtResource("2_field")
+display_label = "重生槽色"
+group_name = "槽位色 Dict"
+target_resource_path = "res://assets/config/map_base_config.tres"
+field_name = "slot_colors"
+dict_key = 3
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_004"]
+script = ExtResource("2_field")
+display_label = "槽位边距"
+group_name = "几何"
+target_resource_path = "res://assets/config/map_base_config.tres"
+field_name = "slot_margin"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 0.0
+slider_max = 36.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "slot_marker"
+display_name = "槽位标记"
+category = "地图基底"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003"), SubResource("F_004")])
+dict_combo_groups = Array[Resource]([])

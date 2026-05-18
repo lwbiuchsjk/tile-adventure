@@ -1,0 +1,169 @@
+[gd_resource type="Resource" script_class="ParamPanelScene" load_steps=14 format=3]
+
+; MVP-C.2 阶段 1：敌方视觉
+
+[ext_resource type="Script" path="res://scripts/config/param_panel_scene.gd" id="1_scene"]
+[ext_resource type="Script" path="res://scripts/config/param_field_mapping.gd" id="2_field"]
+
+[sub_resource type="Resource" id="F_001"]
+script = ExtResource("2_field")
+display_label = "★阵营色（核心）"
+group_name = "身份色"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "faction_colors"
+dict_key = 2
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_002"]
+script = ExtResource("2_field")
+display_label = "slot 底色"
+group_name = "slot 渲染"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "enemy_slot_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_003"]
+script = ExtResource("2_field")
+display_label = "slot 描边色"
+group_name = "slot 渲染"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "enemy_border_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_004"]
+script = ExtResource("2_field")
+display_label = "移动色"
+group_name = "动态"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "enemy_move_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_005"]
+script = ExtResource("2_field")
+display_label = "光晕色"
+group_name = "动态"
+target_resource_path = "res://assets/config/unit_enemy_config.tres"
+field_name = "enemy_glow_color"
+dict_key = null
+control_type = "ColorEdit4"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_006"]
+script = ExtResource("2_field")
+display_label = "外圈 alpha"
+group_name = "影响圈 alpha"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "influence_alpha_outer"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_007"]
+script = ExtResource("2_field")
+display_label = "次外 alpha"
+group_name = "影响圈 alpha"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "influence_alpha_mid"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_008"]
+script = ExtResource("2_field")
+display_label = "内圈 alpha"
+group_name = "影响圈 alpha"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "influence_alpha_inner"
+dict_key = null
+control_type = "SliderFloat"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_009"]
+script = ExtResource("2_field")
+display_label = "外环宽度"
+group_name = "持久 slot"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_ring_width"
+dict_key = null
+control_type = "SliderInt"
+slider_min = 1.0
+slider_max = 12.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_010"]
+script = ExtResource("2_field")
+display_label = "分离线色"
+group_name = "持久 slot"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_separator_color"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[sub_resource type="Resource" id="F_011"]
+script = ExtResource("2_field")
+display_label = "内底色"
+group_name = "持久 slot"
+target_resource_path = "res://assets/config/influence_config.tres"
+field_name = "persistent_inner_bg"
+dict_key = null
+control_type = "ColorEdit3"
+slider_min = 0.0
+slider_max = 1.0
+redraw_targets_override = Array[String]([])
+passive = false
+tooltip = ""
+
+[resource]
+script = ExtResource("1_scene")
+scene_id = "enemy_visual"
+display_name = "敌方视觉"
+category = "身份与势力"
+default_redraw_targets = Array[String](["WorldMapRenderer"])
+fields = Array[Resource]([SubResource("F_001"), SubResource("F_002"), SubResource("F_003"), SubResource("F_004"), SubResource("F_005"), SubResource("F_006"), SubResource("F_007"), SubResource("F_008"), SubResource("F_009"), SubResource("F_010"), SubResource("F_011")])
+dict_combo_groups = Array[Resource]([])
