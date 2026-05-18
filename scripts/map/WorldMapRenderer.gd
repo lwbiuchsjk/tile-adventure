@@ -269,9 +269,12 @@ func _draw_level_slots() -> void:
 			slot_color = slot_color.darkened(UNIT_ENEMY_CFG.challenged_dim)
 
 		# 菱形按 tier 取尺寸梯度（弱 75% → 超 90%）；击败态用统一 MAP_BASE_CFG.slot_margin
+		# ⚠ MVP-C.2 调参面板 bug 修复：const Resource.Dict[索引] 二级表达式会 cache 旧引用；
+		#   必须先把 Dict 字段赋给中间 var 再索引
 		var rect_margin: int = MAP_BASE_CFG.slot_margin
-		if not is_defeated and UNIT_ENEMY_CFG.tier_slot_margins.has(level.tier):
-			rect_margin = UNIT_ENEMY_CFG.tier_slot_margins[level.tier]
+		var tier_slot_margins_ref: Dictionary = UNIT_ENEMY_CFG.tier_slot_margins
+		if not is_defeated and tier_slot_margins_ref.has(level.tier):
+			rect_margin = tier_slot_margins_ref.get(level.tier, MAP_BASE_CFG.slot_margin) as int
 		var slot_rect: Rect2 = Rect2(
 			pos.x * TILE_SIZE + rect_margin,
 			pos.y * TILE_SIZE + rect_margin,
@@ -773,7 +776,11 @@ func _draw_unit_marker() -> void:
 	draw_circle(center + Vector2(2, 2), radius, UNIT_ENEMY_CFG.unit_shadow_color)
 
 	# 玩家蓝外环（实色大圆）—— 与玩家建筑外环同色，统一"我方"语义
-	var ring_color: Color = INFLUENCE_CFG.faction_colors[Faction.PLAYER] as Color
+	# ⚠ MVP-C.2 调参面板 bug 修复：禁止 `INFLUENCE_CFG.faction_colors[X]` 二级表达式形式（GDScript
+	#   对 const Resource 的二级索引会 cache 旧 Dict 引用，ImGui 改字段后不会同步）。
+	#   必须先把 Dict 字段赋给中间 var，再索引取值。同 _draw_persistent_influence_ranges 套路。
+	var faction_colors_ref: Dictionary = INFLUENCE_CFG.faction_colors
+	var ring_color: Color = faction_colors_ref.get(Faction.PLAYER, Color.MAGENTA) as Color
 	draw_circle(center, radius, ring_color)
 
 	# 白色内圆（半径减环宽）—— 在地形上保留对比度，并承载文字

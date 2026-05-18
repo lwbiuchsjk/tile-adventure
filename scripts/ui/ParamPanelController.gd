@@ -50,6 +50,9 @@ var _control_state: Dictionary = {}
 ## 启动时 + 每次 F2 写回成功后重新捕获 —— "打开前快照" = 上次保存时的状态 或 Godot 启动时的初始值
 var _opened_snapshot: Dictionary = {}
 
+## F1 切换时设 true，下次 _render_panel 强制 reposition 窗口到屏幕内（防最大化时跑屏外）
+var _force_reposition_on_next_render: bool = false
+
 
 # ─────────────────────────────────────────
 # Preset UI 状态（MVP-C.2 阶段 3）
@@ -146,6 +149,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	match key_event.keycode:
 		KEY_F1:
 			_visible = not _visible
+			# 每次 F1 唤起都强制 reposition：避免窗口被拖到屏幕外 / 最大化前后 viewport 尺寸变化遗留位置
+			if _visible:
+				_force_reposition_on_next_render = true
 			get_viewport().set_input_as_handled()
 		KEY_F2:
 			_save_dirty_resources()
@@ -165,6 +171,19 @@ func _process(_delta: float) -> void:
 
 ## ImGui 主面板：按 category 大类 → scene 二级 TreeNode 渲染
 func _render_panel() -> void:
+	# 窗口位置 / 大小：首次默认右上；F1 切换时强制 reposition 防跑屏外（最大化场景）
+	# Cond_FirstUseEver 让用户首次后可自由拖动；_force_reposition_on_next_render 触发 Cond_Always 单帧覆盖
+	var cond_first: int = ImGui.Cond_FirstUseEver
+	var cond_force: int = ImGui.Cond_Always if _force_reposition_on_next_render else ImGui.Cond_FirstUseEver
+	# viewport 实际像素尺寸（最大化 / 全屏时为屏幕分辨率；窗口模式为窗口客户区尺寸）
+	var vp_size: Vector2 = get_viewport().get_visible_rect().size
+	# 默认位置：右上角内偏 20px；默认大小：宽 500 / 高 viewport 高度的 80%（最少 400）
+	var default_size: Vector2 = Vector2(500.0, maxf(400.0, vp_size.y * 0.8))
+	var default_pos: Vector2 = Vector2(maxf(20.0, vp_size.x - default_size.x - 20.0), 20.0)
+	ImGui.SetNextWindowPos(default_pos, cond_force)
+	ImGui.SetNextWindowSize(default_size, cond_first)
+	if _force_reposition_on_next_render:
+		_force_reposition_on_next_render = false
 	if not ImGui.Begin("调参面板  [F1 关闭] [F2 保存]"):
 		ImGui.End()
 		return
