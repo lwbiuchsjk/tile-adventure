@@ -518,15 +518,12 @@ func _refresh_preset_cache(scene_id: String) -> void:
 
 
 ## 给 preset 反推磁盘路径（用于 active_path 比对）
-## preset 自身不存路径字段；通过 scene_id + display_name 反推不安全（display_name 与文件名解耦），
-## 改用 list_presets_for_scene 返回的路径列表 + cache 索引位置对应
+## P1.1 修复（Codex 审 MVP-C.2 2026-05-18）：直读 preset._source_path（load_preset_from_disk 回填的运行时字段），
+## 避免原 "cache[i] → paths[i]" 索引反推在 cache 内有坏 preset（load 返回 null 被跳过）时错位
 func _preset_path_for(preset: ParamPreset, scene_id: String) -> String:
-	var paths: Array[String] = list_presets_for_scene(scene_id)
-	var cache: Array = _preset_cache.get(scene_id, []) as Array
-	for i in cache.size():
-		if cache[i] == preset and i < paths.size():
-			return paths[i]
-	return ""
+	if preset == null:
+		return ""
+	return preset._source_path
 
 
 ## 取当前 active preset 的 display_name（用于 popup 文本显示）
@@ -1026,6 +1023,7 @@ func save_preset_to_disk(preset: ParamPreset, filename: String) -> int:
 
 ## 读 preset .tres 为 ParamPreset 实例
 ## 校验：scene_id 必须与所在子目录名一致（设计文档 §7 要求），不一致 print warning 但仍返回
+## P1.1 修复（Codex 审 MVP-C.2 2026-05-18）：load 后回填 _source_path，cache 内坏 preset 跳过时 _preset_path_for 不再索引错位
 func load_preset_from_disk(preset_path: String) -> ParamPreset:
 	var res: Resource = load(preset_path)
 	if res == null:
@@ -1035,6 +1033,7 @@ func load_preset_from_disk(preset_path: String) -> ParamPreset:
 		push_error("[ParamPanel] %s 不是 ParamPreset 类型" % preset_path)
 		return null
 	var preset: ParamPreset = res as ParamPreset
+	preset._source_path = preset_path
 	# 校验子目录与 scene_id 一致：先取父目录名
 	var parent_dir: String = preset_path.get_base_dir().get_file()
 	if parent_dir != preset.scene_id:
@@ -1074,7 +1073,14 @@ func apply_preset(scene: ParamPanelScene, preset: ParamPreset) -> void:
 			matched_field.dict_key = snap.dict_key
 			matched_field.passive = false
 			push_warning("[ParamPanel] preset 内字段 %s::%s 在当前场景 '%s' 未找到映射，按 default_redraw_targets 处理" % [snap.field_name, str(snap.dict_key), scene.scene_id])
-		_on_field_changed(scene, matched_field, snap.value)
+		# P0 修复（Codex 审 MVP-C.2 2026-05-18）：Dict/Array 值类型 deep duplicate，避免 preset 内快照与 instance 共享引用
+		# 同 _capture_snapshot 套路；Color/float/int/String/bool 是值类型直接传
+		var applied_value: Variant = snap.value
+		if applied_value is Dictionary:
+			applied_value = (applied_value as Dictionary).duplicate(true)
+		elif applied_value is Array:
+			applied_value = (applied_value as Array).duplicate(true)
+		_on_field_changed(scene, matched_field, applied_value)
 		# 清此字段控件缓存（下帧重新从新值读）
 		_control_state.erase(_make_state_key(matched_field))
 	# 3. _on_field_changed 已把 redraw 加进 _pending_redraw，下帧 _flush_pending_redraw 自动触发；

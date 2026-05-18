@@ -286,14 +286,15 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 + **MVP-C.1 全部跑测落地**（2026-05-18 F2 桌面验收通过，共 8 份 Resource × 113 活跃字段 + imgui-godot Canvas 模式运行时面板）；MVP-C.1 4 commit 已 push（`24afc9a` / `bcf5043` / `64869eb` / `18594ca`）；codex 2 P1 留[待跟踪 §十四](tile-advanture-design/待跟踪事项索引.md#十四mvp-c1-调参面板-codex-审查后续)；**MVP-C.2 待启动**（25 场景补全 + preset + Dict Combo + UX 打磨；含处理 P1.1 redraw schema 扩展）
+_（暂无活跃条目；MVP-C 整批 2026-05-19 归档；下一条线待启动）_
 
 ## 预启动（方向已认可，等启动时机）
 
-_（暂无预启动条目；参数调整便利化已升级到「活跃」，详见 MVP-B 设计文档）_
+- **MVP-D（参数 Resource 化第 3 步：CSV 数值调参 + auto-include 流程）** — 2026-05-18 拍板初步决议：仅迁 13 个 key/value CSV（B 类多列数据表不动）+ auto-include schema + skip 标注；定稿待启动时基于实践再调
 
 ## 已归档
 
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B + MVP-B.2 + MVP-C 整批全部跑测落地（2026-05-17 ~ 2026-05-19，17 commits）；8 份 Resource × 113 活跃字段 + imgui-godot Canvas 模式运行时面板 + 25 场景 + preset 系统完整闭环；2 整批 codex 审查全数处置；阶段 4 UX 打磨 + 校验脚本跳过挪 MVP-D / 待跟踪 P3；含字段维护工作流 §初步决议（2 拍板）
 - [P1_代码健康度回看](tile-advanture-design/进度/P1_代码健康度回看_推进进度.md) — MVP-α / α.5 / β / γ / δ / ε 6 批全部完成（2026-05-13 ~ 2026-05-16）；WorldMap.gd 5820 → 3574 行（净减 2246 / 38.6%），BattleSession 865 → 641 行；新抽 29 个子模块；测试套件 M1-M8 + RunState + NarrativeProvider 共 10 套件
 - [入口4_夜晚视野](tile-advanture-design/进度/入口4_夜晚视野_推进进度.md) — 桌面端跑测验收通过（2026-05-11），含两轮跑测修复；HTML / 性能基线落 P1 跟踪
 - [P0_胜负条件重设计](tile-advanture-design/进度/P0_胜负条件重设计_推进进度.md) — 第一/第二阶段全部跑测验收通过（2026-05-08 / 2026-05-11）；真·无限地图启动时整局节奏将回看

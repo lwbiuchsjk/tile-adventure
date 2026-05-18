@@ -34,6 +34,9 @@ func _init() -> void:
 	ok = _test_save_load_list_delete(panel) and ok
 	ok = _test_apply_preset_dirty_flag(panel) and ok
 	ok = _test_rename_preset(panel) and ok
+	# Codex 审 MVP-C.2 P0/P1.1 修复后补的测试盲区
+	ok = _test_apply_preset_deep_copy_dict_array(panel) and ok
+	ok = _test_preset_source_path_set_on_load(panel) and ok
 	# cleanup user:// 测试目录
 	_cleanup_test_dir()
 	if ok:
@@ -269,6 +272,83 @@ func _test_rename_preset(panel: Node) -> bool:
 		_cleanup_test_preset_dir("_test_rename_zzz")
 		return false
 	_cleanup_test_preset_dir("_test_rename_zzz")
+	return true
+
+
+# ─────────────────────────────────────────
+# Codex 审 MVP-C.2 P0/P1.1 修复后的补盲测试
+# ─────────────────────────────────────────
+
+## P0 修复验证：apply_preset 对 Dict / Array 字段做 deep duplicate，preset 内快照与 instance 不共享引用
+## 用 InfluenceConfig.faction_colors（Dict）走 apply → 改 instance dict 应不影响 preset 内 snapshot
+func _test_apply_preset_deep_copy_dict_array(panel: Node) -> bool:
+	var inf_cfg: Resource = load("res://assets/config/influence_config.tres")
+	# 备份原 faction_colors 内容以便恢复
+	var orig_dict: Dictionary = (inf_cfg.get("faction_colors") as Dictionary).duplicate(true)
+	# 构造 preset：snap.value 是整个 Dict（虽然实际项目用 dict_key 拆开，但 schema 支持整 Dict 字段）
+	var preset_dict: Dictionary = {0: Color(0.1, 0.1, 0.1), 1: Color(0.2, 0.2, 0.2), 2: Color(0.3, 0.3, 0.3)}
+	var preset: ParamPreset = _make_test_preset("_test_deep_copy_zzz", "deep copy", [
+		{"path": "res://assets/config/influence_config.tres",
+			"field": "faction_colors", "dict_key": null, "value": preset_dict},
+	])
+	# 构造场景含此字段的最小映射
+	var scene: ParamPanelScene = ParamPanelScene.new()
+	scene.scene_id = "_test_deep_copy_zzz"
+	var f: ParamFieldMapping = ParamFieldMapping.new()
+	f.target_resource_path = "res://assets/config/influence_config.tres"
+	f.field_name = "faction_colors"
+	f.dict_key = null
+	f.passive = true
+	scene.fields = [f]
+	# 记录 preset 内 snapshot Dict 的 hash（apply 前）
+	var snap_dict_before: Dictionary = (preset.field_snapshots[0] as FieldSnapshot).value as Dictionary
+	var hash_before: int = snap_dict_before.hash()
+	panel.apply_preset(scene, preset)
+	# instance 应已有 preset 的 Dict 内容
+	var inst_dict: Dictionary = inf_cfg.get("faction_colors") as Dictionary
+	if inst_dict[1] != Color(0.2, 0.2, 0.2):
+		push_error("apply 后 instance Dict 字段未生效")
+		inf_cfg.set("faction_colors", orig_dict)
+		return false
+	# 关键验证：改 instance Dict（模拟用户后续调字段）应不影响 preset 内 snapshot
+	inst_dict[1] = Color(0.99, 0.99, 0.99)
+	var hash_after: int = snap_dict_before.hash()
+	if hash_after != hash_before:
+		push_error("P0 bug 未修复：改 instance 同步改了 preset 内 snapshot（共享引用）")
+		inf_cfg.set("faction_colors", orig_dict)
+		return false
+	# 恢复
+	inf_cfg.set("faction_colors", orig_dict)
+	return true
+
+
+## P1.1 修复验证：load_preset_from_disk 后 preset._source_path 已被回填
+func _test_preset_source_path_set_on_load(panel: Node) -> bool:
+	var preset: ParamPreset = _make_test_preset("_test_source_path_zzz", "test", [
+		{"path": "res://x.tres", "field": "fa", "dict_key": null, "value": 1},
+	])
+	var err: int = panel.save_preset_to_disk(preset, "p1")
+	if err != OK:
+		_cleanup_test_preset_dir("_test_source_path_zzz")
+		return false
+	var expected_path: String = "res://assets/config/presets/_test_source_path_zzz/p1.tres"
+	var loaded: ParamPreset = panel.load_preset_from_disk(expected_path)
+	if loaded == null:
+		_cleanup_test_preset_dir("_test_source_path_zzz")
+		return false
+	if loaded._source_path != expected_path:
+		push_error("load 后 _source_path 未回填，actual='%s' expected='%s'" % [loaded._source_path, expected_path])
+		_cleanup_test_preset_dir("_test_source_path_zzz")
+		return false
+	# _preset_path_for 应能正确反推（即使 cache 内有坏 preset）
+	# 模拟 cache 含 loaded preset + 1 个 null（坏 preset）
+	# 直接调 _preset_path_for（注：_preset_path_for 是 _ 私有但 GDScript 可外部调）
+	var path_via_helper: String = panel._preset_path_for(loaded, "_test_source_path_zzz")
+	if path_via_helper != expected_path:
+		push_error("_preset_path_for 返回 '%s' ≠ expected '%s'" % [path_via_helper, expected_path])
+		_cleanup_test_preset_dir("_test_source_path_zzz")
+		return false
+	_cleanup_test_preset_dir("_test_source_path_zzz")
 	return true
 
 

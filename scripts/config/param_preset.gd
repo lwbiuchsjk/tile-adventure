@@ -23,3 +23,8 @@ extends Resource
 
 ## 美术 / 设计的备注（可选）
 @export_multiline var note: String = ""
+
+## 运行时字段（**不持久化** —— 无 @export）：load_preset_from_disk 加载时回填磁盘路径
+## 用途：避免 cache 内坏 preset 跳过时 _preset_path_for 用 "cache[i] → paths[i]" 索引反推错位
+## Codex 审查 MVP-C.2 P1.1 修复（2026-05-18）
+var _source_path: String = ""
