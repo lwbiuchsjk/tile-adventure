@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="SmokeTestResource" load_steps=2 format=3 uid="uid://csmoketestinstance0"]
+
+[ext_resource type="Script" uid="uid://cborhue7b88d0" path="res://test/v3_registry_smoke/smoke_test_resource.gd" id="1_smoke"]
+
+[resource]
+script = ExtResource("1_smoke")
+float_with_range = 3.14
+float_no_range = 50.0
+bool_flag = false
+color_rgba = Color(0.5, 0.7, 0.9, 1.0)
+int_with_range = 42
+some_text = "hello"
+skipped_field = 999

@@ -1,8 +1,16 @@
-[gd_resource type="Resource" script_class="ParamPanelRegistry" load_steps=3 format=3 uid="uid://dpanelregistryroot"]
+[gd_resource type="Resource" script_class="ParamPanelRegistry" load_steps=4 format=3 uid="uid://dpanelregistryroot"]
 
 [ext_resource type="Script" uid="uid://k26amlw3li6h" path="res://scripts/config/param_panel_registry.gd" id="1_registry"]
 [ext_resource type="Script" uid="uid://bohoijet2nq20" path="res://scripts/config/param_panel_registry_entry.gd" id="2_entry"]
 
+[sub_resource type="Resource" id="entry_smoke"]
+script = ExtResource("2_entry")
+tres_path = "res://test/v3_registry_smoke/smoke_test.tres"
+group = &"smoke 测试"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
 [resource]
 script = ExtResource("1_registry")
-entries = Array[Resource]([])
+entries = Array[Resource]([SubResource("entry_smoke")])
