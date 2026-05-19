@@ -26,6 +26,7 @@ const TEST_PRESET_DIR: String = "user://test_preset_tmp/"
 func _init() -> void:
 	var panel: Node = Node.new()
 	panel.set_script(ControllerScript)
+	panel._preset_manager = ParamPresetManager.new(panel)
 	var ok: bool = true
 	ok = _test_schema_instantiate() and ok
 	ok = _test_schema_roundtrip() and ok
@@ -121,13 +122,13 @@ func _test_sanitize_filename(panel: Node) -> bool:
 	for case in cases:
 		var input: String = (case as Array)[0]
 		var expected: String = (case as Array)[1]
-		var actual: String = panel.sanitize_preset_filename(input)
+		var actual: String = panel._preset_manager.sanitize_preset_filename(input)
 		if actual != expected:
 			push_error("sanitize 不匹配：input='%s' expected='%s' actual='%s'" % [input, expected, actual])
 			return false
 	# 限长 64
 	var long_input: String = "a".repeat(100)
-	var long_out: String = panel.sanitize_preset_filename(long_input)
+	var long_out: String = panel._preset_manager.sanitize_preset_filename(long_input)
 	if long_out.length() != 64:
 		push_error("sanitize 限长 64 失效，实际 length=%d" % long_out.length())
 		return false
@@ -144,7 +145,8 @@ func _test_capture_scene() -> bool:
 	var scene: ParamPanelScene = _make_test_scene_minimal()
 	var panel: Node = Node.new()
 	panel.set_script(ControllerScript)
-	var preset: ParamPreset = panel.capture_scene_as_preset(scene, "捕获测试")
+	panel._preset_manager = ParamPresetManager.new(panel)
+	var preset: ParamPreset = panel._preset_manager.capture_scene_as_preset(scene, "捕获测试")
 	if preset == null:
 		push_error("capture_scene_as_preset 返回 null")
 		return false
@@ -177,31 +179,31 @@ func _test_save_load_list_delete(panel: Node) -> bool:
 	# 解决：暂时在 res://assets/config/presets/ 下用唯一 scene_id 写测试 preset，结束清理
 	var test_scene_id: String = "_test_temp_save_scene_zzz"
 	preset.scene_id = test_scene_id
-	var err: int = panel.save_preset_to_disk(preset, "case1")
+	var err: int = panel._preset_manager.save_preset_to_disk(preset, "case1")
 	if err != OK:
 		push_error("save_preset_to_disk 失败 err=%d" % err)
 		return false
 	# list 应返回 1 个
-	var listed: Array[String] = panel.list_presets_for_scene(test_scene_id)
+	var listed: Array[String] = panel._preset_manager.list_presets_for_scene(test_scene_id)
 	if listed.size() != 1:
 		push_error("list_presets_for_scene 数量不对 expected=1 actual=%d" % listed.size())
 		_cleanup_test_preset_dir(test_scene_id)
 		return false
 	# load 回来字段匹配
-	var loaded: ParamPreset = panel.load_preset_from_disk(listed[0])
+	var loaded: ParamPreset = panel._preset_manager.load_preset_from_disk(listed[0])
 	if loaded == null or loaded.display_name != "保存测试" \
 			or loaded.scene_id != test_scene_id or loaded.field_snapshots.size() != 1:
 		push_error("load_preset_from_disk 字段不匹配")
 		_cleanup_test_preset_dir(test_scene_id)
 		return false
 	# delete 删除文件
-	var del_err: int = panel.delete_preset(listed[0])
+	var del_err: int = panel._preset_manager.delete_preset(listed[0])
 	if del_err != OK:
 		push_error("delete_preset 失败 err=%d" % del_err)
 		_cleanup_test_preset_dir(test_scene_id)
 		return false
 	# list 应为空
-	if not panel.list_presets_for_scene(test_scene_id).is_empty():
+	if not panel._preset_manager.list_presets_for_scene(test_scene_id).is_empty():
 		push_error("delete 后 list 应为空")
 		_cleanup_test_preset_dir(test_scene_id)
 		return false
@@ -223,18 +225,18 @@ func _test_apply_preset_dirty_flag(panel: Node) -> bool:
 	])
 	var scene: ParamPanelScene = _make_test_scene_minimal()
 	# apply 前 has_unsaved_dirty = false
-	if panel.has_unsaved_dirty():
+	if panel._preset_manager.has_unsaved_dirty():
 		push_error("apply 前 has_unsaved_dirty 应为 false")
 		night_cfg.set("vision_radius_grids", orig_vision)  # 兜底恢复
 		return false
-	panel.apply_preset(scene, preset)
+	panel._preset_manager.apply_preset(scene, preset)
 	# apply 后字段值已写
 	if (night_cfg.get("vision_radius_grids") as int) != orig_vision + 1:
 		push_error("apply 后字段值未写入实例")
 		night_cfg.set("vision_radius_grids", orig_vision)
 		return false
 	# has_unsaved_dirty = true
-	if not panel.has_unsaved_dirty():
+	if not panel._preset_manager.has_unsaved_dirty():
 		push_error("apply 后 has_unsaved_dirty 应为 true")
 		night_cfg.set("vision_radius_grids", orig_vision)
 		return false
@@ -251,22 +253,22 @@ func _test_rename_preset(panel: Node) -> bool:
 	var preset: ParamPreset = _make_test_preset("_test_rename_zzz", "原名", [
 		{"path": "res://x.tres", "field": "fa", "dict_key": null, "value": 1},
 	])
-	var err: int = panel.save_preset_to_disk(preset, "renamecase")
+	var err: int = panel._preset_manager.save_preset_to_disk(preset, "renamecase")
 	if err != OK:
 		push_error("rename 前 save 失败 err=%d" % err)
 		_cleanup_test_preset_dir("_test_rename_zzz")
 		return false
-	var listed: Array[String] = panel.list_presets_for_scene("_test_rename_zzz")
+	var listed: Array[String] = panel._preset_manager.list_presets_for_scene("_test_rename_zzz")
 	if listed.is_empty():
 		_cleanup_test_preset_dir("_test_rename_zzz")
 		return false
-	var rename_err: int = panel.rename_preset(listed[0], "新名字 v2")
+	var rename_err: int = panel._preset_manager.rename_preset(listed[0], "新名字 v2")
 	if rename_err != OK:
 		push_error("rename_preset 失败 err=%d" % rename_err)
 		_cleanup_test_preset_dir("_test_rename_zzz")
 		return false
 	# 读回检查 display_name 改了 + 文件路径不变
-	var loaded: ParamPreset = panel.load_preset_from_disk(listed[0])
+	var loaded: ParamPreset = panel._preset_manager.load_preset_from_disk(listed[0])
 	if loaded == null or loaded.display_name != "新名字 v2":
 		push_error("rename 后 display_name 未更新")
 		_cleanup_test_preset_dir("_test_rename_zzz")
@@ -303,7 +305,7 @@ func _test_apply_preset_deep_copy_dict_array(panel: Node) -> bool:
 	# 记录 preset 内 snapshot Dict 的 hash（apply 前）
 	var snap_dict_before: Dictionary = (preset.field_snapshots[0] as FieldSnapshot).value as Dictionary
 	var hash_before: int = snap_dict_before.hash()
-	panel.apply_preset(scene, preset)
+	panel._preset_manager.apply_preset(scene, preset)
 	# instance 应已有 preset 的 Dict 内容
 	var inst_dict: Dictionary = inf_cfg.get("faction_colors") as Dictionary
 	if inst_dict[1] != Color(0.2, 0.2, 0.2):
@@ -327,12 +329,12 @@ func _test_preset_source_path_set_on_load(panel: Node) -> bool:
 	var preset: ParamPreset = _make_test_preset("_test_source_path_zzz", "test", [
 		{"path": "res://x.tres", "field": "fa", "dict_key": null, "value": 1},
 	])
-	var err: int = panel.save_preset_to_disk(preset, "p1")
+	var err: int = panel._preset_manager.save_preset_to_disk(preset, "p1")
 	if err != OK:
 		_cleanup_test_preset_dir("_test_source_path_zzz")
 		return false
 	var expected_path: String = "res://assets/config/presets/_test_source_path_zzz/p1.tres"
-	var loaded: ParamPreset = panel.load_preset_from_disk(expected_path)
+	var loaded: ParamPreset = panel._preset_manager.load_preset_from_disk(expected_path)
 	if loaded == null:
 		_cleanup_test_preset_dir("_test_source_path_zzz")
 		return false
@@ -343,7 +345,7 @@ func _test_preset_source_path_set_on_load(panel: Node) -> bool:
 	# _preset_path_for 应能正确反推（即使 cache 内有坏 preset）
 	# 模拟 cache 含 loaded preset + 1 个 null（坏 preset）
 	# 直接调 _preset_path_for（注：_preset_path_for 是 _ 私有但 GDScript 可外部调）
-	var path_via_helper: String = panel._preset_path_for(loaded, "_test_source_path_zzz")
+	var path_via_helper: String = panel._preset_manager._preset_path_for(loaded, "_test_source_path_zzz")
 	if path_via_helper != expected_path:
 		push_error("_preset_path_for 返回 '%s' ≠ expected '%s'" % [path_via_helper, expected_path])
 		_cleanup_test_preset_dir("_test_source_path_zzz")
