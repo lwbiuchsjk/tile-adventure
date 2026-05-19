@@ -21,6 +21,9 @@ extends Node
 ## 场景目录扫描根路径
 const SCENE_DIR: String = "res://assets/config/param_panel/"
 
+## MVP-D D.1.b：Pull 通道中心 registry 文件路径
+const REGISTRY_PATH: String = "res://assets/config/param_panel/_panel_registry.tres"
+
 
 # ─────────────────────────────────────────
 # 状态
@@ -68,6 +71,7 @@ func _ready() -> void:
 		return
 	_preset_manager = ParamPresetManager.new(self)
 	_load_all_scenes()
+	_load_registry_entries()  # MVP-D D.1.b：Pull 通道（在 Push _load_all_scenes 之后跑，便于按 Resource path 去重）
 	_capture_snapshot()
 	print("[ParamPanel] 已加载 %d 场景（F1 唤起 / F2 保存）" % _scenes.size())
 
@@ -114,6 +118,168 @@ func _load_all_scenes() -> void:
 				(_scenes_by_category[scene.category] as Array).append(scene)
 		fname = dir.get_next()
 	dir.list_dir_end()
+
+
+# ─────────────────────────────────────────
+# MVP-D D.1.b：Pull 通道（中心 registry 自省）
+#
+# 设计原文：tile-advanture-design/参数Resource化/MVP-D_CSV数值与auto-include.md
+#           §变体 A registry 机制设计 / §面板扫描流程
+#
+# 剥离原则：功能开发不感知调参面板。Resource 普通 `extends Resource`，
+#   纳入面板作为独立步骤——编辑 _panel_registry.tres 加 ParamPanelRegistryEntry 条目。
+#
+# 去重：与 Push 通道（现有 25 ParamPanelScene）共存。按 target_resource_path 粗粒度去重——
+#   Push 已收录的 Resource，Pull 跳过整个 entry（避免同 Resource 在两个 tab 重复出现）。
+# ─────────────────────────────────────────
+
+## 启动时读 registry，把每个 entry 转成动态 ParamPanelScene 塞入既有渲染管线
+## 时机：_ready 内 _load_all_scenes 之后（保证 Push 通道先入 _scenes，便于按 path 去重）
+func _load_registry_entries() -> void:
+	if not ResourceLoader.exists(REGISTRY_PATH):
+		# 首次启动 / 未注册任何 Pull 条目时可忽略
+		return
+	var registry: Resource = load(REGISTRY_PATH)
+	if not registry is ParamPanelRegistry:
+		push_warning("[ParamPanel] registry 文件类型不匹配 %s" % REGISTRY_PATH)
+		return
+	var reg: ParamPanelRegistry = registry as ParamPanelRegistry
+	# 1. 收集 Push 通道已注册的 Resource path 集合（用于去重）
+	var push_paths: Dictionary = {}
+	for scene_any in _scenes:
+		var scene: ParamPanelScene = scene_any as ParamPanelScene
+		for field_any in scene.fields:
+			var field: ParamFieldMapping = field_any as ParamFieldMapping
+			if field != null and field.target_resource_path != "":
+				push_paths[field.target_resource_path] = true
+	# 2. 遍历 registry entries
+	var added: int = 0
+	var skipped: int = 0
+	for entry_any in reg.entries:
+		var entry: ParamPanelRegistryEntry = entry_any as ParamPanelRegistryEntry
+		if entry == null or entry.tres_path == "":
+			continue
+		if push_paths.has(entry.tres_path):
+			# 已被 Push 通道收录，跳过整个 entry（粗粒度去重，符合 D 设计文档 §与现有 25 场景的关系）
+			skipped += 1
+			continue
+		var instance: Resource = load(entry.tres_path)
+		if instance == null:
+			push_warning("[ParamPanel] registry tres_path 加载失败: %s" % entry.tres_path)
+			continue
+		var fields: Array[ParamFieldMapping] = _enumerate_export_fields(instance, entry)
+		if fields.is_empty():
+			push_warning("[ParamPanel] registry entry 无可推断字段 %s" % entry.tres_path)
+			continue
+		# 转成动态 ParamPanelScene 塞入既有缓存
+		var scene: ParamPanelScene = ParamPanelScene.new()
+		scene.scene_id = _make_pull_scene_id(entry.tres_path)
+		scene.display_name = entry.tres_path.get_file().trim_suffix(".tres")
+		scene.category = String(entry.group)
+		# 实时调参标志通过字段级 passive 反推：realtime=false → 全字段 passive（避免触发 redraw 仍能写回，配合「⚠ 重启生效」提示）
+		# realtime=true → 字段 passive=false + redraw_targets 应用
+		var node_paths_as_strings: Array[String] = []
+		for np: NodePath in entry.redraw_targets:
+			node_paths_as_strings.append(String(np))
+		scene.default_redraw_targets = node_paths_as_strings
+		scene.fields = fields
+		_scenes.append(scene)
+		if not _scenes_by_category.has(scene.category):
+			_scenes_by_category[scene.category] = []
+		(_scenes_by_category[scene.category] as Array).append(scene)
+		added += 1
+	if added > 0 or skipped > 0:
+		print("[ParamPanel] Pull 通道：新增 %d 场景，跳过 %d（与 Push 重复）" % [added, skipped])
+
+
+## 用 Resource.get_property_list() 自省 @export 字段 → 转成 ParamFieldMapping 数组
+## 跳过 skip_fields + 不支持类型字段（warning）
+func _enumerate_export_fields(instance: Resource, entry: ParamPanelRegistryEntry) -> Array[ParamFieldMapping]:
+	var result: Array[ParamFieldMapping] = []
+	var skip_set: Dictionary = {}
+	for sf: String in entry.skip_fields:
+		skip_set[sf] = true
+	for prop in instance.get_property_list():
+		var prop_info: Dictionary = prop as Dictionary
+		var usage: int = int(prop_info.get("usage", 0))
+		# 仅 @export 字段：脚本变量 + 编辑器可见 + 存储
+		if not (usage & PROPERTY_USAGE_SCRIPT_VARIABLE):
+			continue
+		if not (usage & PROPERTY_USAGE_EDITOR):
+			continue
+		if not (usage & PROPERTY_USAGE_STORAGE):
+			continue
+		var pname: String = str(prop_info.get("name", ""))
+		if pname == "":
+			continue
+		if skip_set.has(pname):
+			continue
+		# 推断 control_type + slider 范围
+		var inferred: Dictionary = _infer_control_type(prop_info)
+		if inferred.is_empty():
+			push_warning("[ParamPanel] registry 字段类型不支持自省 %s.%s（type=%d）" %
+				[entry.tres_path, pname, int(prop_info.get("type", -1))])
+			continue
+		var field: ParamFieldMapping = ParamFieldMapping.new()
+		# realtime=false → 加 ⚠ 重启生效 后缀提示用户
+		var label_suffix: String = "" if entry.realtime else "  ⚠ 重启生效"
+		field.display_label = "%s%s" % [pname, label_suffix]
+		field.target_resource_path = entry.tres_path
+		field.field_name = pname
+		field.dict_key = null
+		field.control_type = inferred["control_type"]
+		field.slider_min = inferred.get("slider_min", 0.0)
+		field.slider_max = inferred.get("slider_max", 1.0)
+		# realtime=false 字段标 passive=true：写回实例 + 不触发 redraw（avoid 假象「实时生效」）
+		# realtime=true 字段 passive=false + 走 entry.redraw_targets（scene.default_redraw_targets 继承）
+		field.passive = not entry.realtime
+		result.append(field)
+	return result
+
+
+## 按 @export 类型 / hint 推断 control_type + slider 范围
+## 返回 Dictionary：{control_type: String, slider_min: float, slider_max: float}
+## 不支持类型返回 {}
+func _infer_control_type(prop_info: Dictionary) -> Dictionary:
+	var ptype: int = int(prop_info.get("type", -1))
+	var hint: int = int(prop_info.get("hint", 0))
+	var hint_string: String = str(prop_info.get("hint_string", ""))
+	match ptype:
+		TYPE_FLOAT:
+			var smin: float = 0.0
+			var smax: float = 1.0
+			if hint == PROPERTY_HINT_RANGE:
+				var parts: PackedStringArray = hint_string.split(",")
+				if parts.size() >= 2:
+					smin = float(parts[0])
+					smax = float(parts[1])
+			else:
+				# 无 range hint 默认范围 [0, 100]（覆盖多数动画时长 / 像素尺寸场景）
+				smax = 100.0
+			return {"control_type": "SliderFloat", "slider_min": smin, "slider_max": smax}
+		TYPE_INT:
+			var smin: float = 0.0
+			var smax: float = 100.0
+			if hint == PROPERTY_HINT_RANGE:
+				var parts: PackedStringArray = hint_string.split(",")
+				if parts.size() >= 2:
+					smin = float(parts[0])
+					smax = float(parts[1])
+			return {"control_type": "SliderInt", "slider_min": smin, "slider_max": smax}
+		TYPE_COLOR:
+			return {"control_type": "ColorEdit4", "slider_min": 0.0, "slider_max": 1.0}
+		TYPE_BOOL:
+			return {"control_type": "Checkbox", "slider_min": 0.0, "slider_max": 1.0}
+		TYPE_STRING, TYPE_STRING_NAME:
+			return {"control_type": "InputText", "slider_min": 0.0, "slider_max": 1.0}
+		_:
+			# Vector2/3 / Dict / Array 等暂不支持自省（走旧 Push 通道手工 fields）
+			return {}
+
+
+## Pull 通道动态 scene 的 scene_id（用 path basename 派生，保 preset 路径稳定）
+func _make_pull_scene_id(tres_path: String) -> String:
+	return "pull_" + tres_path.get_file().trim_suffix(".tres")
 
 
 # ─────────────────────────────────────────
@@ -236,6 +402,8 @@ func _render_field(scene: ParamPanelScene, field: ParamFieldMapping) -> void:
 			_render_color_edit(scene, field, instance, state_key, true)
 		"InputText":
 			_render_input_text(scene, field, instance, state_key)
+		"Checkbox":
+			_render_checkbox(scene, field, instance, state_key)
 		_:
 			ImGui.Text("%s [未支持控件: %s]" % [field.display_label, field.control_type])
 	# hover 控件 → 弹路径 tooltip + 用户自定义 tooltip（B1 需求：位置查看）
@@ -363,6 +531,20 @@ func _render_input_text(scene: ParamPanelScene, field: ParamFieldMapping, instan
 	# imgui-godot v6.3.2 binding：InputText(label, text_array, buffer_size)，buffer 为 String 字节长度上限
 	if ImGui.InputText(_make_imgui_label(field, state_key), arr, 256):
 		_on_field_changed(scene, field, str(arr[0]))
+
+
+## bool 字段渲染（MVP-D D.1.b：Pull 通道 @export bool 字段类型推断）
+## binding 模式：state_key → [bool]（单元素数组承载 ImGui Checkbox 引用）
+func _render_checkbox(scene: ParamPanelScene, field: ParamFieldMapping, instance: Resource, state_key: String) -> void:
+	if not _control_state.has(state_key):
+		var raw: Variant = _read_field_value(instance, field)
+		if raw == null:
+			ImGui.TextColored(Color(1.0, 0.3, 0.3, 1.0), "[err] %s 值为 null" % field.display_label)
+			return
+		_control_state[state_key] = [bool(raw)]
+	var arr: Array = _control_state[state_key]
+	if ImGui.Checkbox(_make_imgui_label(field, state_key), arr):
+		_on_field_changed(scene, field, bool(arr[0]))
 
 
 # ─────────────────────────────────────────
