@@ -286,7 +286,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 启动（2026-05-19）；6 决策点拍板（含方向调整：原 Push auto-include 改为 Pull 模式 + 变体 B 基类+ClassDB 扫描）+ 设计文档 v0.1 落盘，待 D.1 前置基建启动（const cache bug 修法 + 拆 ParamPresetManager + ClassDB 验证）
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 启动（2026-05-19 + 当日 v0.2 方向修正）；7 决策点 v0.2 定稿（变体 A 中心 registry + 剥离原则 + cache bug 作已知限制 + realtime 按需）+ V1/V2 验证保留作技术储备 + 设计文档 v0.2 落盘，待新 D.1（registry 机制 + 拆 ParamPresetManager）启动
 
 ## 预启动（方向已认可，等启动时机）
 

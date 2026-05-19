@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="CacheSmokeResource" load_steps=2 format=3 uid="uid://b8x7v2cache0d1v2"]
+
+[ext_resource type="Script" uid="uid://placeholder" path="res://test/v2_cache_repro/cache_smoke_resource.gd" id="1_smoke"]
+
+[resource]
+script = ExtResource("1_smoke")
+test_float = 1.0
+test_int = 1
+test_color = Color(1, 1, 1, 1)
+test_dict = {"k": "initial"}
+test_array = [1, 2, 3]
