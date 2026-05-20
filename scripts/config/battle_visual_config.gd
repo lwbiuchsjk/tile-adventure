@@ -61,6 +61,29 @@ extends Resource
 
 
 # ─────────────────────────────────────────
+# 撤退提示（持久 slot 战场参与设计 L1.1 UX）
+# ─────────────────────────────────────────
+
+## 可撤退边界格填充色（青绿，与移动白 / 攻击红明显区分）
+@export var retreat_cell_color: Color = Color(0.20, 0.85, 0.70, 0.22)
+
+## 可撤退边界格描边色（青绿高亮，醒目提示"站这里能撤退"）
+@export var retreat_cell_border_color: Color = Color(0.30, 1.0, 0.80, 0.90)
+
+## 可撤退边界格描边线宽（px）
+@export_range(0.0, 10.0, 0.5) var retreat_cell_border_width: float = 2.5
+
+## 撤退方向文字颜色（与边界格同色系，高对比）
+@export var retreat_hint_text_color: Color = Color(0.40, 1.0, 0.85, 1.0)
+
+## 撤退方向文字字号（px）
+@export_range(8, 48) var retreat_hint_font_size: int = 18
+
+## 撤退方向文字距战场边外侧偏移（px）
+@export_range(0.0, 80.0, 1.0) var retreat_hint_offset_px: float = 22.0
+
+
+# ─────────────────────────────────────────
 # 当前 actor 圆环高亮
 # ─────────────────────────────────────────
 

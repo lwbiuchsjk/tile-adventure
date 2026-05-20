@@ -24,7 +24,11 @@ extends RefCounted
 enum Phase { PLAYER_TURN = 0, ENEMY_TURN = 1, ENDED = 2 }
 
 ## 战斗结束原因
-enum EndReason { VICTORY = 0, MANUAL_EXIT = 1, COMA = 2 }
+##   VICTORY     —— 敌方全灭，正常战斗胜利
+##   MANUAL_EXIT —— 战场内无敌时玩家主动退场（[F] 键 / "退出战斗"按钮）
+##   COMA        —— 队长 HP 低于阈值，触发昏迷重生流程
+##   RETREAT     —— 战斗中队长站在战场边界格，主动撤离（持久 slot 战场参与设计 L1.1）
+enum EndReason { VICTORY = 0, MANUAL_EXIT = 1, COMA = 2, RETREAT = 3 }
 
 
 # ─────────────────────────────────────
@@ -201,7 +205,8 @@ func start(
 ## 结束战斗会话；触发 on_battle_ended sink
 ##
 ## defeated_packs：胜利时被歼灭的 LevelSlot 列表（含上场 + 未上场 troops 全部消灭）
-##                 手动退出时传空数组（敌方残余保留）
+##                 手动退出（MANUAL_EXIT）时传空数组（敌方残余保留）
+##                 撤离（RETREAT）时传 participating_packs（全部参战敌包）；sink 端按每 pack 全灭 / 残余分别处置
 ##                 COMA 时不关心（场景 reload 后 BattleSession 销毁）
 func end(reason: EndReason, defeated_packs: Array[LevelSlot]) -> void:
 	current_phase = Phase.ENDED
@@ -223,7 +228,7 @@ func is_enemy_turn() -> bool:
 	return current_phase == Phase.ENEMY_TURN
 
 
-## 战斗会话是否已结束（VICTORY / MANUAL_EXIT / COMA 任一）
+## 战斗会话是否已结束（VICTORY / MANUAL_EXIT / COMA / RETREAT 任一）
 func is_ended() -> bool:
 	return current_phase == Phase.ENDED
 
@@ -396,6 +401,80 @@ func try_manual_exit() -> bool:
 	if has_enemy_in_arena():
 		return false
 	end(EndReason.MANUAL_EXIT, [])
+	return true
+
+
+## 返回当前战场四条边中「未被地图边界裁剪」的可撤退方向（持久 slot 战场参与设计 L1.1 UX）
+##
+## 撤退只能从战场真实边缘进行。compute_arena 会把理想战场（玩家中心 ±arena_range）
+## 与地图边界求交集——被裁剪的那条边正好落在地图边界上，那个方向"撤出去就是地图外"，
+## 没有可达的边缘格，自然不可撤退。真·无限地图时无裁剪，四向恒可撤退。
+##
+## 判定：arena 某条边坐标 == 地图边界 → 该方向被裁剪、不可撤退
+## 返回 { "up": bool, "down": bool, "left": bool, "right": bool }
+func get_retreat_directions() -> Dictionary:
+	var dirs: Dictionary = {"up": false, "down": false, "left": false, "right": false}
+	if schema == null or arena.size.x <= 0 or arena.size.y <= 0:
+		return dirs
+	dirs["left"] = arena.position.x > 0
+	dirs["up"] = arena.position.y > 0
+	dirs["right"] = arena.end.x < schema.width
+	dirs["down"] = arena.end.y < schema.height
+	return dirs
+
+
+## 判定队长（player_units[0]）是否站在「可撤退边界格」上（持久 slot 战场参与设计 L1.1 UX）
+##
+## 可撤退边界格 = 队长所在格位于某条「未被地图边界裁剪」的边上（见 get_retreat_directions）
+## 贴地图边界的边不算（那个方向撤出去就是地图外，无可达边缘格）
+## 返回 true 表示当前可以发起撤离
+func can_leader_retreat() -> bool:
+	# 防御性检查：无队长（理论上 BattleDeploy 保证 [0] 一定存在）
+	if player_units.is_empty():
+		return false
+	var leader: BattleUnit = player_units[0]
+	# 队长已阵亡或未上场时不允许撤离
+	if not leader.is_active or not leader.is_alive():
+		return false
+	var pos: Vector2i = leader.battle_position
+	# 防御性检查：队长不在战场内（理论上不会发生）
+	if not arena.has_point(pos):
+		return false
+	var dirs: Dictionary = get_retreat_directions()
+	# 队长落在某条可撤退边上 → 允许撤离
+	if bool(dirs["left"]) and pos.x == arena.position.x:
+		return true
+	if bool(dirs["right"]) and pos.x == arena.end.x - 1:
+		return true
+	if bool(dirs["up"]) and pos.y == arena.position.y:
+		return true
+	if bool(dirs["down"]) and pos.y == arena.end.y - 1:
+		return true
+	return false
+
+
+## 玩家从战场边界主动撤离（持久 slot 战场参与设计 L1.1）
+##
+## 前置条件：
+##   - 当前为玩家回合（is_player_turn()）
+##   - 队长 player_units[0] 位于可撤退边界格（can_leader_retreat()）
+##
+## API 契约：本方法假定战场内仍有敌（撤离的语义前提）。无敌时应走 try_manual_exit 而非本方法——
+##   调用方 WorldMap._on_battle_hud_exit_pressed 按 BattleHUD 的 mode 路由已保证这一点
+##   （HUD 仅在 has_enemy_in_arena() 为真时把按钮 mode 设为 "retreat"），故此处不重复 has_enemy 检查。
+##
+## 行为：调用 end(EndReason.RETREAT, participating_packs)，触发 sink RETREAT 分支
+##       传 participating_packs 让 sink 端遍历每个 pack 区分全灭 / 部分残余两种处置
+##       （与 VICTORY 同模式；MANUAL_EXIT 传空是因为它前置已是"无敌"，无需 sink 端处理）
+##
+## 返回 true 表示撤离成功（已 end）；false 表示前置条件未满足
+func try_retreat() -> bool:
+	if not is_player_turn():
+		return false
+	if not can_leader_retreat():
+		push_error("[BattleSession] try_retreat 拒绝：队长不在可撤退边界格")
+		return false
+	end(EndReason.RETREAT, participating_packs)
 	return true
 
 

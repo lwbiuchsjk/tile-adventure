@@ -31,8 +31,11 @@ signal attack_pressed
 ## 内部信号名 skip_pressed 保留为逻辑语义，UI 文案为"结束行动"
 signal skip_pressed
 
-## 玩家点击 [退出战斗] 按钮（手动退出尝试）
-signal exit_pressed
+## 玩家点击 [退出战斗] 或 [撤离] 按钮（按 mode 区分）
+##   mode == "exit"   —— 战场内无敌时主动退场（对应 BattleSession.try_manual_exit）
+##   mode == "retreat" —— 战斗中队长站在战场边界主动撤离（对应 BattleSession.try_retreat）
+## 持久 slot 战场参与设计 L1.1 扩展为携带 mode 参数
+signal exit_pressed(mode: String)
 
 
 # ─────────────────────────────────────
@@ -41,6 +44,10 @@ signal exit_pressed
 
 ## 是否当前可见（HUD 显示中）
 var is_open: bool = false
+
+## 持久 slot 战场参与设计 L1.1（UX）：撤离可用时按钮高亮 modulate（青绿提亮，分量 >1 过曝增强醒目度）
+## 其他状态（退出战斗 / 置灰 / 非撤离）按钮 modulate 恢复 Color.WHITE
+const RETREAT_READY_MODULATE: Color = Color(0.55, 1.45, 1.2)
 
 
 # ─────────────────────────────────────
@@ -58,6 +65,13 @@ var _actions_locked: bool = false
 
 ## 入口 1.2：缓存最近一次 refresh 的 session 引用，set_actions_enabled 解锁时主动 refresh 用
 var _session_ref: BattleSession = null
+
+## 持久 slot 战场参与设计 L1.1：当前 ExitButton 的行为模式
+##   "exit"    —— 战场内无敌，点击触发 try_manual_exit
+##   "retreat" —— 战斗中队长在边界，点击触发 try_retreat
+##   ""        —— 按钮不可用（已 hide）
+## refresh() 中根据 session 状态实时计算 + 写入；_on_button_pressed("exit") 时连同 emit
+var _exit_mode: String = ""
 
 
 # ─────────────────────────────────────
@@ -119,7 +133,7 @@ func set_actions_enabled(enabled: bool) -> void:
 ## 状态栏：战斗回合 X / 当前：[兵种 hp/max] / 阶段（玩家行动 / 敌方行动 / 已结束）
 ## [攻击] 按钮：玩家回合 + 当前 actor 攻击范围内有敌方目标 → 启用
 ## [结束行动] 按钮：玩家回合 + 当前 actor 未结束 → 启用
-## [退出战斗] 按钮：玩家回合 + 战场内无敌方存活 → 启用（点击后 BattleSession.try_manual_exit）
+## [退出战斗 / 撤离] 按钮：见 _refresh_exit_button 内文档
 func refresh(session: BattleSession) -> void:
 	if session == null or _status_label == null:
 		return
@@ -140,12 +154,42 @@ func refresh(session: BattleSession) -> void:
 	# 结束行动按钮：玩家回合 + 当前单位未结束
 	if _skip_btn != null:
 		_skip_btn.disabled = _actions_locked or not (is_player and has_actor)
-	# 退出战斗按钮：玩家回合 + 战场内无敌方
-	# 战场内有敌方时仍允许点击，BattleSession.try_manual_exit 返回 false → WorldMap 给 _show_notice
-	# 这里不 disable 是为了让玩家有"按了得到反馈"的体验，比 disabled 状态更明确
-	# 但动画锁定期间（_actions_locked）也要 disable 防止时序混乱
-	if _exit_btn != null:
-		_exit_btn.disabled = _actions_locked or not is_player
+	# 退出战斗 / 撤离按钮：按 session 状态切换文字 + 显隐
+	_refresh_exit_button(session, is_player)
+
+
+## 持久 slot 战场参与设计 L1.1（UX 调整）：ExitButton 常驻可见，按上下文切换文字 + enable/disable
+##   分支 A: 战场内无敌        → 文字"退出战斗"，mode="exit"，enabled（走 try_manual_exit）
+##   分支 B: 有敌 + 队长可撤退   → 文字"撤离"，mode="retreat"，enabled 高亮（走 try_retreat）
+##   分支 C: 有敌 + 队长不可撤退 → 文字"撤离"，mode="retreat"，disabled 置灰（提示按钮存在但当前不可用）
+##
+## 按钮始终 visible；可用性由 disabled 控制；_actions_locked（动画期间）/ 非玩家回合一律置灰
+func _refresh_exit_button(session: BattleSession, is_player: bool) -> void:
+	if _exit_btn == null:
+		return
+	# 常驻可见
+	_exit_btn.visible = true
+	# 非玩家回合：保留文字、置灰 + 取消高亮
+	if not is_player:
+		_exit_btn.disabled = true
+		_exit_btn.modulate = Color.WHITE
+		return
+	var enemy_remaining: bool = session.has_enemy_in_arena()
+	if not enemy_remaining:
+		# 分支 A：战场内无敌 → 退出战斗（可用，普通样式）
+		_exit_btn.text = "退出战斗"
+		_exit_mode = "exit"
+		_exit_btn.disabled = _actions_locked
+		_exit_btn.modulate = Color.WHITE
+	else:
+		# 分支 B/C：有敌 → 撤离；按队长是否在可撤退边界格决定 enabled / disabled
+		_exit_btn.text = "撤离"
+		_exit_mode = "retreat"
+		var can_retreat: bool = session.can_leader_retreat()
+		_exit_btn.disabled = _actions_locked or not can_retreat
+		# UX-3：撤离真正可用（未锁 + 可撤退）时按钮高亮加强；否则恢复普通样式
+		var retreat_ready: bool = can_retreat and not _actions_locked
+		_exit_btn.modulate = RETREAT_READY_MODULATE if retreat_ready else Color.WHITE
 
 
 # ─────────────────────────────────────
@@ -174,6 +218,9 @@ func _format_status_text(session: BattleSession) -> String:
 
 
 ## 按钮按下统一回调，按 kind 路由到对应信号
+##
+## exit 类按钮按下时，携带 _refresh_exit_button 计算出的当前 _exit_mode
+##（"exit" / "retreat"），由 WorldMap 路由到对应 BattleSession 接口
 func _on_button_pressed(kind: String) -> void:
 	match kind:
 		"attack":
@@ -181,4 +228,6 @@ func _on_button_pressed(kind: String) -> void:
 		"skip":
 			skip_pressed.emit()
 		"exit":
-			exit_pressed.emit()
+			# _exit_mode 为空时按 mode="exit" 兜底（防御性，正常路径 refresh 会保证非空）
+			var mode: String = _exit_mode if _exit_mode != "" else "exit"
+			exit_pressed.emit(mode)

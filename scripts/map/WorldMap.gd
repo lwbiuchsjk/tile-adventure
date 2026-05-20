@@ -2386,12 +2386,42 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 		# P0 第二阶段：兜底胜利检查 —— 敌方 pack 被清空时玩家胜利
 		# 所有 cycle 都生效；reinforcement 离散 spawn 让通常不可达
 		VictoryJudge.check_enemy_packs_clear(_level_slots)
+	elif reason == BattleSession.EndReason.RETREAT:
+		# 持久 slot 战场参与设计 L1.1：撤离分支
+		# defeated_packs 实际是 BattleSession.participating_packs（全部参战敌包）
+		# 对每个 pack 区分两种处置：
+		#   1. troops 全死（current_hp<=0 全部移除后空了）→ 与 VICTORY 同处置（erase + schema 恢复），但不发奖励
+		#   2. troops 部分残余 → 敌包保留在 _level_slots 原位置，HP / 剩余 troop 已在战斗中实时写入
+		for pack_v in defeated_packs:
+			var pack: LevelSlot = pack_v as LevelSlot
+			if pack == null:
+				continue
+			pack.remove_defeated_troops()
+			if pack.troops.is_empty():
+				# 全灭路径（与 VICTORY 同步处置 _level_slots / _schema）
+				pack.mark_defeated()
+				var lvpos: Vector2i = pack.position
+				if _level_slots.has(lvpos):
+					_level_slots.erase(lvpos)
+				if _schema != null:
+					var orig_type: int = _original_slot_types.get(lvpos, MapSchema.SlotType.NONE) as int
+					_schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
+					_original_slot_types.erase(lvpos)
+			# 否则：敌包部分残余,保留在 _level_slots,troops HP 已是战斗结果
+
+		# 兜底胜利检查：撤离时若敌方所有 pack 都全灭（边缘情况），玩家仍胜利
+		VictoryJudge.check_enemy_packs_clear(_level_slots)
 
 	# MANUAL_EXIT：不发奖励，敌方残余保留；走通用收尾
 
-	# 4. 兜底队员阵亡评估（队长跌阈值的极端情况已在战斗中走 COMA 路径，不走到此处）
-	# _player_lifecycle.evaluate_party_state 返回 true 表示已触发昏迷 / 失败遮罩，无需再走收尾流程
-	if _player_lifecycle.evaluate_party_state(_game_finished):
+	# 4. 队员阵亡评估
+	#    VICTORY / MANUAL_EXIT：完整 evaluate（含队长跌阈值昏迷判定）；返回 true 表示已触发昏迷 / 失败遮罩，中断后续收尾
+	#      （队长跌阈值的极端情况通常已在战斗中走 COMA 路径，不走到此处）
+	#    RETREAT：撤离 ≠ 昏迷（持久 slot 战场参与设计 L1.1）—— 只清理阵亡队员、保留低 HP 队长，继续走通用收尾
+	#      不复用 evaluate_party_state，避免低 HP 队长撤离后被误判昏迷（codex 审查 P1）
+	if reason == BattleSession.EndReason.RETREAT:
+		_player_lifecycle.cleanup_dead_members()
+	elif _player_lifecycle.evaluate_party_state(_game_finished):
 		_battle_session = null
 		return
 
@@ -2511,13 +2541,22 @@ func _on_battle_hud_skip_pressed() -> void:
 	_post_player_action_check()
 
 
-## [退出战斗] 按钮：try_manual_exit 内部检查战场内是否仍有敌方
-## 失败 → 提示玩家；成功时 BattleSession.end 自动调 sink 完成收尾
-func _on_battle_hud_exit_pressed() -> void:
+## [退出战斗] / [撤离] 按钮路由（持久 slot 战场参与设计 L1.1：信号扩展为携带 mode）
+##
+## mode == "exit"    —— 战场内无敌，走 try_manual_exit；失败时给 notice（理论上 HUD 已只在无敌时显示"退出战斗"，但仍兜底）
+## mode == "retreat" —— 队长在战场边界，走 try_retreat；失败时表示前置不满足（防御性兜底，正常不应触发）
+func _on_battle_hud_exit_pressed(mode: String) -> void:
 	if _battle_session == null or _battle_session.is_ended():
 		return
-	if not _battle_session.try_manual_exit():
-		_show_notice("战场内仍有敌人，无法退出")
+	match mode:
+		"exit":
+			if not _battle_session.try_manual_exit():
+				_show_notice("战场内仍有敌人，无法退出")
+		"retreat":
+			if not _battle_session.try_retreat():
+				_show_notice("队长不在战场边界，无法撤离")
+		_:
+			push_error("[WorldMap] _on_battle_hud_exit_pressed 收到未知 mode：%s" % mode)
 
 
 # ─────────────────────────────────────────

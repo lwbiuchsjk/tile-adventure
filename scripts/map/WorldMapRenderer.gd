@@ -881,6 +881,11 @@ func _draw_battle_overlay() -> void:
 				draw_line(Vector2(ax + aw, ay), Vector2(ax + aw, ay + aw),
 					VISUAL_CFG.attackable_border_color, VISUAL_CFG.attackable_border_width)
 
+	# 3.5 撤退提示（持久 slot 战场参与设计 L1.1 UX）：仅玩家回合，引导玩家往哪走可撤退
+	# 放在单位渲染前 → 边界格高亮在单位下层不挡视线；方向文字在战场外围不被单位覆盖
+	if _battle_session.is_player_turn():
+		_draw_retreat_hints(arena)
+
 	# 4/5. 单位渲染 + HP 条（玩家方 → 敌方顺序，确保当前 actor 高亮在最上）
 	var current_actor: BattleUnit = _battle_session.current_actor()
 	for u in _battle_session.player_units:
@@ -895,6 +900,80 @@ func _draw_battle_overlay() -> void:
 		if not _battle_view.dying_units.has(dying_unit):
 			continue
 		_draw_battle_dying_unit(dying_unit as BattleUnit, _battle_view.dying_units[dying_unit] as float)
+
+
+## 撤退提示（持久 slot 战场参与设计 L1.1 UX）
+##   1. 可撤退边界格青绿高亮（提示"站这里能撤退"）
+##   2. 每条可撤退边外侧中点画方向文字（"↑/↓/←/→ 撤退"）
+## 可撤退方向 = arena 四条边中未被地图边界裁剪的边（见 BattleSession.get_retreat_directions）
+func _draw_retreat_hints(arena: Rect2i) -> void:
+	if _battle_session == null:
+		return
+	var dirs: Dictionary = _battle_session.get_retreat_directions()
+
+	# 1. 收集所有可撤退边界格（用 Dictionary 去重，避免角格被两条边重复绘制致 alpha 叠深）
+	var retreat_cells: Dictionary = {}
+	if bool(dirs["left"]):
+		for y in range(arena.position.y, arena.end.y):
+			retreat_cells[Vector2i(arena.position.x, y)] = true
+	if bool(dirs["right"]):
+		for y in range(arena.position.y, arena.end.y):
+			retreat_cells[Vector2i(arena.end.x - 1, y)] = true
+	if bool(dirs["up"]):
+		for x in range(arena.position.x, arena.end.x):
+			retreat_cells[Vector2i(x, arena.position.y)] = true
+	if bool(dirs["down"]):
+		for x in range(arena.position.x, arena.end.x):
+			retreat_cells[Vector2i(x, arena.end.y - 1)] = true
+	# 绘制边界格填充 + 描边
+	for cell in retreat_cells:
+		var c: Vector2i = cell as Vector2i
+		var rect: Rect2 = Rect2(
+			c.x * TILE_SIZE + 2, c.y * TILE_SIZE + 2,
+			TILE_SIZE - 4, TILE_SIZE - 4
+		)
+		draw_rect(rect, VISUAL_CFG.retreat_cell_color)
+		draw_rect(rect, VISUAL_CFG.retreat_cell_border_color, false, VISUAL_CFG.retreat_cell_border_width)
+
+	# 2. 方向文字（每条可撤退边外侧；文字完全在战场外，不与 arena 重叠）
+	#    左右用 RIGHT/LEFT 对齐贴边外侧（避免居中框越界进战场）；上下用 CENTER 水平居中
+	if _label_font == null:
+		return
+	var off: float = VISUAL_CFG.retreat_hint_offset_px
+	var fsize: int = VISUAL_CFG.retreat_hint_font_size
+	var fcolor: Color = VISUAL_CFG.retreat_hint_text_color
+	var box_w: float = float(fsize) * 6.0     # 容纳"箭头 + 空格 + 2 汉字"
+	# arena 四边 + 中心像素坐标
+	var cx_px: float = (float(arena.position.x) + float(arena.size.x) * 0.5) * TILE_SIZE
+	var cy_px: float = (float(arena.position.y) + float(arena.size.y) * 0.5) * TILE_SIZE
+	var left_px: float = float(arena.position.x) * TILE_SIZE
+	var right_px: float = float(arena.end.x) * TILE_SIZE
+	var top_px: float = float(arena.position.y) * TILE_SIZE
+	var bottom_px: float = float(arena.end.y) * TILE_SIZE
+	# 左右文字垂直居中基线微调（draw_string 的 y 是基线，加 ~0.35 字号让文字视觉居中于 cy）
+	var v_center_y: float = cy_px + float(fsize) * 0.35
+	# 上：水平居中，基线落在上边界外侧（off 间距让文字主体在战场上方）
+	if bool(dirs["up"]):
+		_draw_retreat_label(Vector2(cx_px - box_w * 0.5, top_px - off), "↑ 撤离",
+			fsize, fcolor, HORIZONTAL_ALIGNMENT_CENTER, box_w)
+	# 下：水平居中，基线再下移一个字号高度让文字主体整体落在下边界外
+	if bool(dirs["down"]):
+		_draw_retreat_label(Vector2(cx_px - box_w * 0.5, bottom_px + off + float(fsize)), "↓ 撤离",
+			fsize, fcolor, HORIZONTAL_ALIGNMENT_CENTER, box_w)
+	# 左：右对齐，文字框右端贴左边界外侧（left - off），整体在战场左侧
+	if bool(dirs["left"]):
+		_draw_retreat_label(Vector2(left_px - off - box_w, v_center_y), "← 撤离",
+			fsize, fcolor, HORIZONTAL_ALIGNMENT_RIGHT, box_w)
+	# 右：左对齐，文字框左端贴右边界外侧（right + off），整体在战场右侧
+	if bool(dirs["right"]):
+		_draw_retreat_label(Vector2(right_px + off, v_center_y), "→ 撤离",
+			fsize, fcolor, HORIZONTAL_ALIGNMENT_LEFT, box_w)
+
+
+## 撤离方向文字绘制：按指定水平对齐 + 文字框宽度绘制
+## 左右贴边（RIGHT/LEFT 对齐）、上下水平居中（CENTER）由调用方传 align + pos 决定
+func _draw_retreat_label(pos: Vector2, text: String, font_size: int, color: Color, align: int, box_w: float) -> void:
+	draw_string(_label_font, pos, text, align, box_w, font_size, color)
 
 
 ## 渲染单个战场单位：圆形阵营色 + 当前 actor 白环 + HP 条

@@ -174,6 +174,25 @@ func add_character(member: CharacterData) -> void:
 	_characters.append(member)
 
 
+## 清理阵亡队员（HP<=0 / null / 无 troop），不做队长昏迷判定（持久 slot 战场参与设计 L1.1）
+##
+## 撤离（RETREAT）收尾用：撤离 ≠ 昏迷，只清理阵亡队员、保留低 HP 队长——
+## 不能复用 evaluate_party_state（后者会在队长低于阈值时触发昏迷，违反撤离语义）。
+## evaluate_party_state 步骤 1 也复用本方法，避免清理逻辑两处重复。
+## 倒序遍历避免 remove_at 索引漂移；从 index 1 起（index 0 是队长，存亡由 evaluate_party_state 单独判定）。
+func cleanup_dead_members() -> void:
+	for i in range(_characters.size() - 1, 0, -1):
+		var ch_member: CharacterData = _characters[i]
+		if ch_member == null:
+			_characters.remove_at(i)
+			continue
+		if not ch_member.has_troop():
+			_characters.remove_at(i)
+			continue
+		if ch_member.troop.current_hp <= 0:
+			_characters.remove_at(i)
+
+
 ## B 重生周期 MVP：评估队伍状态（队员阵亡移除 + 队长昏迷阈值判定）
 ##
 ## 流程：
@@ -193,17 +212,8 @@ func add_character(member: CharacterData) -> void:
 func evaluate_party_state(skip_if_finished: bool = false) -> bool:
 	if skip_if_finished or _is_in_coma:
 		return true
-	# 1. 队员阵亡 → 从队伍移除（倒序避免索引漂移）
-	for i in range(_characters.size() - 1, 0, -1):
-		var ch_member: CharacterData = _characters[i]
-		if ch_member == null:
-			_characters.remove_at(i)
-			continue
-		if not ch_member.has_troop():
-			_characters.remove_at(i)
-			continue
-		if ch_member.troop.current_hp <= 0:
-			_characters.remove_at(i)
+	# 1. 队员阵亡清理（复用 cleanup_dead_members，撤离收尾走同一逻辑）
+	cleanup_dead_members()
 	# 2. 队长检查
 	if _characters.is_empty():
 		# 极端态：连队长都没了 → 走兜底重生 / 失败分支
