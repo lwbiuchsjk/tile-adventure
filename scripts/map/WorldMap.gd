@@ -56,6 +56,7 @@ const CONFIG_RUN: String = "res://assets/config/run_config.csv"
 const CONFIG_NARRATIVE_POOL: String = "res://assets/config/event_narrative_pool.csv"
 ## E 战斗就地展开 MVP：兵种战斗参数（移动 / 攻击范围）
 const CONFIG_BATTLE_UNIT: String = "res://assets/config/battle_unit_config.csv"
+const CONFIG_GARRISON: String = "res://assets/config/garrison_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -289,6 +290,14 @@ var _battle_arena_range: int = 6                ## 战场半径（玩家中心 �
 var _terrain_altitude_step: float = 0.10        ## 地形高度差伤害修正系数
 var _active_battle_supply_cost: int = 1         ## 主动战斗消耗补给
 var _passive_battle_supply_cost: int = 1        ## 被动战斗消耗补给（钳到 ≥ 0）
+
+## 持久 slot 援军（持久slot援军_MVP / L1.2）
+## _garrison_config：{ slot_type: { cycle: {count_min/max, quality_min/max} } }（ReinforcementRoster.build_config 产出）
+var _garrison_config: Dictionary = {}
+var _garrison_trigger_range: int = 2            ## 战场格到 slot 的曼哈顿触发阈值
+var _garrison_total_cap: int = 99               ## 单场援军入场总数上限（默认很高，先不约束）
+## 本场战斗命中（已入场援军）的 slot 列表；战后 _consume_reinforcement_rosters 扣减储备后清空
+var _reinforcement_hit_slots: Array[PersistentSlot] = []
 
 ## 兵种战斗参数缓存：{ TroopType_int : {"move_range": int, "attack_range": int} }
 ## 由 battle_unit_config.csv 加载；E3 实装战斗触发时传给 BattleSession.start
@@ -531,6 +540,11 @@ func _ready() -> void:
 	_active_battle_supply_cost = maxi(0, int(_battle_config.get("active_battle_supply_cost", "1")))
 	_passive_battle_supply_cost = maxi(0, int(_battle_config.get("passive_battle_supply_cost", "1")))
 
+	# 持久 slot 援军（L1.2）触发参数
+	# 下限 0（不同于 _battle_trigger_range 的下限 1）：range=0 表示"仅战场覆盖 slot 格才触发"，是有效旋钮
+	_garrison_trigger_range = maxi(0, int(_battle_config.get("garrison_trigger_range", "2")))
+	_garrison_total_cap = maxi(0, int(_battle_config.get("garrison_total_cap", "99")))
+
 	# E MVP：兵种战斗参数（移动 / 攻击范围）解析为 { TroopType_int : Dictionary }
 	# 兵种名 → ID 复用 BattleResolver.TROOP_NAME_TO_ID
 	# 配置下限：move_range >= 1（移动力不能为 0，否则单位被卡住）
@@ -578,6 +592,10 @@ func _ready() -> void:
 	if town_pool_rows.is_empty():
 		push_error("WorldMap: town_troop_pool.csv 加载失败或为空；城镇 / 核心城镇产出会静默无输出")
 	ProductionSystem.load_troop_pool(town_pool_rows)
+
+	# 持久 slot 援军（L1.2）：加载 garrison_config 并解析为嵌套查表字典（slot_type → cycle → cfg）
+	# 储备名册抽样在下方地图装配阶段（owner 染色完成后）逐 slot 执行
+	_garrison_config = ReinforcementRoster.build_config(ConfigLoader.load_csv(CONFIG_GARRISON))
 
 	# P0 第二阶段：用 cycle_config 覆盖 map_cfg 的周期级字段（地图尺寸 / 起终点 / 持久 slot 数量 / spawn 节奏）
 	# 必须在读取 start/end + _load_pcg 前调用；cycle_config 缺该周期则保留 map_cfg 原值作兜底
@@ -659,12 +677,25 @@ func _ready() -> void:
 	#   核心城镇 L3 永不升级 → 影响范围永远不渲染；初始归属村庄/城镇同理。
 	#   此处按每个 slot 的当前 level 从配置注入，让影响范围系统在首个回合前就位。
 	# 依赖 BuildSystem.load_level_config 已完成（查 apply_level_fields 走 _level_config 读）
+	# 持久 slot 援军（L1.2）：抽样 rng 优先复用 _world_rng（保证同 seed 复现）；
+	# JSON 加载路径下 _world_rng 为 null，回退到 randomize 的独立 rng
+	var roster_rng: RandomNumberGenerator = _world_rng
+	if roster_rng == null:
+		roster_rng = RandomNumberGenerator.new()
+		roster_rng.randomize()
 	if _schema != null:
 		for entry in _schema.persistent_slots:
 			var slot: PersistentSlot = entry as PersistentSlot
 			if slot == null:
 				continue
 			BuildSystem.apply_level_fields(slot, slot.level)
+			# 持久 slot 援军（L1.2）：按 type × 当前周期抽样储备名册（此时 owner 染色已完成）
+			# 对所有 slot 抽样——玩家方直接用；中立 / 敌方 slot 被玩家占据后也能提供援军。
+			# 触发判定仍只扫 owner=PLAYER（见 _inject_reinforcements），敌方 roster 静默不消费
+			slot.reinforcement_roster = ReinforcementRoster.sample(
+				slot.type as int, RunState.cycle_index(),
+				_garrison_config, town_pool_rows, roster_rng
+			)
 
 	# ⚠ Tick 注册顺序固定：M5 → M4（TickRegistry 按 FIFO 执行）
 	# 自阵营回合开始时先跑 M5 建造完成（可能刷 max_range），
@@ -2157,6 +2188,9 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 	# sink 的 await 完成后会自然进入 _player_lifecycle.trigger_coma_or_lose 启动黑屏过渡
 	if _battle_session.is_ended():
 		return
+	# 持久 slot 援军（L1.2）：战斗存活态下注入命中 slot 的援军
+	# 置于 HUD show + redraw 之前 → 援军单位随后续 queue_redraw 自然渲染
+	_inject_reinforcements()
 	# 战斗中清掉探索态可达高亮（避免视觉与战场叠加层干扰）
 	_reachable_tiles = {}
 	# 入口 4 MVP：战斗 Camera zoom + 战场居中（队长位置 = 战场中心）
@@ -2205,6 +2239,8 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 	# 详见上方 _start_battle_session 内同段注释
 	if _battle_session.is_ended():
 		return
+	# 持久 slot 援军（L1.2）：被动战斗同样注入命中 slot 的援军
+	_inject_reinforcements()
 	_reachable_tiles = {}
 	# 入口 4 MVP：被动战斗同样触发战场镜头 zoom（战场中心 = 队长位置）
 	_start_battle_camera(_unit.position)
@@ -2212,6 +2248,90 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		_battle_hud.show_hud(_battle_session)
 	_update_hud()
 	_renderer.queue_redraw()
+
+
+## 持久 slot 援军（L1.2）：战斗启动后注入命中 slot 的援军
+##
+## 设计原文：tile-advanture-design/持久slot援军_MVP.md §3.2 / §3.3
+##
+## 流程：
+##   1. 扫描 owner=PLAYER 且 reinforcement_roster 非空的持久 slot
+##   2. slot 到战场（arena）最近格曼哈顿距离 ≤ _garrison_trigger_range → 命中
+##   3. 命中 slot 按 type 优先级（核心 > 城镇 > 村庄）+ position 稳定序排序
+##   4. 逐 slot 逐条目 new TroopData → find_deploy_slot 找空格 → 玩家阵营 BattleUnit 追加 player_units
+##   5. 记录每 slot 实际入场条目到 _consumed_this_battle，命中 slot 入 _reinforcement_hit_slots（战后扣减）
+##
+## 前置：_battle_session.start() 已完成且未 is_ended()（追加到 player_units 即被回合流程自然纳入）
+func _inject_reinforcements() -> void:
+	_reinforcement_hit_slots = []
+	if _battle_session == null or _schema == null:
+		return
+	var arena: Rect2i = _battle_session.arena
+	# 1-2. 命中判定
+	var hit_slots: Array[PersistentSlot] = []
+	for slot in _get_player_persistent_slots():
+		if slot.reinforcement_roster.is_empty():
+			continue
+		if _slot_in_battle_range(slot, arena):
+			hit_slots.append(slot)
+	if hit_slots.is_empty():
+		return
+	# 3. 排序：type 降序（核心 2 > 城镇 1 > 村庄 0）；同 type 按 position（y 优先、x 次之）稳定序
+	hit_slots.sort_custom(func(a: PersistentSlot, b: PersistentSlot) -> bool:
+		if a.type != b.type:
+			return (a.type as int) > (b.type as int)
+		if a.position.y != b.position.y:
+			return a.position.y < b.position.y
+		return a.position.x < b.position.x
+	)
+	# 4-5. 入场填充：重建 occupied 续用（避免与本队 / 敌方 / 已入场援军重叠）
+	var occupied: Dictionary = BattleDeploy.build_occupied(_battle_session.player_units, _battle_session.enemy_units)
+	var injected_total: int = 0
+	for slot in hit_slots:
+		var consumed: Array = []
+		for entry_v in slot.reinforcement_roster:
+			if injected_total >= _garrison_total_cap:
+				break
+			var entry: Dictionary = entry_v as Dictionary
+			# 以 slot.position 为锚点找空格（slot 自身格被 can_deploy_at 排除，不能直接用 slot.position）
+			var cell: Vector2i = BattleDeploy.find_deploy_slot(slot.position, occupied, 4, arena, _schema)
+			if not BattleDeploy.is_valid_slot(cell, occupied, arena, _schema):
+				continue  # 找不到空格 → 跳过该单位，条目保留在 roster（不计入 consumed）
+			# 新建 TroopData（只用规格，hp 用默认满血，与 EnemyTroopGenerator 一致）
+			var troop: TroopData = TroopData.new()
+			troop.troop_type = int(entry.get("troop_type", 0)) as TroopData.TroopType
+			troop.quality = int(entry.get("quality", 0)) as TroopData.Quality
+			var unit: BattleUnit = BattleDeploy.make_reinforcement_unit(troop, cell, _battle_unit_config)
+			occupied[cell] = unit
+			_battle_session.player_units.append(unit)
+			consumed.append(entry)
+			injected_total += 1
+		slot._consumed_this_battle = consumed
+		if not consumed.is_empty():
+			_reinforcement_hit_slots.append(slot)
+
+
+## 判断 slot 到战场 arena 的最近格曼哈顿距离是否 ≤ _garrison_trigger_range
+## 委托 ReinforcementRoster.is_in_trigger_range（静态、可 headless 测）
+func _slot_in_battle_range(slot: PersistentSlot, arena: Rect2i) -> bool:
+	return ReinforcementRoster.is_in_trigger_range(slot.position, arena, _garrison_trigger_range)
+
+
+## 持久 slot 援军（L1.2）：战后回收——本场已入场援军条目从对应 slot 储备永久扣减
+##
+## 设计原文：tile-advanture-design/持久slot援军_MVP.md §3.4
+##
+## 语义：一次性消耗——已入场的条目（无论存活 / 阵亡）整体从 roster 移除；
+##       未入场的条目（cap 截断 / 找不到空格）保留在 roster。
+## 数据无关战斗会话本身，只读 _reinforcement_hit_slots + slot._consumed_this_battle，
+## 故可在 _on_battle_session_ended 任何 _battle_session = null 之前安全调用。
+func _consume_reinforcement_rosters() -> void:
+	for slot in _reinforcement_hit_slots:
+		if slot == null:
+			continue
+		ReinforcementRoster.apply_consumption(slot.reinforcement_roster, slot._consumed_this_battle)
+		slot._consumed_this_battle = []
+	_reinforcement_hit_slots = []
 
 
 ## 玩家按 [F] 主动战斗触发入口
@@ -2316,6 +2436,9 @@ func _sync_world_unit_from_battle_leader() -> void:
 ##
 ## 收尾通用：清空 _battle_session / 隐藏 HUD / 重置移动力 / 刷新可达
 func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
+	# 持久 slot 援军（L1.2）：战后回收——本场入场援军条目从储备永久扣减（一次性消耗）
+	# 与结束原因无关（VICTORY / RETREAT / COMA / MANUAL_EXIT 一致），置于任何 _battle_session = null 之前
+	_consume_reinforcement_rosters()
 	# 入口 2 MVP 2.1 议题 5（2026-05-10 跑测调整）：COMA 分支与其他分支的动画清理时机不同
 	#
 	# COMA 分支：先 await 致命一击的攻击 / 死亡动画跑完，玩家能看到完整因果，再清理 + 黑屏

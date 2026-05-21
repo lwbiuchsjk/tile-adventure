@@ -110,6 +110,21 @@ var build_slot_count: int = 1
 var active_build: BuildAction = null
 
 # ─────────────────────────────────────────
+# 持久 slot 援军字段（持久slot援军_MVP / L1.2）
+# ─────────────────────────────────────────
+
+## 援军储备名册：地图 PCG 实例化时按 type × 当前 cycle 抽样的固定快照
+## 每条目为规格 Dictionary：{ "troop_type": int, "quality": int }
+##   —— 只存"规格"，不含 HP；入场生成 BattleUnit 时新建 TroopData 满血给（与 EnemyTroopGenerator 一致）
+## 战斗在该 slot ±garrison_trigger_range 曼哈顿格内触发 → 整份打出援军；战后已入场条目永久扣减
+## 注意：与上面 garrison_turns / garrison_unit_growth（占据驻扎语义）无关，是战场援军体系字段
+var reinforcement_roster: Array = []
+
+## 运行时暂存：本场战斗实际入场、待战后扣减的条目（不持久化、不属存档语义）
+## WorldMap._inject_reinforcements 写入；_consume_reinforcement_rosters 消费后清空
+var _consumed_this_battle: Array = []
+
+# ─────────────────────────────────────────
 # 字段访问辅助方法
 # ─────────────────────────────────────────
 

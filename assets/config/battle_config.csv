@@ -13,3 +13,5 @@ active_battle_supply_cost,0
 passive_battle_supply_cost,0
 battle_player_dmg_factor,1.0
 battle_enemy_dmg_factor,0.3
+garrison_trigger_range,2
+garrison_total_cap,99

@@ -136,6 +136,20 @@ static func make_player_unit(ch: CharacterData, grid_pos: Vector2i, unit_config:
 	return unit
 
 
+## 构造援军 BattleUnit（持久slot援军_MVP / L1.2）
+## 玩家阵营、character=null（非角色单位）、source_level=null；troop 为入场新建实例（满血）
+## 与 make_player_unit 的区别：无 CharacterData，由 troop 直接驱动 move/attack 范围装配
+static func make_reinforcement_unit(troop: TroopData, grid_pos: Vector2i, unit_config: Dictionary) -> BattleUnit:
+	var unit: BattleUnit = BattleUnit.new()
+	unit.owner_faction = Faction.PLAYER
+	unit.troop = troop
+	unit.character = null
+	unit.battle_position = grid_pos
+	unit.is_active = true
+	_apply_unit_config(unit, unit_config)
+	return unit
+
+
 ## 构造敌方 BattleUnit
 static func make_enemy_unit(troop: TroopData, pack: LevelSlot, grid_pos: Vector2i, unit_config: Dictionary) -> BattleUnit:
 	var unit: BattleUnit = BattleUnit.new()
