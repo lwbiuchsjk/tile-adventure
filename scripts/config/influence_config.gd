@@ -94,3 +94,21 @@ extends Resource
 
 ## 内底色（米白 #E6E0D4，承载文字）
 @export var persistent_inner_bg: Color = Color(0.90, 0.88, 0.83)
+
+
+# ─────────────────────────────────────────
+# 持久 slot 援军条带（持久slot援军_MVP / L1.2）
+# 玩家方 slot 援军未耗尽时底部画"援军"条带；耗尽（roster 空）→ 条带消失
+# 条带底色不在此配——复用 BattleVisualConfig.reinforcement_fill_color（与战场援军绿单一来源、"绿=援军"统一）
+# ─────────────────────────────────────────
+
+@export_group("持久 slot 援军条带")
+
+## 条带高度（像素）
+@export_range(6, 32, 1) var reinforcement_band_height: int = 16
+
+## 条带"援军"文字颜色（白，叠在援军绿底上高对比）
+@export var reinforcement_band_text_color: Color = Color(1.0, 1.0, 1.0)
+
+## 条带文字字号（像素）—— 小于主名称 label_font_size，避免溢出
+@export_range(6, 24, 1) var reinforcement_band_font_size: int = 12

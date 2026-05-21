@@ -163,3 +163,8 @@ extends Resource
 
 ## 玩家方已行动单位填充色（灰色）—— 与阵营色区分"已 / 未行动"
 @export var player_acted_color: Color = Color(0.55, 0.55, 0.55)
+
+## 持久 slot 援军单位填充色（祖母绿）—— 援军 = owner=PLAYER 且 character==null
+## 与本队青蓝区分"援军 / 本队"，又与 HP 满血绿（更亮偏黄）有别；已行动仍转 player_acted_color 灰
+## 设计原文：tile-advanture-design/持久slot援军_MVP.md §3.2.7 / §七（P3 拉入范围）
+@export var reinforcement_fill_color: Color = Color(0.22, 0.72, 0.45)

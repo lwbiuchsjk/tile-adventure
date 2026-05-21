@@ -537,6 +537,11 @@ func _draw_persistent_slots() -> void:
 			if inner.size.x > 0 and inner.size.y > 0:
 				draw_rect(inner, INFLUENCE_CFG.persistent_inner_bg)
 
+		# 持久slot援军 L1.2：玩家方 slot 援军未耗尽 → 底部画"援军"条带（耗尽则不画）
+		# 仅玩家方 slot（只有玩家方 slot 会触发援军）；条带在名称下方、不撞右上等级角标
+		if slot.owner_faction == Faction.PLAYER and not slot.reinforcement_roster.is_empty():
+			_draw_reinforcement_band(outer)
+
 		# 核心城镇第二识别特征：金色外描边 + 下方小金菱形徽记
 		# 徽记偏下（主字居中占主视觉），避免被文字压住
 		# P0 第二阶段：CORE_TOWN 视觉双态 —— 仅 has_enemy_core 周期激活（P1-2a 修复：配置驱动）
@@ -582,6 +587,36 @@ func _draw_core_town_emblem(center_px: Vector2) -> void:
 		Vector2(center_px.x - half, center_px.y),
 	])
 	draw_colored_polygon(pts, INFLUENCE_CFG.core_town_border)
+
+
+## 持久 slot 援军条带（持久slot援军_MVP / L1.2）
+## 玩家方 slot 援军未耗尽时在底边画"援军"条带；调用方已守卫 owner=PLAYER 且 roster 非空
+## 底色复用 VISUAL_CFG.reinforcement_fill_color（与战场援军绿单一来源、"绿=援军"全局统一）
+## outer: slot 据点外框 Rect2（与三层结构同一矩形）
+func _draw_reinforcement_band(outer: Rect2) -> void:
+	var band_h: float = float(INFLUENCE_CFG.reinforcement_band_height)
+	var band_rect: Rect2 = Rect2(
+		outer.position.x, outer.end.y - band_h,
+		outer.size.x, band_h
+	)
+	draw_rect(band_rect, VISUAL_CFG.reinforcement_fill_color)
+	if _label_font == null:
+		return
+	# "援军"文字垂直居中于条带（基线 = 条带中心 + (ascent-descent)/2）
+	var fsize: int = INFLUENCE_CFG.reinforcement_band_font_size
+	var ascent: float = _label_font.get_ascent(fsize)
+	var descent: float = _label_font.get_descent(fsize)
+	var baseline_y: float = band_rect.get_center().y + (ascent - descent) / 2.0
+	draw_string(
+		_label_font,
+		Vector2(band_rect.position.x, baseline_y),
+		"援军",
+		HORIZONTAL_ALIGNMENT_CENTER,
+		band_rect.size.x,
+		fsize,
+		INFLUENCE_CFG.reinforcement_band_text_color
+	)
+
 
 ## 绘制正在移动的敌方关卡标记（基于动画位置）
 ## 使用更大标记 + 外圈光晕 + 亮红橙色，突出移动中的敌方
@@ -998,6 +1033,10 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 	# 入口 1.2 补充需求 2：玩家方已行动单位用 VISUAL_CFG.player_acted_color（灰）代替阵营色
 	# 玩家回合开始 reset_turn_flags 后 has_attacked = false → 自动恢复阵营色
 	var fill: Color = INFLUENCE_CFG.faction_colors.get(u.owner_faction, Color.MAGENTA) as Color
+	# 持久slot援军 L1.2：援军（玩家阵营且无 CharacterData）用专属祖母绿，与本队青蓝区分
+	if u.owner_faction == Faction.PLAYER and u.character == null:
+		fill = VISUAL_CFG.reinforcement_fill_color
+	# 入口 1.2 补充需求 2：玩家方已行动单位用灰代替阵营色（援军同样转灰 → 方案 a，与本队一致）
 	if u.owner_faction == Faction.PLAYER and u.has_attacked:
 		fill = VISUAL_CFG.player_acted_color
 	draw_circle(center, radius, fill)
@@ -1038,6 +1077,9 @@ func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
 		center += _battle_view.unit_visual_offsets[u] as Vector2
 	var radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
 	var fill: Color = INFLUENCE_CFG.faction_colors.get(u.owner_faction, Color.MAGENTA) as Color
+	# 持久slot援军 L1.2：援军阵亡渐隐时保持祖母绿，不回退到本队青蓝
+	if u.owner_faction == Faction.PLAYER and u.character == null:
+		fill = VISUAL_CFG.reinforcement_fill_color
 	fill.a *= alpha
 	draw_circle(center, radius, fill)
 	# 兵种字符同步渐隐
