@@ -287,7 +287,7 @@ done
 ## 活跃（≤10 条硬上限）
 
 - [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 启动（2026-05-19 + 当日 v0.2 方向修正）；7 决策点 v0.2 定稿（变体 A 中心 registry + 剥离原则 + cache bug 作已知限制 + realtime 按需）+ V1/V2 验证保留作技术储备 + 设计文档 v0.2 落盘，待新 D.1（registry 机制 + 拆 ParamPresetManager）启动
-- [持久slot战场参与_推进进度](tile-advanture-design/进度/持久slot战场参与_推进进度.md) — 入口 5（2026-05-19）；合议设计落盘 + L1.1 战斗撤离 MVP 已落地（桌面验收 + codex 0 P0/1 P1/2 P2 全处置，commit 394cc0c）；待启动 L1.2 slot 援军 / L1.3 周期胜利目标
+- [持久slot战场参与_推进进度](tile-advanture-design/进度/持久slot战场参与_推进进度.md) — 入口 5；L1.1 撤离（394cc0c）+ L1.2 援军（f7b1fcb/03ac4f5）已落地；L1.3 周期胜利目标设计落盘进行中（2026-05-21，全周期双轨推进 + 表现分叉 + quality 硬封顶，待实装）
 
 ## 预启动（方向已认可，等启动时机）
 
