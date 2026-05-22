@@ -203,6 +203,10 @@ var _end_pos: Vector2i = Vector2i.ZERO
 ## 流程是否已结束（全部通关或部队被击败）
 var _game_finished: bool = false
 
+## L1.3 周期胜利推进过渡锁：_on_cycle_victory_triggered 触发置 true，锁住 fade-in → reload 间的输入
+## 与 is_in_coma() 同语义；reload 后新场景 WorldMap 实例本字段默认 false（自然清零）
+var _is_cycle_advancing: bool = false
+
 ## 单位视觉位置（像素坐标，Tween 动画驱动）
 ## 与逻辑位置（UnitData.position）分离，_draw 基于此渲染单位
 var _unit_visual_pos: Vector2 = Vector2.ZERO
@@ -650,6 +654,7 @@ func _ready() -> void:
 	_player_lifecycle.coma_triggered.connect(_on_player_coma_triggered)
 	_player_lifecycle.defeat_triggered.connect(_on_player_defeat_triggered)
 	_player_lifecycle.respawn_intro_ready.connect(_on_player_respawn_intro_ready)
+	_player_lifecycle.cycle_victory_intro_ready.connect(_on_player_cycle_victory_intro_ready)
 	_player_lifecycle.setup(player_cfg, run_cfg)
 
 	# 视觉位置初始化到起点像素中心
@@ -976,6 +981,8 @@ func _init_subsystems() -> void:
 	# M8：注册胜负回调；OccupationSystem.try_occupy 翻转核心城镇时触发
 	# reload_current_scene 后新的 _ready 会重新注册，_exit_tree 会 clear_sink 避免悬空
 	VictoryJudge.register_sink(_on_victory_decided)
+	# L1.3：周期推进出口（非末周期占据敌方核心 / 清场）→ 黑屏过渡 + reload + 保留队长
+	VictoryJudge.register_cycle_victory_sink(_on_cycle_victory_triggered)
 
 	# D MVP：把 TurnManager.faction_turn_started 包装为 phase_changed
 	# attach 内部对同一 turn_manager 重复挂接是幂等的；reload 后旧 turn_manager
@@ -1020,7 +1027,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 动画播放中、战斗确认中、敌方移动中、管理 / 建造 / 事件面板打开中、扎营中、昏迷过渡中或流程结束时锁定所有输入
 	# 事件面板（F MVP）：玩家未确认事件前禁止地图点击 / 空格扎营，避免叠加触发
 	# 昏迷过渡（B MVP）：_player_lifecycle.is_in_coma()=true 期间 reload 场景已排队，不允许任何操作
-	if _game_finished or _is_moving or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open or _player_lifecycle.is_in_coma():
+	if _game_finished or _is_cycle_advancing or _is_moving or _manage_ui.is_open or _enemy_movement.is_moving() or _is_camping or _build_panel_ui.is_open or _event_panel.is_open or _player_lifecycle.is_in_coma():
 		return
 
 	# 鼠标左键点击：移动单位（需要补给 > 0）
@@ -1591,7 +1598,7 @@ func _on_build_tick(faction: int) -> void:
 ## 默认 false 即"按 [B] 不弹板"，给一行 notice 说明，避免玩家不知道键失效。
 func _open_build_panel() -> void:
 	# E MVP：战斗态守卫——_is_in_battle 期间不允许打开建造面板（设计 §2.10）
-	if _game_finished or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open or _player_lifecycle.is_in_coma() or _is_in_battle():
+	if _game_finished or _is_cycle_advancing or _is_moving or _manage_ui.is_open or _is_camping or _event_panel.is_open or _player_lifecycle.is_in_coma() or _is_in_battle():
 		return
 	if not _build_upgrade_enabled:
 		_show_notice("当前阶段不可手动升级")
@@ -1647,7 +1654,7 @@ func _get_player_persistent_slots() -> Array[PersistentSlot]:
 ## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
 func _start_camp() -> void:
 	# E MVP：战斗态守卫——_is_in_battle 期间不允许扎营（设计 §2.10）
-	if _game_finished or _is_moving or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open or _player_lifecycle.is_in_coma() or _is_in_battle():
+	if _game_finished or _is_cycle_advancing or _is_moving or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open or _player_lifecycle.is_in_coma() or _is_in_battle():
 		return
 	_is_camping = true
 	_camp_count += 1
@@ -3090,6 +3097,41 @@ func _on_player_defeat_triggered(faction: int) -> void:
 ## 原 _init_player 内 OverlayTransitionUI.notify_world_ready 直调迁过来
 func _on_player_respawn_intro_ready(respawn_line: String) -> void:
 	OverlayTransitionUI.notify_world_ready(1, respawn_line)
+
+
+## L1.3 周期胜利目标 MVP：非末周期占据敌方核心 / 清场 → 周期推进过渡（VictoryJudge.cycle_victory sink）
+##
+## 与 _on_player_coma_triggered 同形（黑屏过渡 midpoint 模式），差别：
+##   - 推进走 RunState.advance_cycle_on_victory（保留队长 + 部队满血 + quality+1），非 advance_cycle（抽新队长）
+##   - 文案走 event_narrative_pool cycle_victory 场景池（队长跨周期不变，单句即可）
+## 视图态副作用（_reachable_tiles / _pending_camp_manage_open / queue_redraw）与 coma 一致清理
+func _on_cycle_victory_triggered() -> void:
+	# P1-1（codex）：锁住 fade-in → reload 间的输入，避免旧场景在过渡窗口响应移动/扎营/建造
+	# reload 后新场景 WorldMap 实例本字段默认 false，自然清零
+	_is_cycle_advancing = true
+	_reachable_tiles = {}
+	_pending_camp_manage_open = false
+	_renderer.queue_redraw()
+	# 周期胜利文案（reload 前构造：此时旧队长仍在，名字 = reload 后保留的同一队长）
+	var leader_name: String = _player_lifecycle.current_leader_name()
+	var victory_line: String = NarrativeProvider.pick("cycle_victory", {"leader_name": leader_name})
+	var lines: PackedStringArray = PackedStringArray([victory_line])
+	# 占位 icon（L1.3 待验收调）
+	var icon_data: Dictionary = {"icon": "🏰", "count": 1}
+	# 当前队长 CharacterData：midpoint 在 reload 前执行，旧 PlayerLifecycle 仍在，引用有效
+	var leader_chars: Array[CharacterData] = _player_lifecycle.characters()
+	var leader_char: CharacterData = leader_chars[0] if not leader_chars.is_empty() else null
+	var midpoint: Callable = func() -> Signal:
+		RunState.advance_cycle_on_victory(leader_char)
+		get_tree().reload_current_scene()
+		return OverlayTransitionUI.world_ready
+	OverlayTransitionUI.play(lines, icon_data, midpoint)
+
+
+## L1.3：新场景启动周期胜利推进就绪（PlayerLifecycle.cycle_victory_intro_ready sink）
+## 队长跨周期不变 → 无需替换文案行，仅 emit world_ready 解除 phase B await
+func _on_player_cycle_victory_intro_ready() -> void:
+	OverlayTransitionUI.notify_world_ready()
 
 
 # ─────────────────────────────────────────

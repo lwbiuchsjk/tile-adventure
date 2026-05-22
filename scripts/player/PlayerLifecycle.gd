@@ -47,6 +47,11 @@ signal defeat_triggered(faction: int)
 ## WorldMap 接 sink → 调 OverlayTransitionUI.notify_world_ready(1, respawn_line)
 signal respawn_intro_ready(respawn_line: String)
 
+## 新场景启动时周期胜利推进就绪（L1.3）：setup 内消费 _pending_cycle_victory_intro 命中
+## WorldMap 接 sink → 调 OverlayTransitionUI.notify_world_ready() 解除 phase B await
+## （周期胜利文案在 WorldMap 过渡触发时已构造，队长跨周期不变，故本信号无需传文案）
+signal cycle_victory_intro_ready()
+
 
 # ─────────────────────────────────────────
 # 状态
@@ -88,9 +93,29 @@ func setup(player_cfg: Dictionary, run_cfg: Dictionary) -> void:
 	_characters = []
 	_total_max_hp = 0
 
-	# 从 RunState 抽未使用的英雄；返回的 leader_row 浅拷贝
-	# RunState.ensure_initialized 已在 _ready 早期调用过；此处直接 draw
-	var leader_row: Dictionary = RunState.draw_new_leader()
+	# L1.3 周期胜利目标：先判断是否周期胜利推进（保留队长）——优先于昏迷重生（抽新队长）
+	# 一次只有一种推进；命中胜利推进则从 RunState 快照重建队长，否则走 draw_new_leader
+	# consumed_cycle_victory 记录"原始 pending 命中"——即使快照为空退回抽新队长，过渡仍按周期胜利分支解除 await（P1-2）
+	var consumed_cycle_victory: bool = RunState.consume_pending_cycle_victory_intro()
+	var is_cycle_victory: bool = consumed_cycle_victory
+	var victory_snapshot: Dictionary = {}
+	if consumed_cycle_victory:
+		victory_snapshot = RunState.get_victory_leader_snapshot()
+		if victory_snapshot.is_empty():
+			# 异常兜底：标志命中但快照为空 → 队长重建退回抽新队长（但过渡仍走胜利分支 emit，见末尾）
+			push_error("PlayerLifecycle.setup: 周期胜利标志命中但快照为空，退回 draw_new_leader")
+			is_cycle_victory = false
+
+	# 队长来源：胜利推进用快照 hero_id 查行（拿 name 等展示字段）；否则从 RunState 抽未使用英雄
+	# RunState.ensure_initialized 已在 _ready 早期调用过；此处直接 draw / 查行
+	var leader_row: Dictionary
+	if is_cycle_victory:
+		var snap_hero_id: int = int(victory_snapshot.get("hero_id", -1))
+		leader_row = RunState.find_hero_row(snap_hero_id)
+		if leader_row.is_empty():
+			leader_row = {"id": snap_hero_id, "name": "队长"}
+	else:
+		leader_row = RunState.draw_new_leader()
 	_leader_display_name = String(leader_row.get("name", "队长"))
 
 	# 单角色：队长占据 _characters[0]，其余空位由 C MVP 入队事件追加
@@ -99,19 +124,25 @@ func setup(player_cfg: Dictionary, run_cfg: Dictionary) -> void:
 	# C MVP：写入 hero_id，让 draw_recruit 能正确排除当前在队英雄
 	ch.hero_id = int(leader_row.get("id", "-1"))
 	var troop: TroopData = TroopData.new()
-	troop.troop_type = parse_troop_type(String(leader_row.get("troop_type", "SWORD")))
-	troop.quality = parse_troop_quality(String(leader_row.get("troop_quality", "")), default_quality)
+	if is_cycle_victory:
+		# 周期胜利：用快照兵种 + 已 +1 封顶的品质重建；TroopData.new() 默认 current_hp==max_hp 即满血
+		troop.troop_type = int(victory_snapshot.get("troop_type", 0)) as TroopData.TroopType
+		troop.quality = int(victory_snapshot.get("quality", 0)) as TroopData.Quality
+	else:
+		troop.troop_type = parse_troop_type(String(leader_row.get("troop_type", "SWORD")))
+		troop.quality = parse_troop_quality(String(leader_row.get("troop_quality", "")), default_quality)
 	ch.troop = troop
 	_total_max_hp += troop.max_hp
 	_characters.append(ch)
 
-	# 重生事件（B MVP → 入口 2 MVP 2.1 议题 5 升级）
-	# RunState.advance_cycle 时置 _pending_respawn_intro=true；
-	# 新场景 setup 末尾消费一次后清零
-	#
-	# MVP-δ 阶段 2：emit signal 让 WorldMap 接 → 调 OverlayTransitionUI.notify_world_ready
+	# 推进事件占位（B MVP 重生 → 入口 2 MVP 2.1 / L1.3 周期胜利）
+	# 新场景 setup 末尾消费一次；emit signal 让 WorldMap 调 OverlayTransitionUI.notify_world_ready
 	# PlayerLifecycle 不直接依赖 UI 系统
-	if RunState.consume_pending_respawn_intro():
+	if consumed_cycle_victory:
+		# L1.3：周期胜利文案已由 WorldMap 在过渡触发时（reload 前）构造，这里仅发信号解除 phase B await
+		# P1-2（codex）：用 consumed_cycle_victory（原始命中）而非 is_cycle_victory——快照空退回抽新队长时仍 emit，避免 timeout
+		cycle_victory_intro_ready.emit()
+	elif RunState.consume_pending_respawn_intro():
 		var respawn_line: String = format_respawn_line_for_current_leader(leader_row)
 		respawn_intro_ready.emit(respawn_line)
 

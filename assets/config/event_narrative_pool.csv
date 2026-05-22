@@ -44,3 +44,8 @@ camp_supply_town,{slot_name} 的旅店为 {leader_name} 备齐口粮。恢复补
 camp_supply_town,{slot_name} 商队为 {leader_name} 整修装备。恢复补给×{count}。
 camp_supply_town,{leader_name} 在 {slot_name} 市集采办给养。恢复补给×{count}。
 camp_supply_town,{slot_name} 守卫为 {leader_name} 接洽补给事宜。恢复补给×{count}。
+cycle_victory,{leader_name} 攻陷敌方核心。旅程进入新的篇章。
+cycle_victory,核心陷落。{leader_name} 率部踏入更深的疆域。
+cycle_victory,{leader_name} 的旗帜插上敌方核心。新的征程就此展开。
+cycle_victory,敌方核心化为焦土。{leader_name} 整队向更强的敌人进发。
+cycle_victory,{leader_name} 立于陷落的核心之上。前路的烽烟更盛。

@@ -14,6 +14,9 @@ var _failed: int = 0
 ## sink 捕获：被调时记录 winner 列表
 var _captured: Array[int] = []
 
+## L1.3：周期推进出口捕获计数
+var _cycle_advance_captured: int = 0
+
 
 func _init() -> void:
 	print("=== M8 胜负判定冒烟测试 ===")
@@ -24,7 +27,7 @@ func _init() -> void:
 	_test_finished_gate_once_per_game()
 	_test_clear_sink()
 	_test_sink_last_write_wins()
-	_test_core_slot_first_two_cycles_do_not_trigger()
+	_test_core_slot_first_two_cycles_advance()
 	_test_occupation_system_integration_player_flip()
 	_test_occupation_system_integration_enemy_flip()
 	_test_same_faction_occupy_no_trigger()
@@ -130,20 +133,29 @@ func _test_sink_last_write_wins() -> void:
 	_assert(_captured.size() == 1,       "新 sink 收到")
 
 
-## 7. 前两周期占领核心不触发主胜利路径
-func _test_core_slot_first_two_cycles_do_not_trigger() -> void:
-	print("-- 前两周期核心翻转不触发")
+## 7. 前两周期占领核心触发周期推进出口（L1.3：非末周期=周期推进，不触发通关 / 不封盘）
+func _test_core_slot_first_two_cycles_advance() -> void:
+	print("-- 前两周期核心翻转 → 周期推进出口（非通关）")
 	_reset()
+	# L1.3：注册周期推进 sink 捕获（_reset 仅注册通关 _sink）
+	_cycle_advance_captured = 0
+	VictoryJudge.register_cycle_victory_sink(_on_cycle_advance)
+
 	RunState._cycle_index = 0
-	var core_cycle_0: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(core_cycle_0)
-	_assert(_captured.is_empty(), "周期 0 不触发胜利")
+	VictoryJudge.check_on_slot_owner_changed(_make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER))
+	_assert(_cycle_advance_captured == 1, "周期 0 占据核心 → 周期推进出口触发")
+	_assert(_captured.is_empty(), "周期 0 不触发通关 _sink")
 	_assert(not VictoryJudge.is_finished(), "周期 0 不封盘")
 
+	# 模拟 reload：_exit_tree clear_sink（清 _cycle_advancing + sink）→ 新 _ready 重新 register
+	# （生产路径：周期推进后 reload_current_scene 触发 clear_sink，非 reset_state）
+	VictoryJudge.clear_sink()
+	VictoryJudge.register_sink(_on_sink)
+	VictoryJudge.register_cycle_victory_sink(_on_cycle_advance)
 	RunState._cycle_index = 1
-	var core_cycle_1: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(core_cycle_1)
-	_assert(_captured.is_empty(), "周期 1 不触发胜利")
+	VictoryJudge.check_on_slot_owner_changed(_make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER))
+	_assert(_cycle_advance_captured == 2, "周期 1 占据核心 → 周期推进出口再触发")
+	_assert(_captured.is_empty(), "周期 1 不触发通关 _sink")
 	_assert(not VictoryJudge.is_finished(), "周期 1 不封盘")
 
 
@@ -267,6 +279,11 @@ func _reset() -> void:
 ## sink 捕获回调
 func _on_sink(winner: int) -> void:
 	_captured.append(winner)
+
+
+## L1.3：周期推进出口捕获回调
+func _on_cycle_advance() -> void:
+	_cycle_advance_captured += 1
 
 
 ## 构造指定类型 + 归属的 PersistentSlot（owner_faction 已设置为"翻转后"的状态）

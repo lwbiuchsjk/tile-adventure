@@ -98,6 +98,17 @@ func add_exp(amount: int) -> bool:
 			return true
 	return false
 
+## 直接提升一级品质（周期胜利奖励用，区别于 add_exp 的按经验阈值升级）
+## SSR 硬封顶——与 add_exp 封顶语义统一，避免周期胜利直接写 quality+1 绕过封顶导致越界
+## 返回 true 表示发生提升；已 SSR 返回 false
+func raise_quality_one_step() -> bool:
+	if quality == Quality.SSR:
+		return false
+	quality = (quality as int + 1) as Quality
+	# 与 add_exp 升品一致：升品后经验归零，重新累积下一级
+	exp = 0
+	return true
+
 ## 获取当前品质升级所需经验（已达最高品质返回 -1）
 func get_upgrade_threshold() -> int:
 	if _upgrade_thresholds.has(quality):

@@ -56,6 +56,16 @@ static var _current_cycle_camp_count: int = 0
 ## 用 consume_pending_respawn_intro 取值并清零，避免读写两步
 static var _pending_respawn_intro: bool = false
 
+## 周期胜利推进占位标志（L1.3 周期胜利目标 MVP）：advance_cycle_on_victory 时置 true
+## 区别于 _pending_respawn_intro（昏迷重生抽新队长）——本标志命中时新场景从快照重建队长（保留本人）
+## 用 consume_pending_cycle_victory_intro 取值并清零
+static var _pending_cycle_victory_intro: bool = false
+
+## 周期胜利队长快照（L1.3）：advance_cycle_on_victory 时存，新场景 setup 从此重建队长
+## 结构：{hero_id: int, troop_type: int, quality: int}（quality 已 +1 封顶；HP 重建时满血）
+## reset / ensure_initialized 清空
+static var _victory_leader_snapshot: Dictionary = {}
+
 ## 本周期已触发过入队事件的里程碑值；advance_cycle / reset 时清空
 ## 用途：去重保护——同周期内即使 _camp_milestones 含重复值（如 [5, 3, 5]），
 ## 当前周期到达扎营第 5 次时只触发 1 次入队事件
@@ -112,6 +122,8 @@ static func ensure_initialized(max_cycles_value: int, hero_pool_rows: Array, rng
 	_camp_milestones = []
 	_current_cycle_camp_count = 0
 	_pending_respawn_intro = false
+	_pending_cycle_victory_intro = false
+	_victory_leader_snapshot = {}
 	_already_triggered_this_cycle = []
 	# rng 缺省时内部建一个并 randomize；显式传入时保留调用方掌控
 	if rng == null:
@@ -137,6 +149,8 @@ static func reset() -> void:
 	_camp_milestones = []
 	_current_cycle_camp_count = 0
 	_pending_respawn_intro = false
+	_pending_cycle_victory_intro = false
+	_victory_leader_snapshot = {}
 	_already_triggered_this_cycle = []
 	# _max_cycles 不重设；下一次 ensure_initialized 会按新配置覆盖
 
@@ -184,6 +198,38 @@ static func advance_cycle() -> void:
 	_pending_respawn_intro = true
 	# C MVP：新周期重新累计入队触发；不清 _camp_milestones（跨周期累积是设计意图）
 	_already_triggered_this_cycle = []
+	if _on_cycle_advance_sink.is_valid():
+		_on_cycle_advance_sink.call(prev, _cycle_index)
+
+
+## 周期胜利推进（占据敌方核心）—— B 重生周期第 3 条路径（L1.3 周期胜利目标 MVP）
+## 区别于 advance_cycle（昏迷重生抽新队长）：保留当前队长本人 + 部队（满血 + quality+1 封顶 SSR）
+##
+## leader：当前队长 CharacterData；内部快照其 troop 关键字段供新场景重建
+## 与 advance_cycle 共享周期推进通用部分（push 扎营计数 / cycle+1 / 清 already_triggered / 触发 sink）
+## 调用方约定：本函数只动数据；reload_current_scene 由调用方负责
+static func advance_cycle_on_victory(leader: CharacterData) -> void:
+	# 1. 快照队长 + 部队；在 troop 上做 quality+1 封顶后再读快照值
+	_victory_leader_snapshot = {}
+	if leader != null and leader.troop != null:
+		var troop: TroopData = leader.troop
+		troop.raise_quality_one_step()  # quality+1 封顶 SSR + exp 归零
+		_victory_leader_snapshot = {
+			"hero_id": leader.hero_id,
+			"troop_type": int(troop.troop_type),
+			"quality": int(troop.quality),
+		}
+	else:
+		push_error("RunState.advance_cycle_on_victory: leader 或 troop 为空，队长快照失败")
+	# 2. 与 advance_cycle 一致的周期推进通用部分
+	_camp_milestones.append(_current_cycle_camp_count)
+	_current_cycle_camp_count = 0
+	var prev: int = _cycle_index
+	_cycle_index += 1
+	_already_triggered_this_cycle = []
+	# 3. 区别于昏迷：置周期胜利推进标志（不置 _pending_respawn_intro）
+	_pending_cycle_victory_intro = true
+	# 4. 通知订阅方周期推进（与 advance_cycle 一致）
 	if _on_cycle_advance_sink.is_valid():
 		_on_cycle_advance_sink.call(prev, _cycle_index)
 
@@ -257,6 +303,19 @@ static func consume_pending_respawn_intro() -> bool:
 ## 只读查询（不清零）；调试 / 日志使用
 static func is_pending_respawn_intro() -> bool:
 	return _pending_respawn_intro
+
+
+## 取值并清零（同一帧内幂等）；新场景 setup 调一次决定是否走"周期胜利重建队长"分支
+## 优先于 consume_pending_respawn_intro 检查——一次只有一种推进（L1.3）
+static func consume_pending_cycle_victory_intro() -> bool:
+	var v: bool = _pending_cycle_victory_intro
+	_pending_cycle_victory_intro = false
+	return v
+
+
+## 周期胜利队长快照浅拷贝（供 PlayerLifecycle.setup 重建队长，防外部修改穿透）
+static func get_victory_leader_snapshot() -> Dictionary:
+	return _victory_leader_snapshot.duplicate()
 
 
 # ─────────────────────────────────────
