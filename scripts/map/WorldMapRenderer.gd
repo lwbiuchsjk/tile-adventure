@@ -63,11 +63,31 @@ var _battle_arena_range: int = 0
 var _battle_center_grid: Vector2i = Vector2i.ZERO
 var _battle_session: BattleSession = null
 
+## 改动2（视觉与操作改进 §2.2）：地格四角呼吸角标相位（_process 推进，正弦驱动内外收缩）
+var _select_bracket_phase: float = 0.0
+
 
 ## 注入世界视图 + 战斗视图（WorldMap._init_subsystems 调用一次，跨战斗复用）
 func setup(world_view: WorldView, battle_view: BattleViewState) -> void:
 	_world_view = world_view
 	_battle_view = battle_view
+
+
+## 改动2（视觉与操作改进 §2.2）：呼吸角标相位驱动
+## 仅在"应显示角标"窗口（玩家回合 + 战斗未结束 + 当前 actor 静止）推进相位并重绘，
+## 避免无谓全局重绘；其它时段不动相位、不请求重绘（静止时的呼吸由本函数独占驱动）
+func _process(delta: float) -> void:
+	if _battle_session == null or _battle_session.is_ended() or not _battle_session.is_player_turn():
+		return
+	var actor: BattleUnit = _battle_session.current_actor()
+	if actor == null or not actor.is_active or not actor.is_alive():
+		return
+	if _battle_view != null and _battle_view.unit_visual_offsets.has(actor):
+		return  # 单位动画中 → 角标隐藏，不驱动呼吸
+	_select_bracket_phase += delta * VISUAL_CFG.select_bracket_speed
+	if _select_bracket_phase > TAU:
+		_select_bracket_phase -= TAU
+	queue_redraw()
 
 
 ## Godot 生命周期：主 _draw 入口，从 WorldView 缓存热路径成员后调度 _draw_* 子区块
@@ -926,6 +946,12 @@ func _draw_battle_overlay() -> void:
 
 	# 4/5. 单位渲染 + HP 条（玩家方 → 敌方顺序，确保当前 actor 高亮在最上）
 	var current_actor: BattleUnit = _battle_session.current_actor()
+	# 改动2（视觉与操作改进 §2.2）：当前 actor 地格四角呼吸角标（画在单位下层、地格四角不被棋子遮挡）
+	# 仅玩家回合 + 未结束 + 当前 actor 静止（无移动/攻击 visual_offset）时显示；动画期间自动隐藏
+	if _battle_session.is_player_turn() and not _battle_session.is_ended() \
+			and current_actor != null and current_actor.is_active and current_actor.is_alive() \
+			and not _battle_view.unit_visual_offsets.has(current_actor):
+		_draw_battle_selected_brackets(current_actor.battle_position)
 	for u in _battle_session.player_units:
 		_draw_battle_unit(u, current_actor)
 	for u in _battle_session.enemy_units:
@@ -1029,7 +1055,9 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 	)
 	if _battle_view.unit_visual_offsets.has(u):
 		center += _battle_view.unit_visual_offsets[u] as Vector2
-	var radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
+	# 改动1（视觉与操作改进 §2.1）：半径按品质缩放——高品质棋子更大更显眼
+	var base_radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
+	var radius: float = _quality_scaled_radius(base_radius, u.troop)
 	# 投影
 	draw_circle(center + Vector2(2, 2), radius, UNIT_ENEMY_CFG.unit_shadow_color)
 	# 阵营色填充
@@ -1043,19 +1071,19 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 	if u.owner_faction == Faction.PLAYER and u.has_attacked:
 		fill = VISUAL_CFG.player_acted_color
 	draw_circle(center, radius, fill)
-	# 当前 actor 加粗白环
-	if u == current_actor and not _battle_session.is_ended():
-		draw_arc(
-			center, radius + 1.5,
-			0.0, TAU,
-			32, VISUAL_CFG.current_actor_ring_color, VISUAL_CFG.current_actor_ring_width
-		)
+	# 改动1（视觉与操作改进 §2.1）：品质描边环（按品质宽度/色，越高越粗越醒目；R 不画）
+	_draw_quality_border(center, radius, u.troop, 1.0)
+	# 改动2（视觉与操作改进 §2.2）：当前 actor 选中表现已从棋子白环移到地格四角呼吸角标
+	# （见绘制主流程 _draw_battle_selected_brackets）；此处不再画棋子白环
 	# HP 条（单位下方）—— 入口 1.2 P1-5：传 unit 而非 troop，让函数内部决定是否补间
 	# 入口 4 MVP：_draw_battle_hp_bar 内部判断队长身份并加金边（替换原银三角方案）
-	_draw_battle_hp_bar(center, radius, u)
+	# codex P2（视觉与操作改进）：HP 条用 base_radius 锚定——品质放大只长身体，外挂元素位置稳定不溢格
+	_draw_battle_hp_bar(center, base_radius, u)
+	# 视觉与操作改进 §2.4：HP 条左侧行动状态标记（仅玩家单位，区分未移动/已移动未攻击/已结束）
+	_draw_action_state_marker(center, base_radius, u)
 	# 入口 1.2 视觉层：兵种字符 + 克制图标（队长银三角已移除，改为 HP 条金边，详见 §8 视觉规格基准）
 	_draw_battle_troop_glyph(center, u.troop)
-	# 敌方援军 L1.4 §3.5：全单位品质角标（本队 / 我方援军 / 敌方 / 敌方援军统一画）
+	# 敌方援军 L1.4 §3.5：全单位品质角标（本队 / 我方援军 / 敌方 / 敌方援军统一画）；角标贴身体角 → 用缩放 radius
 	_draw_quality_badge(center, radius, u.troop, 1.0)
 	# 克制图标 2 个：仅在敌方单位 + 玩家回合 + 战斗未结束 + 当前 actor 为玩家方时画
 	if u.owner_faction != Faction.PLAYER \
@@ -1063,7 +1091,8 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 			and not _battle_session.is_ended() \
 			and current_actor != null \
 			and current_actor.owner_faction == Faction.PLAYER:
-		_draw_counter_icons(center, radius, current_actor, u)
+		# codex P2：克制图标用 base_radius 锚定，避免 SSR 放大把图标推出格上沿
+		_draw_counter_icons(center, base_radius, current_actor, u)
 
 
 ## 死亡渐隐单位渲染（入口 1.2 §5 改动 2 配套）
@@ -1080,13 +1109,17 @@ func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
 	)
 	if _battle_view.unit_visual_offsets.has(u):
 		center += _battle_view.unit_visual_offsets[u] as Vector2
-	var radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
+	# 改动1（视觉与操作改进 §2.1）：渐隐单位半径同样按品质缩放
+	var base_radius: float = float(TILE_SIZE - UNIT_ENEMY_CFG.unit_margin * 2) * 0.5
+	var radius: float = _quality_scaled_radius(base_radius, u.troop)
 	var fill: Color = INFLUENCE_CFG.faction_colors.get(u.owner_faction, Color.MAGENTA) as Color
 	# 持久slot援军 L1.2：援军阵亡渐隐时保持祖母绿，不回退到本队青蓝
 	if u.owner_faction == Faction.PLAYER and u.character == null:
 		fill = VISUAL_CFG.reinforcement_fill_color
 	fill.a *= alpha
 	draw_circle(center, radius, fill)
+	# 改动1：品质描边环随死亡渐隐
+	_draw_quality_border(center, radius, u.troop, alpha)
 	# 兵种字符同步渐隐
 	if _label_font != null and u.troop != null:
 		var full_name: String = TroopData.TROOP_TYPE_NAMES.get(u.troop.troop_type, "?") as String
@@ -1096,6 +1129,86 @@ func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
 		_draw_slot_label(center, glyph, label_color)
 	# 敌方援军 L1.4 §3.5：品质角标随死亡渐隐（与单位整体 alpha 同步）
 	_draw_quality_badge(center, radius, u.troop, alpha)
+
+
+## 地格四角呼吸角标（视觉与操作改进_MVP §2.2）：当前 actor 选中表现（替换棋子白环）
+## 在 cell 四角画 L 形 bracket；内缩量按正弦相位脉动产生"内外收缩"呼吸感
+## 调用方已守卫：玩家回合 + 战斗未结束 + 当前 actor 静止（无 visual_offset）
+func _draw_battle_selected_brackets(cell: Vector2i) -> void:
+	var x0: float = float(cell.x * TILE_SIZE)
+	var y0: float = float(cell.y * TILE_SIZE)
+	var x1: float = x0 + float(TILE_SIZE)
+	var y1: float = y0 + float(TILE_SIZE)
+	# 呼吸内缩：base ± amp·sin(phase)，clamp ≥0 防越出格角
+	var inset: float = maxf(0.0,
+		VISUAL_CFG.select_bracket_base_inset + VISUAL_CFG.select_bracket_amp * sin(_select_bracket_phase))
+	var arm: float = VISUAL_CFG.select_bracket_arm
+	var col: Color = VISUAL_CFG.select_bracket_color
+	var w: float = VISUAL_CFG.select_bracket_width
+	# 四角各画一个 L（两条短线段，沿格边内收）
+	var tl: Vector2 = Vector2(x0 + inset, y0 + inset)        # 左上
+	draw_line(tl, tl + Vector2(arm, 0), col, w)
+	draw_line(tl, tl + Vector2(0, arm), col, w)
+	var tr: Vector2 = Vector2(x1 - inset, y0 + inset)        # 右上
+	draw_line(tr, tr + Vector2(-arm, 0), col, w)
+	draw_line(tr, tr + Vector2(0, arm), col, w)
+	var bl: Vector2 = Vector2(x0 + inset, y1 - inset)        # 左下
+	draw_line(bl, bl + Vector2(arm, 0), col, w)
+	draw_line(bl, bl + Vector2(0, -arm), col, w)
+	var br: Vector2 = Vector2(x1 - inset, y1 - inset)        # 右下
+	draw_line(br, br + Vector2(-arm, 0), col, w)
+	draw_line(br, br + Vector2(0, -arm), col, w)
+
+
+## 品质棋子半径缩放（视觉与操作改进_MVP §2.1）：基准半径 × quality_radius_scale[quality]
+## 高品质棋子更大更显眼；troop 为 null 或未配置时回退基准
+func _quality_scaled_radius(base_radius: float, troop: TroopData) -> float:
+	if troop == null or VISUAL_CFG.quality_radius_scale.is_empty():
+		return base_radius
+	var q: int = clampi(troop.quality as int, 0, VISUAL_CFG.quality_radius_scale.size() - 1)
+	return base_radius * VISUAL_CFG.quality_radius_scale[q]
+
+
+## 品质描边环（视觉与操作改进_MVP §2.1）：棋子外缘按品质画描边，越高品质越粗
+## 颜色复用 quality_badge_colors（与角标单一来源）；宽度 0 = 不画（R 默认无边）；alpha 供渐隐
+func _draw_quality_border(center: Vector2, radius: float, troop: TroopData, alpha: float) -> void:
+	if troop == null or VISUAL_CFG.quality_border_width.is_empty():
+		return
+	var q: int = clampi(troop.quality as int, 0, VISUAL_CFG.quality_border_width.size() - 1)
+	var width: float = VISUAL_CFG.quality_border_width[q]
+	if width <= 0.0:
+		return
+	var col: Color = Color.WHITE
+	if not VISUAL_CFG.quality_badge_colors.is_empty():
+		col = VISUAL_CFG.quality_badge_colors[clampi(q, 0, VISUAL_CFG.quality_badge_colors.size() - 1)]
+	col.a *= alpha
+	# 描边环中线置于 radius + width/2 → 内缘贴合填充圆外缘
+	draw_arc(center, radius + width * 0.5, 0.0, TAU, 48, col, width)
+
+
+## 行动状态标记（视觉与操作改进_MVP §2.4）：HP 条左侧小方块，区分玩家单位本回合行动态
+## 状态：0=未移动（绿）/ 1=已移动未攻击（黄）/ 2=已攻击·已结束（灰）
+## 仅玩家单位画（玩家管理自己的回合行动，尤其多援军时一眼分辨哪些已动）；用 base_radius 锚定与 HP 条对齐
+func _draw_action_state_marker(center: Vector2, base_radius: float, unit: BattleUnit) -> void:
+	if unit == null or unit.owner_faction != Faction.PLAYER:
+		return
+	if VISUAL_CFG.action_marker_colors.size() < 3:
+		return
+	var state: int = 0
+	if unit.has_attacked:
+		state = 2
+	elif unit.has_moved:
+		state = 1
+	var col: Color = VISUAL_CFG.action_marker_colors[state]
+	var size: float = VISUAL_CFG.action_marker_size
+	# 与 HP 条同一锚点（_draw_battle_hp_bar：bar_y = center.y + base_radius + 4）；标记置于 HP 条左侧
+	var bar_y: float = center.y + base_radius + 4.0
+	var bar_h: float = float(VISUAL_CFG.hp_bar_height)
+	var bar_x: float = center.x - float(VISUAL_CFG.hp_bar_width) * 0.5
+	var marker_x: float = bar_x - VISUAL_CFG.action_marker_gap - size
+	# 垂直与 HP 条居中对齐
+	var marker_y: float = bar_y + bar_h * 0.5 - size * 0.5
+	draw_rect(Rect2(marker_x, marker_y, size, size), col)
 
 
 ## 全单位品质显式角标（敌方援军_MVP / L1.4 §3.5）：单位格左上角画品质标识（R/SR/SSR 三档色 + 字母）

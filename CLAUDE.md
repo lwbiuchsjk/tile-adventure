@@ -287,7 +287,8 @@ done
 ## 活跃（≤10 条硬上限）
 
 - [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 启动（2026-05-19 + 当日 v0.2 方向修正）；7 决策点 v0.2 定稿（变体 A 中心 registry + 剥离原则 + cache bug 作已知限制 + realtime 按需）+ V1/V2 验证保留作技术储备 + 设计文档 v0.2 落盘，待新 D.1（registry 机制 + 拆 ParamPresetManager）启动
-- [敌方援军_推进进度](tile-advanture-design/进度/敌方援军_推进进度.md) — 入口 5 L1.4，2026-05-22 启动；设计落盘 [敌方援军_MVP](tile-advanture-design/敌方援军_MVP.md)（F1-F7 拍板：独立强度 enemy_garrison_config + 按初始 owner 选表 + 敌方援军 AI 控制 + 红条带常显 + 全单位品质角标）；分两阶段（敌方援军核心 / 品质显式），待实装
+- [敌方援军_推进进度](tile-advanture-design/进度/敌方援军_推进进度.md) — 入口 5 L1.4；两阶段（敌方援军核心 + 全单位品质角标）已实装提交（代码 6f6c13c / 设计 submodule 4eba812，2026-05-22），桌面验收通过、headless 12 套件全过；**未 push**（待功能微调后一起）；功能微调拆出独立线 → 战斗单位视觉与操作改进
+- [战斗单位视觉与操作改进_推进进度](tile-advanture-design/进度/战斗单位视觉与操作改进_推进进度.md) — L1.4 后续（援军多单位暴露的战斗视觉/操作问题），2026-05-22 拍板 G1-G7 + 设计落盘 [战斗单位视觉与操作改进_MVP](tile-advanture-design/战斗单位视觉与操作改进_MVP.md)；三改进（品质大小+边框 / 地格四角呼吸角标 / 结束回合守卫按钮+Enter），分三阶段，待用户过目设计后实装
 
 ## 预启动（方向已认可，等启动时机）
 

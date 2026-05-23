@@ -31,6 +31,10 @@ signal attack_pressed
 ## 内部信号名 skip_pressed 保留为逻辑语义，UI 文案为"结束行动"
 signal skip_pressed
 
+## 玩家点击 [结束回合] 按钮 / 按 Enter（战斗单位视觉与操作改进_MVP §2.3）
+## WorldMap 路由：先批量结束已移动单位 → 剩余未移动则守卫弹板，否则结束回合切敌方
+signal end_turn_pressed
+
 ## 玩家点击 [退出战斗] 或 [撤离] 按钮（按 mode 区分）
 ##   mode == "exit"   —— 战场内无敌时主动退场（对应 BattleSession.try_manual_exit）
 ##   mode == "retreat" —— 战斗中队长站在战场边界主动撤离（对应 BattleSession.try_retreat）
@@ -57,6 +61,7 @@ const RETREAT_READY_MODULATE: Color = Color(0.55, 1.45, 1.2)
 @onready var _status_label: Label = $BattleStatusPanel/StatusLabel
 @onready var _attack_btn: Button = $BattleActionPanel/HBox/AttackButton
 @onready var _skip_btn: Button = $BattleActionPanel/HBox/SkipButton
+@onready var _end_turn_btn: Button = $BattleActionPanel/HBox/EndTurnButton
 @onready var _exit_btn: Button = $BattleActionPanel/HBox/ExitButton
 
 ## 入口 1.2：战斗动画期间锁输入（设计 §5 改动 6）
@@ -86,6 +91,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_attack_btn.pressed.connect(_on_button_pressed.bind("attack"))
 	_skip_btn.pressed.connect(_on_button_pressed.bind("skip"))
+	_end_turn_btn.pressed.connect(_on_button_pressed.bind("end_turn"))
 	_exit_btn.pressed.connect(_on_button_pressed.bind("exit"))
 
 
@@ -124,6 +130,8 @@ func set_actions_enabled(enabled: bool) -> void:
 			_attack_btn.disabled = true
 		if _skip_btn != null:
 			_skip_btn.disabled = true
+		if _end_turn_btn != null:
+			_end_turn_btn.disabled = true
 		if _exit_btn != null:
 			_exit_btn.disabled = true
 
@@ -154,6 +162,9 @@ func refresh(session: BattleSession) -> void:
 	# 结束行动按钮：玩家回合 + 当前单位未结束
 	if _skip_btn != null:
 		_skip_btn.disabled = _actions_locked or not (is_player and has_actor)
+	# 结束回合按钮（视觉与操作改进 §2.3）：回合级动作，玩家回合 + 未结束即可用（不依赖当前 actor）
+	if _end_turn_btn != null:
+		_end_turn_btn.disabled = _actions_locked or not is_player
 	# 退出战斗 / 撤离按钮：按 session 状态切换文字 + 显隐
 	_refresh_exit_button(session, is_player)
 
@@ -227,6 +238,8 @@ func _on_button_pressed(kind: String) -> void:
 			attack_pressed.emit()
 		"skip":
 			skip_pressed.emit()
+		"end_turn":
+			end_turn_pressed.emit()
 		"exit":
 			# _exit_mode 为空时按 mode="exit" 兜底（防御性，正常路径 refresh 会保证非空）
 			var mode: String = _exit_mode if _exit_mode != "" else "exit"

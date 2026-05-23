@@ -186,3 +186,29 @@ extends Resource
 @export_range(6, 24, 1) var quality_badge_font_size: int = 10
 ## 品质角标文字色（白，与底色对比）
 @export var quality_badge_text_color: Color = Color(1, 1, 1)
+
+## 品质棋子大小缩放（战斗单位视觉与操作改进_MVP §2.1）—— 高品质棋子更大更显眼
+## 下标 = TroopData.Quality（0=R / 1=SR / 2=SSR）；基准半径 ×scale；SSR 仍在格内不溢出
+@export var quality_radius_scale: Array[float] = [0.85, 1.05, 1.25]
+## 品质描边环宽度（§2.1）—— 0=不画边；越高品质越粗（R 无 / SR 中 / SSR 粗金）
+## 描边颜色复用 quality_badge_colors（单一来源）
+@export var quality_border_width: Array[float] = [0.0, 2.0, 3.5]
+
+## 地格四角呼吸角标（战斗单位视觉与操作改进_MVP §2.2）—— 当前 actor 选中表现（替换棋子白环）
+## 仅玩家回合 + actor 静止时显示；四角 L 形 bracket + 正弦呼吸内外收缩
+@export var select_bracket_color: Color = Color(1.0, 1.0, 1.0, 0.95)
+@export_range(1.0, 6.0, 0.5) var select_bracket_width: float = 2.5    ## 线宽
+@export_range(4.0, 24.0, 1.0) var select_bracket_arm: float = 10.0    ## 每角 L 形臂长（px）
+@export_range(0.0, 12.0, 0.5) var select_bracket_base_inset: float = 3.0  ## 基础内缩（距格角）
+@export_range(0.0, 8.0, 0.5) var select_bracket_amp: float = 3.0      ## 呼吸幅度（内外收缩量）
+@export_range(0.5, 6.0, 0.1) var select_bracket_speed: float = 2.5    ## 呼吸角速度（rad/s）
+
+## 行动状态标记（战斗单位视觉与操作改进_MVP §2.4）—— HP 条左侧小方块，区分玩家单位本回合行动态
+## 下标语义：0=未移动（绿）/ 1=已移动未攻击（黄）/ 2=已攻击·已结束（灰）
+@export var action_marker_colors: Array[Color] = [
+	Color(1.0, 1.0, 1.0),      ## 未移动：白（可行动）
+	Color(0.90, 0.20, 0.20),   ## 已移动未攻击：红（部分用）
+	Color(0.50, 0.50, 0.50),   ## 已攻击·已结束：灰（已完成）
+]
+@export_range(2.0, 12.0, 1.0) var action_marker_size: float = 6.0    ## 标记方块边长（px）
+@export_range(0.0, 8.0, 1.0) var action_marker_gap: float = 3.0      ## 标记与 HP 条间距（px）

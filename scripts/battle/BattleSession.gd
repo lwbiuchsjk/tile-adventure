@@ -356,6 +356,16 @@ func skip_current_unit() -> void:
 	_emit_unit_skipped(actor)
 
 
+## 结束指定玩家单位的本回合行动（战斗单位视觉与操作改进_MVP §2.3：结束回合批量收尾用）
+## 与 skip_current_unit 同语义，但作用于传入单位而非当前 actor；调用方负责回合推进
+func skip_unit(unit: BattleUnit) -> void:
+	if unit == null or not is_player_turn():
+		return
+	unit.has_moved = true
+	unit.has_attacked = true
+	_emit_unit_skipped(unit)
+
+
 ## 推进到下一个玩家单位；当前玩家全员行动完 → 切到敌方回合
 ##
 ## 调用方 = BattleHUD"下一个"按钮 / 攻击或移动后自动推进

@@ -67,6 +67,11 @@ custom_minimum_size = Vector2(96, 32)
 layout_mode = 2
 text = "结束行动 [Space]"
 
+[node name="EndTurnButton" type="Button" parent="BattleActionPanel/HBox"]
+custom_minimum_size = Vector2(96, 32)
+layout_mode = 2
+text = "结束回合 [Enter]"
+
 [node name="ExitButton" type="Button" parent="BattleActionPanel/HBox"]
 custom_minimum_size = Vector2(96, 32)
 layout_mode = 2

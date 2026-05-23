@@ -346,6 +346,9 @@ var _battle_view: BattleViewState = null
 ## 子节点，_init_subsystems 创建、跨战斗复用，每场战斗 setup() 注入上下文
 var _battle_anim_director: BattleAnimDirector = null
 
+## 战斗单位视觉与操作改进 §2.3：结束回合"还有未移动单位"守卫弹板（首次触发时懒创建）
+var _end_turn_guard_dialog: AcceptDialog = null
+
 ## MVP-γ 阶段 2：渲染层子节点（承接全部 _draw_*）
 ## 子 Node2D，_init_subsystems 创建；WorldMap 状态变化时调 _renderer.queue_redraw()
 var _renderer: WorldMapRenderer = null
@@ -875,6 +878,7 @@ func _init_subsystems() -> void:
 	ui_layer.add_child(_battle_hud)
 	_battle_hud.attack_pressed.connect(_on_battle_hud_attack_pressed)
 	_battle_hud.skip_pressed.connect(_on_battle_hud_skip_pressed)
+	_battle_hud.end_turn_pressed.connect(_on_battle_hud_end_turn_pressed)
 	_battle_hud.exit_pressed.connect(_on_battle_hud_exit_pressed)
 
 	# MVP-γ 阶段 1：战斗瞬时视觉态 + 动画编排器（跨战斗复用，每场战斗 setup 注入上下文）
@@ -1049,6 +1053,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		var key: InputEventKey = event as InputEventKey
 		if key.pressed and not key.echo and key.keycode == KEY_SPACE:
 			_start_camp()
+
+	# 回车键（视觉与操作改进 §2.3）：战斗中玩家回合 → 结束回合（带未移动守卫）
+	# 放在通用锁守卫之后 + 显式 is_animating 守卫 → 动画期间 / 面板态不触发
+	if event is InputEventKey:
+		var key_enter: InputEventKey = event as InputEventKey
+		if key_enter.pressed and not key_enter.echo \
+				and (key_enter.keycode == KEY_ENTER or key_enter.keycode == KEY_KP_ENTER):
+			if _is_in_battle() and _battle_session != null \
+					and not _battle_session.is_ended() \
+					and _battle_session.is_player_turn() \
+					and not _battle_anim_director.is_animating():
+				_on_battle_hud_end_turn_pressed()
 
 
 ## 入口 4 MVP（2026-05-09）：SPACE 上下文确认路由
@@ -2706,6 +2722,50 @@ func _on_battle_hud_skip_pressed() -> void:
 		return
 	_battle_session.skip_current_unit()
 	_post_player_action_check()
+
+
+## [结束回合] 按钮 / Enter 路由（战斗单位视觉与操作改进_MVP §2.3）
+##
+## 处理顺序（关键，G5 拍板）：
+##   1. 先批量结束所有"已移动未攻击"（Moved）单位 —— 解决多单位逐个收尾的操作负担
+##   2. 再扫剩余未结束单位（此时必为"未移动"Idle 单位，因 Moved 已在步骤 1 结束）
+##   3. 有 Idle → 守卫：选中第一个 Idle 单位 + 弹板提示「还有 N 个单位未移动」，不结束回合
+##      无 Idle → 全员已结束 → _post_player_action_check 推进切敌方回合
+func _on_battle_hud_end_turn_pressed() -> void:
+	if _battle_session == null or _battle_session.is_ended():
+		return
+	if not _battle_session.is_player_turn():
+		return
+	# 1. 先批量结束所有"已移动未攻击"单位
+	for u in _battle_session.player_units:
+		if u != null and u.is_active and u.is_alive() and u.has_moved and not u.has_attacked:
+			_battle_session.skip_unit(u)
+	# 2. 扫剩余未结束单位（必为"未移动"Idle）
+	var idle_units: Array[BattleUnit] = []
+	for u in _battle_session.player_units:
+		if u != null and u.is_active and u.is_alive() and not u.has_attacked:
+			idle_units.append(u)
+	# 3. 分支
+	if not idle_units.is_empty():
+		# 守卫：选中第一个未移动单位（地格呼吸角标即定位过去）+ 弹板提示，不结束回合
+		_battle_session.try_select_player_unit(idle_units[0])
+		_show_end_turn_guard_dialog(idle_units.size())
+	else:
+		# 全员已结束 → 推进 / 切敌方回合（_post_player_action_check 内部 await 动画 + advance）
+		_post_player_action_check()
+
+
+## 结束回合守卫弹板（§2.3）：提示玩家还有未移动单位，确定关闭（不结束回合）
+## 弹板用 Godot AcceptDialog（MVP；样式后续可 .tscn 化，见待跟踪 P2）
+func _show_end_turn_guard_dialog(unmoved_count: int) -> void:
+	if _end_turn_guard_dialog == null:
+		_end_turn_guard_dialog = AcceptDialog.new()
+		_end_turn_guard_dialog.title = "结束回合"
+		_end_turn_guard_dialog.ok_button_text = "确定"
+		var ui_layer: CanvasLayer = $UILayer
+		ui_layer.add_child(_end_turn_guard_dialog)
+	_end_turn_guard_dialog.dialog_text = "还有 %d 个单位未移动，请继续行动。" % unmoved_count
+	_end_turn_guard_dialog.popup_centered()
 
 
 ## [退出战斗] / [撤离] 按钮路由（持久 slot 战场参与设计 L1.1：信号扩展为携带 mode）
