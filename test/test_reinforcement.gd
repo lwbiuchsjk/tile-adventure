@@ -3,10 +3,12 @@ extends SceneTree
 ##
 ## 运行：tools/run_godot.ps1 --headless -s test/test_reinforcement.gd
 ##
-## 验证范围（合议 §8.2 / L1.2 §7.1 三段纯数据逻辑）：
+## 验证范围（合议 §8.2 / L1.2 §7.1 三段纯数据逻辑 + 敌方援军_MVP §8.1）：
 ##   T1 抽样快照  —— ReinforcementRoster.build_config / sample：数量范围 / 品质区间 / 兵种来源 / 未配置返回空
 ##   T2 触发判定  —— ReinforcementRoster.is_in_trigger_range：曼哈顿点到矩形最近距离边界
 ##   T3 储备扣减  —— ReinforcementRoster.apply_consumption：已入场条目移除 / 未入场条目保留
+##   T4 敌方独立表（L1.4）—— 敌方表数值独立于玩家表（同 type×cycle 区间不同；敌方配核心行玩家表无）
+##   T6 工厂阵营化（L1.4）—— make_reinforcement_unit：默认 PLAYER / 显式 ENEMY_1；source_level=null / character=null
 
 var _failed: int = 0
 
@@ -26,6 +28,8 @@ func _init() -> void:
 	_test_trigger_range_diagonal()
 	_test_consumption_full()
 	_test_consumption_partial_retains()
+	_test_enemy_table_independent_strength()
+	_test_make_reinforcement_unit_faction()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -205,6 +209,57 @@ func _test_consumption_partial_retains() -> void:
 
 
 # ─────────────────────────────────────
+# T4 敌方独立表（敌方援军_MVP / L1.4）
+# ─────────────────────────────────────
+
+## 敌方表数值独立于玩家表：同 type×cycle 抽样区间不同 + 敌方配核心行（玩家 mock 表无）
+func _test_enemy_table_independent_strength() -> void:
+	print("-- 敌方独立表：数值独立于玩家表")
+	var player_cfg: Dictionary = ReinforcementRoster.build_config(_mock_garrison_rows())
+	var enemy_cfg: Dictionary = ReinforcementRoster.build_config(_mock_enemy_garrison_rows())
+	var rng: RandomNumberGenerator = _seeded_rng(11)
+	# 玩家 mock 表无核心（slot_type=2）行 → 返回空；敌方表有核心 cycle0 = count 3-4 / quality 1-1
+	var player_core: Array = ReinforcementRoster.sample(2, 0, player_cfg, _mock_pool_rows(), rng)
+	_assert(player_core.is_empty(), "玩家表无核心行 → 核心抽样空")
+	for i in range(50):
+		var enemy_core: Array = ReinforcementRoster.sample(2, 0, enemy_cfg, _mock_pool_rows(), rng)
+		if enemy_core.size() < 3 or enemy_core.size() > 4:
+			_assert(false, "敌方核心 cycle0 数量越界：%d（应 3-4）" % enemy_core.size())
+			return
+		for entry_v in enemy_core:
+			var entry: Dictionary = entry_v as Dictionary
+			if int(entry["quality"]) != 1:
+				_assert(false, "敌方核心 cycle0 品质越界：%d（应恒 1）" % int(entry["quality"]))
+				return
+	_assert(true, "敌方核心 cycle0 50 次均落在 count 3-4 / quality 1（独立于玩家表）")
+
+
+# ─────────────────────────────────────
+# T6 工厂阵营化（敌方援军_MVP / L1.4）
+# ─────────────────────────────────────
+
+## make_reinforcement_unit：默认 PLAYER / 显式 ENEMY_1；两者 source_level=null + character=null
+func _test_make_reinforcement_unit_faction() -> void:
+	print("-- 工厂阵营化：默认 PLAYER / 显式 ENEMY_1")
+	var troop_p: TroopData = TroopData.new()
+	troop_p.troop_type = TroopData.TroopType.SWORD
+	troop_p.quality = TroopData.Quality.R
+	# 默认阵营 = PLAYER（不破坏 L1.2 调用）
+	var unit_p: BattleUnit = BattleDeploy.make_reinforcement_unit(troop_p, Vector2i(3, 3), {})
+	_assert(unit_p.owner_faction == Faction.PLAYER, "默认阵营 = PLAYER")
+	_assert(unit_p.character == null, "玩家援军 character == null")
+	_assert(unit_p.source_level == null, "玩家援军 source_level == null")
+	# 显式 ENEMY_1（敌方援军，AI 驱动）
+	var troop_e: TroopData = TroopData.new()
+	troop_e.troop_type = TroopData.TroopType.SWORD
+	troop_e.quality = TroopData.Quality.SR
+	var unit_e: BattleUnit = BattleDeploy.make_reinforcement_unit(troop_e, Vector2i(4, 4), {}, Faction.ENEMY_1)
+	_assert(unit_e.owner_faction == Faction.ENEMY_1, "显式阵营 = ENEMY_1")
+	_assert(unit_e.character == null, "敌方援军 character == null")
+	_assert(unit_e.source_level == null, "敌方援军 source_level == null（不进 _level_slots / 不计周期胜利口径）")
+
+
+# ─────────────────────────────────────
 # 辅助 / mock 数据
 # ─────────────────────────────────────
 
@@ -215,6 +270,13 @@ func _mock_garrison_rows() -> Array:
 		{"slot_type": "1", "cycle_index": "0", "count_min": "2", "count_max": "2", "quality_min": "0", "quality_max": "0"},
 		{"slot_type": "1", "cycle_index": "1", "count_min": "2", "count_max": "3", "quality_min": "0", "quality_max": "1"},
 		{"slot_type": "1", "cycle_index": "2", "count_min": "3", "count_max": "3", "quality_min": "1", "quality_max": "1"},
+	]
+
+
+## mock enemy_garrison_config 行（含核心 cycle0 = count 3-4 / quality 1-1，区别于玩家表）
+func _mock_enemy_garrison_rows() -> Array:
+	return [
+		{"slot_type": "2", "cycle_index": "0", "count_min": "3", "count_max": "4", "quality_min": "1", "quality_max": "1"},
 	]
 
 

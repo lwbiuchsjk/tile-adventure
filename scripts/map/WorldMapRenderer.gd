@@ -537,10 +537,13 @@ func _draw_persistent_slots() -> void:
 			if inner.size.x > 0 and inner.size.y > 0:
 				draw_rect(inner, INFLUENCE_CFG.persistent_inner_bg)
 
-		# 持久slot援军 L1.2：玩家方 slot 援军未耗尽 → 底部画"援军"条带（耗尽则不画）
-		# 仅玩家方 slot（只有玩家方 slot 会触发援军）；条带在名称下方、不撞右上等级角标
-		if slot.owner_faction == Faction.PLAYER and not slot.reinforcement_roster.is_empty():
-			_draw_reinforcement_band(outer)
+		# 持久slot援军 L1.2 / 敌方援军 L1.4：玩家方 + 敌方 owned slot 援军未耗尽 → 底部画"援军"条带（耗尽则不画）
+		# 玩家方绿条带 / 敌方红条带（常显，F4）；条带在名称下方、不撞右上等级角标
+		if not slot.reinforcement_roster.is_empty():
+			if slot.owner_faction == Faction.PLAYER:
+				_draw_reinforcement_band(outer, VISUAL_CFG.reinforcement_fill_color)
+			elif slot.owner_faction == Faction.ENEMY_1:
+				_draw_reinforcement_band(outer, VISUAL_CFG.enemy_reinforcement_band_color)
 
 		# 核心城镇第二识别特征：金色外描边 + 下方小金菱形徽记
 		# 徽记偏下（主字居中占主视觉），避免被文字压住
@@ -589,17 +592,17 @@ func _draw_core_town_emblem(center_px: Vector2) -> void:
 	draw_colored_polygon(pts, INFLUENCE_CFG.core_town_border)
 
 
-## 持久 slot 援军条带（持久slot援军_MVP / L1.2）
-## 玩家方 slot 援军未耗尽时在底边画"援军"条带；调用方已守卫 owner=PLAYER 且 roster 非空
-## 底色复用 VISUAL_CFG.reinforcement_fill_color（与战场援军绿单一来源、"绿=援军"全局统一）
+## 持久 slot 援军条带（持久slot援军_MVP / L1.2；敌方援军_MVP / L1.4 阵营化）
+## slot 援军未耗尽时在底边画"援军"条带；调用方已守卫 roster 非空 + owner 为玩家 / 敌方
+## band_color: 玩家方传援军绿 reinforcement_fill_color / 敌方传红 enemy_reinforcement_band_color
 ## outer: slot 据点外框 Rect2（与三层结构同一矩形）
-func _draw_reinforcement_band(outer: Rect2) -> void:
+func _draw_reinforcement_band(outer: Rect2, band_color: Color) -> void:
 	var band_h: float = float(INFLUENCE_CFG.reinforcement_band_height)
 	var band_rect: Rect2 = Rect2(
 		outer.position.x, outer.end.y - band_h,
 		outer.size.x, band_h
 	)
-	draw_rect(band_rect, VISUAL_CFG.reinforcement_fill_color)
+	draw_rect(band_rect, band_color)
 	if _label_font == null:
 		return
 	# "援军"文字垂直居中于条带（基线 = 条带中心 + (ascent-descent)/2）
@@ -1052,6 +1055,8 @@ func _draw_battle_unit(u: BattleUnit, current_actor: BattleUnit) -> void:
 	_draw_battle_hp_bar(center, radius, u)
 	# 入口 1.2 视觉层：兵种字符 + 克制图标（队长银三角已移除，改为 HP 条金边，详见 §8 视觉规格基准）
 	_draw_battle_troop_glyph(center, u.troop)
+	# 敌方援军 L1.4 §3.5：全单位品质角标（本队 / 我方援军 / 敌方 / 敌方援军统一画）
+	_draw_quality_badge(center, radius, u.troop, 1.0)
 	# 克制图标 2 个：仅在敌方单位 + 玩家回合 + 战斗未结束 + 当前 actor 为玩家方时画
 	if u.owner_faction != Faction.PLAYER \
 			and _battle_session.is_player_turn() \
@@ -1089,6 +1094,45 @@ func _draw_battle_dying_unit(u: BattleUnit, alpha: float) -> void:
 		var label_color: Color = VISUAL_CFG.troop_label_color
 		label_color.a *= alpha
 		_draw_slot_label(center, glyph, label_color)
+	# 敌方援军 L1.4 §3.5：品质角标随死亡渐隐（与单位整体 alpha 同步）
+	_draw_quality_badge(center, radius, u.troop, alpha)
+
+
+## 全单位品质显式角标（敌方援军_MVP / L1.4 §3.5）：单位格左上角画品质标识（R/SR/SSR 三档色 + 字母）
+## 品质与阵营色正交——阵营=填充色，品质=角标；覆盖本队 / 我方援军 / 敌方 / 敌方援军全部单位
+## center/radius: 单位圆心与半径；troop: 取 quality + 名称；alpha: 渐隐单位传 <1.0，活单位传 1.0
+func _draw_quality_badge(center: Vector2, radius: float, troop: TroopData, alpha: float) -> void:
+	if troop == null or VISUAL_CFG.quality_badge_colors.is_empty():
+		return
+	var q_idx: int = clampi(troop.quality as int, 0, VISUAL_CFG.quality_badge_colors.size() - 1)
+	var bg: Color = VISUAL_CFG.quality_badge_colors[q_idx]
+	bg.a *= alpha
+	var label: String = troop.get_quality_name()
+	var fsize: int = VISUAL_CFG.quality_badge_font_size
+	# 角标尺寸按文字宽度自适应（容纳最长的 "SSR"）；高度按字体高
+	var pad_x: float = 3.0
+	var pad_y: float = 1.0
+	var text_w: float = float(fsize) * float(label.length()) * 0.62 if _label_font == null \
+		else _label_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fsize).x
+	var text_h: float = float(fsize) if _label_font == null else _label_font.get_height(fsize)
+	var badge_w: float = text_w + pad_x * 2.0
+	var badge_h: float = text_h + pad_y * 2.0
+	# 锚点：单位圆左上角（避开右上等级角标 / 底边援军条带）
+	var badge_pos: Vector2 = Vector2(center.x - radius, center.y - radius)
+	draw_rect(Rect2(badge_pos, Vector2(badge_w, badge_h)), bg)
+	if _label_font != null:
+		var text_color: Color = VISUAL_CFG.quality_badge_text_color
+		text_color.a *= alpha
+		var baseline_y: float = badge_pos.y + pad_y + _label_font.get_ascent(fsize)
+		draw_string(
+			_label_font,
+			Vector2(badge_pos.x + pad_x, baseline_y),
+			label,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			fsize,
+			text_color
+		)
 
 
 ## 兵种字符：单位中心绘制 "剑/弓/枪/骑/盾" 单字（取自 TroopData.TROOP_TYPE_NAMES 首字）

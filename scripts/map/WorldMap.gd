@@ -57,6 +57,8 @@ const CONFIG_NARRATIVE_POOL: String = "res://assets/config/event_narrative_pool.
 ## E 战斗就地展开 MVP：兵种战斗参数（移动 / 攻击范围）
 const CONFIG_BATTLE_UNIT: String = "res://assets/config/battle_unit_config.csv"
 const CONFIG_GARRISON: String = "res://assets/config/garrison_config.csv"
+## 敌方援军（敌方援军_MVP / L1.4）：独立强度配置表，列结构同 garrison_config.csv
+const CONFIG_ENEMY_GARRISON: String = "res://assets/config/enemy_garrison_config.csv"
 
 # ─────────────────────────────────────────
 # 渲染常量
@@ -298,6 +300,8 @@ var _passive_battle_supply_cost: int = 1        ## 被动战斗消耗补给（�
 ## 持久 slot 援军（持久slot援军_MVP / L1.2）
 ## _garrison_config：{ slot_type: { cycle: {count_min/max, quality_min/max} } }（ReinforcementRoster.build_config 产出）
 var _garrison_config: Dictionary = {}
+## 敌方援军（L1.4）：敌方独立强度表，结构同 _garrison_config；按 slot PCG 初始 owner 选表（见地图装配阶段抽样段）
+var _enemy_garrison_config: Dictionary = {}
 var _garrison_trigger_range: int = 2            ## 战场格到 slot 的曼哈顿触发阈值
 var _garrison_total_cap: int = 99               ## 单场援军入场总数上限（默认很高，先不约束）
 ## 本场战斗命中（已入场援军）的 slot 列表；战后 _consume_reinforcement_rosters 扣减储备后清空
@@ -600,6 +604,8 @@ func _ready() -> void:
 	# 持久 slot 援军（L1.2）：加载 garrison_config 并解析为嵌套查表字典（slot_type → cycle → cfg）
 	# 储备名册抽样在下方地图装配阶段（owner 染色完成后）逐 slot 执行
 	_garrison_config = ReinforcementRoster.build_config(ConfigLoader.load_csv(CONFIG_GARRISON))
+	# 敌方援军（L1.4）：加载敌方独立强度表（结构同上），抽样时按 slot 初始 owner 选用
+	_enemy_garrison_config = ReinforcementRoster.build_config(ConfigLoader.load_csv(CONFIG_ENEMY_GARRISON))
 
 	# P0 第二阶段：用 cycle_config 覆盖 map_cfg 的周期级字段（地图尺寸 / 起终点 / 持久 slot 数量 / spawn 节奏）
 	# 必须在读取 start/end + _load_pcg 前调用；cycle_config 缺该周期则保留 map_cfg 原值作兜底
@@ -696,10 +702,12 @@ func _ready() -> void:
 			BuildSystem.apply_level_fields(slot, slot.level)
 			# 持久 slot 援军（L1.2）：按 type × 当前周期抽样储备名册（此时 owner 染色已完成）
 			# 对所有 slot 抽样——玩家方直接用；中立 / 敌方 slot 被玩家占据后也能提供援军。
-			# 触发判定仍只扫 owner=PLAYER（见 _inject_reinforcements），敌方 roster 静默不消费
+			# 敌方援军（L1.4）：按 slot PCG 初始 owner 选表——初始敌方 owned 用独立强度表 _enemy_garrison_config，
+			#   初始中立 / 玩家用 _garrison_config。储备一旦快照即固定（归属透明），后续切阵营不重抽。
+			var roster_cfg: Dictionary = _enemy_garrison_config if slot.owner_faction == Faction.ENEMY_1 else _garrison_config
 			slot.reinforcement_roster = ReinforcementRoster.sample(
 				slot.type as int, RunState.cycle_index(),
-				_garrison_config, town_pool_rows, roster_rng
+				roster_cfg, town_pool_rows, roster_rng
 			)
 
 	# ⚠ Tick 注册顺序固定：M5 → M4（TickRegistry 按 FIFO 执行）
@@ -1639,6 +1647,16 @@ func _on_upgrade_requested(slot: PersistentSlot) -> void:
 
 ## 获取当前归属于 PLAYER 的所有持久 slot
 func _get_player_persistent_slots() -> Array[PersistentSlot]:
+	return _get_persistent_slots_by_faction(Faction.PLAYER)
+
+
+## 获取当前归属于 ENEMY_1 的所有持久 slot（敌方援军_MVP / L1.4）
+func _get_enemy_persistent_slots() -> Array[PersistentSlot]:
+	return _get_persistent_slots_by_faction(Faction.ENEMY_1)
+
+
+## 按阵营过滤持久 slot（L1.4 抽出，玩家 / 敌方 getter 共用）
+func _get_persistent_slots_by_faction(faction: int) -> Array[PersistentSlot]:
 	var result: Array[PersistentSlot] = []
 	if _schema == null:
 		return result
@@ -1646,7 +1664,7 @@ func _get_player_persistent_slots() -> Array[PersistentSlot]:
 		var slot: PersistentSlot = entry as PersistentSlot
 		if slot == null:
 			continue
-		if slot.owner_faction == Faction.PLAYER:
+		if slot.owner_faction == faction:
 			result.append(slot)
 	return result
 
@@ -2257,32 +2275,52 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 	_renderer.queue_redraw()
 
 
-## 持久 slot 援军（L1.2）：战斗启动后注入命中 slot 的援军
+## 持久 slot 援军（L1.2 玩家 / L1.4 敌方）：战斗启动后注入命中 slot 的援军
 ##
-## 设计原文：tile-advanture-design/持久slot援军_MVP.md §3.2 / §3.3
+## 设计原文：tile-advanture-design/持久slot援军_MVP.md §3.2 / §3.3；敌方援军_MVP.md §3.3
 ##
-## 流程：
-##   1. 扫描 owner=PLAYER 且 reinforcement_roster 非空的持久 slot
-##   2. slot 到战场（arena）最近格曼哈顿距离 ≤ _garrison_trigger_range → 命中
-##   3. 命中 slot 按 type 优先级（核心 > 城镇 > 村庄）+ position 稳定序排序
-##   4. 逐 slot 逐条目 new TroopData → find_deploy_slot 找空格 → 玩家阵营 BattleUnit 追加 player_units
-##   5. 记录每 slot 实际入场条目到 _consumed_this_battle，命中 slot 入 _reinforcement_hit_slots（战后扣减）
+## 流程（双阵营对称，玩家先注入、敌方后注入）：
+##   - 玩家方援军 → player_units（PLAYER 阵营，玩家控制）
+##   - 敌方援军   → enemy_units（ENEMY_1 阵营，BattleAI 驱动；source_level=null 不进 _level_slots）
+##   occupied 跨阵营续用（玩家先落位、敌方避让）；injected_total 跨阵营累加，_garrison_total_cap 对总数兜底
 ##
-## 前置：_battle_session.start() 已完成且未 is_ended()（追加到 player_units 即被回合流程自然纳入）
+## 前置：_battle_session.start() 已完成且未 is_ended()（追加到 player/enemy_units 即被回合流程自然纳入）
 func _inject_reinforcements() -> void:
 	_reinforcement_hit_slots = []
 	if _battle_session == null or _schema == null:
 		return
 	var arena: Rect2i = _battle_session.arena
+	# 重建 occupied 续用（避免与本队 / 敌包 / 已入场援军重叠）；玩家先落位、敌方接着避让
+	var occupied: Dictionary = BattleDeploy.build_occupied(_battle_session.player_units, _battle_session.enemy_units)
+	var injected_total: int = 0
+	# 玩家方援军 → player_units
+	injected_total = _inject_side(
+		_get_player_persistent_slots(), _battle_session.player_units, Faction.PLAYER, arena, occupied, injected_total)
+	# 敌方援军（L1.4）→ enemy_units（AI 控制）
+	injected_total = _inject_side(
+		_get_enemy_persistent_slots(), _battle_session.enemy_units, Faction.ENEMY_1, arena, occupied, injected_total)
+
+
+## 单阵营援军注入（敌方援军_MVP / L1.4 抽出）：命中判定 + 排序 + 逐条入场 + consumed 暂存 + 命中 slot 并入回收列表
+##
+## slots          —— 待扫描的同阵营持久 slot（_get_player/_enemy_persistent_slots 产出）
+## target_units   —— 入场单位追加目标（player_units / enemy_units，按引用传入直接 append）
+## faction        —— 援军阵营（PLAYER 玩家控制 / ENEMY_1 AI 驱动）
+## arena          —— 战场矩形（命中判定 + 落位边界）
+## occupied       —— 跨阵营续用的占位字典（玩家先落、敌方避让）
+## injected_total —— 跨阵营累加的入场总数（_garrison_total_cap 对总数兜底）
+## 返回：更新后的 injected_total（供下一阵营续算 cap）
+func _inject_side(slots: Array[PersistentSlot], target_units: Array[BattleUnit], faction: int,
+		arena: Rect2i, occupied: Dictionary, injected_total: int) -> int:
 	# 1-2. 命中判定
 	var hit_slots: Array[PersistentSlot] = []
-	for slot in _get_player_persistent_slots():
+	for slot in slots:
 		if slot.reinforcement_roster.is_empty():
 			continue
 		if _slot_in_battle_range(slot, arena):
 			hit_slots.append(slot)
 	if hit_slots.is_empty():
-		return
+		return injected_total
 	# 3. 排序：type 降序（核心 2 > 城镇 1 > 村庄 0）；同 type 按 position（y 优先、x 次之）稳定序
 	hit_slots.sort_custom(func(a: PersistentSlot, b: PersistentSlot) -> bool:
 		if a.type != b.type:
@@ -2291,9 +2329,7 @@ func _inject_reinforcements() -> void:
 			return a.position.y < b.position.y
 		return a.position.x < b.position.x
 	)
-	# 4-5. 入场填充：重建 occupied 续用（避免与本队 / 敌方 / 已入场援军重叠）
-	var occupied: Dictionary = BattleDeploy.build_occupied(_battle_session.player_units, _battle_session.enemy_units)
-	var injected_total: int = 0
+	# 4-5. 入场填充
 	for slot in hit_slots:
 		var consumed: Array = []
 		for entry_v in slot.reinforcement_roster:
@@ -2308,14 +2344,15 @@ func _inject_reinforcements() -> void:
 			var troop: TroopData = TroopData.new()
 			troop.troop_type = int(entry.get("troop_type", 0)) as TroopData.TroopType
 			troop.quality = int(entry.get("quality", 0)) as TroopData.Quality
-			var unit: BattleUnit = BattleDeploy.make_reinforcement_unit(troop, cell, _battle_unit_config)
+			var unit: BattleUnit = BattleDeploy.make_reinforcement_unit(troop, cell, _battle_unit_config, faction)
 			occupied[cell] = unit
-			_battle_session.player_units.append(unit)
+			target_units.append(unit)
 			consumed.append(entry)
 			injected_total += 1
 		slot._consumed_this_battle = consumed
 		if not consumed.is_empty():
 			_reinforcement_hit_slots.append(slot)
+	return injected_total
 
 
 ## 判断 slot 到战场 arena 的最近格曼哈顿距离是否 ≤ _garrison_trigger_range

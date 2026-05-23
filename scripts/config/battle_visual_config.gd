@@ -168,3 +168,21 @@ extends Resource
 ## 与本队青蓝区分"援军 / 本队"，又与 HP 满血绿（更亮偏黄）有别；已行动仍转 player_acted_color 灰
 ## 设计原文：tile-advanture-design/持久slot援军_MVP.md §3.2.7 / §七（P3 拉入范围）
 @export var reinforcement_fill_color: Color = Color(0.22, 0.72, 0.45)
+
+## 敌方援军 slot 条带底色（红系）—— 敌方援军_MVP / L1.4
+## 与玩家方援军绿条带（reinforcement_fill_color）对称：玩家绿 / 敌方红，"绿=我方援军 / 红=敌方援军"
+## 设计原文：tile-advanture-design/敌方援军_MVP.md §3.4
+@export var enemy_reinforcement_band_color: Color = Color(0.78, 0.22, 0.22)
+
+## 全单位品质显式角标（敌方援军_MVP / L1.4 §3.5）—— 战场单位格左上角品质标识
+## 品质与阵营色正交（阵营=填充色 / 品质=角标），覆盖本队 / 我方援军 / 敌方 / 敌方援军全部单位
+## quality_badge_colors：按 TroopData.Quality 下标取色（0=R 灰 / 1=SR 蓝 / 2=SSR 金）
+@export var quality_badge_colors: Array[Color] = [
+	Color(0.70, 0.70, 0.70),   ## R  普通：灰
+	Color(0.30, 0.55, 0.95),   ## SR 稀有：蓝
+	Color(0.95, 0.78, 0.25),   ## SSR 史诗：金
+]
+## 品质角标字号
+@export_range(6, 24, 1) var quality_badge_font_size: int = 10
+## 品质角标文字色（白，与底色对比）
+@export var quality_badge_text_color: Color = Color(1, 1, 1)
