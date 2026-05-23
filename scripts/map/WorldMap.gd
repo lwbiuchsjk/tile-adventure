@@ -338,6 +338,9 @@ var _battle_center_grid: Vector2i = Vector2i.ZERO
 ##   resync_to_post_battle_state；浓雾像素判定经 WorldView.is_in_fog 转发到本节点
 var _night_vision: NightVisionLayer = null
 
+## 核心目标传达 L1.5（§2.3）：屏幕暗角 + 离屏敌方核心方向边缘箭头（CanvasLayer=7）
+var _core_objective_overlay: CoreObjectiveOverlay = null
+
 ## MVP-γ 阶段 1：战斗瞬时视觉态载体（3 字典：偏移 / 渐隐 / HP 补间）
 ## 由 BattleAnimDirector 写、_draw_battle_* 读；跨战斗复用，战斗结束 clear()
 var _battle_view: BattleViewState = null
@@ -902,6 +905,12 @@ func _init_subsystems() -> void:
 	_night_vision.setup(_turn_manager, _camera, _world_view, TILE_SIZE,
 		UNIT_ENEMY_CFG.enemy_slot_color, UNIT_ENEMY_CFG.enemy_move_color)
 
+	# 核心目标传达 L1.5（§2.3）：暗角 + 离屏核心方向箭头（CanvasLayer=7，居夜晚遮罩之上、UILayer 之下）
+	_core_objective_overlay = CoreObjectiveOverlay.new()
+	_core_objective_overlay.name = "CoreObjectiveOverlay"
+	add_child(_core_objective_overlay)
+	_core_objective_overlay.setup(_camera, _world_view, TILE_SIZE)
+
 	# 入口 4 MVP（2026-05-09）：探索态行动栏 HBoxContainer（攻击 + 扎营平行排布）
 	# 居中屏幕底部偏上；child 数 0 / 1 / 2 都自然布局
 	_explore_action_bar = HBoxContainer.new()
@@ -1163,6 +1172,10 @@ func _start_battle_camera(battle_center: Vector2i) -> void:
 	if _night_vision != null:
 		_night_vision.set_battle_force_day_on()
 
+	# 核心目标传达 L1.5：战斗中相机 zoom 到战场，核心指引无意义且干扰 → 隐藏整层
+	if _core_objective_overlay != null:
+		_core_objective_overlay.set_battle_active(true)
+
 
 ## 入口 4 MVP：战斗结束 Camera zoom 回归 + 镜头回到队长（_on_battle_session_ended 开头调用）
 ##
@@ -1175,6 +1188,9 @@ func _end_battle_camera() -> void:
 	# 无论后续 _battle_zoom_active=false / _camera==null 异常路径，本调用总会跑完
 	if _night_vision != null:
 		_night_vision.resync_to_post_battle_state()
+	# 核心目标传达 L1.5：战斗结束 → 恢复暗角 + 核心指引
+	if _core_objective_overlay != null:
+		_core_objective_overlay.set_battle_active(false)
 	if not _battle_zoom_active:
 		return
 	_battle_zoom_active = false
@@ -2566,9 +2582,8 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 				_schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
 				_original_slot_types.erase(lvpos)
 
-		# P0 第二阶段：兜底胜利检查 —— 敌方 pack 被清空时玩家胜利
-		# 所有 cycle 都生效；reinforcement 离散 spawn 让通常不可达
-		VictoryJudge.check_enemy_packs_clear(_level_slots)
+		# 核心目标传达 L1.5（H1）：移除兜底清场胜利——占领敌方核心为唯一胜利路径
+		# （清场后核心仍在地图上，玩家需走到核心占领；能清场必能占核心、分叉无意义）
 	elif reason == BattleSession.EndReason.RETREAT:
 		# 持久 slot 战场参与设计 L1.1：撤离分支
 		# defeated_packs 实际是 BattleSession.participating_packs（全部参战敌包）
@@ -2592,8 +2607,7 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 					_original_slot_types.erase(lvpos)
 			# 否则：敌包部分残余,保留在 _level_slots,troops HP 已是战斗结果
 
-		# 兜底胜利检查：撤离时若敌方所有 pack 都全灭（边缘情况），玩家仍胜利
-		VictoryJudge.check_enemy_packs_clear(_level_slots)
+		# 核心目标传达 L1.5（H1）：兜底清场胜利已移除——撤离即便清空全部 pack 也不胜利，需占核心
 
 	# MANUAL_EXIT：不发奖励，敌方残余保留；走通用收尾
 

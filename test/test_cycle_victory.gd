@@ -38,7 +38,6 @@ func _init() -> void:
 	# C. VictoryJudge 分流
 	_test_dispatch_non_last_cycle_advances()
 	_test_dispatch_last_cycle_wins()
-	_test_packs_clear_non_last_advances()
 	_test_slot_filter_rejects_non_core_and_non_player()
 
 	if _failed > 0:
@@ -177,17 +176,6 @@ func _test_dispatch_last_cycle_wins() -> void:
 	_assert(_victory_sink_calls.size() == 1 and _victory_sink_calls[0] == Faction.PLAYER, "末周期 → _sink(PLAYER)")
 	_assert(_cycle_victory_calls == 0, "末周期不触发周期推进")
 	_assert(VictoryJudge.is_finished(), "末周期置 _finished")
-
-
-## 非末周期清场（无敌包）→ 周期推进 sink（与占据核心一致）
-func _test_packs_clear_non_last_advances() -> void:
-	print("-- VictoryJudge 非末周期清场 → 周期推进")
-	_reset_run_state()  # 非末周期
-	_setup_victory_judge()
-	# 空 level_slots → enemy_count = 0 → 触发分流
-	VictoryJudge.check_enemy_packs_clear({})
-	_assert(_cycle_victory_calls == 1, "非末周期清场 → cycle_victory_sink 触发")
-	_assert(_victory_sink_calls.is_empty(), "非末周期清场不触发通关 _sink")
 
 
 ## slot 过滤：非 CORE_TOWN / 非 PLAYER owner 不触发任何分流

@@ -573,7 +573,12 @@ func _draw_persistent_slots() -> void:
 		var is_core_town: bool = slot.type == PersistentSlot.Type.CORE_TOWN
 		var is_core_town_activated: bool = is_core_town and _current_cycle_has_enemy_core
 		if is_core_town_activated:
-			draw_rect(outer, INFLUENCE_CFG.core_town_border, false, 2.0)
+			# 核心目标传达 L1.5（§2.2）：敌方 owned 核心=唯一胜利目标 → 粗金边+外发光强凸显
+			# 其它激活核心（理论罕见，如占领瞬间）走原 2px 金边兜底
+			if slot.owner_faction == Faction.ENEMY_1:
+				_draw_enemy_core_highlight(outer)
+			else:
+				draw_rect(outer, INFLUENCE_CFG.core_town_border, false, 2.0)
 			var emblem_pos: Vector2 = outer.get_center() + Vector2(0, 12)
 			_draw_core_town_emblem(emblem_pos)
 
@@ -594,6 +599,23 @@ func _draw_persistent_slots() -> void:
 			# 等级角标：仅 display_id 模式画；CORE_TOWN 伪装态走 fallback 主字不再画角标
 			if slot.display_id != "" and not (is_core_town and not is_core_town_activated):
 				_draw_level_badge(p, slot.level)
+
+
+## 敌方核心强凸显（核心目标传达_MVP §2.2 / H3）：外发光晕 + 粗金边
+## 敌方 owned 核心是唯一胜利目标，比常规 2px 金边更醒目；outer 为据点外框
+func _draw_enemy_core_highlight(outer: Rect2) -> void:
+	# 外发光：3 圈向外扩张的半透明描边，越外越淡，营造发光晕
+	var glow_r: float = INFLUENCE_CFG.enemy_core_glow_radius
+	if glow_r > 0.0:
+		var steps: int = 3
+		for i in range(steps):
+			var t: float = float(i + 1) / float(steps)
+			var ring: Rect2 = outer.grow(glow_r * t)
+			var gc: Color = INFLUENCE_CFG.enemy_core_glow_color
+			gc.a *= (1.0 - t * 0.7)   # 外圈更淡
+			draw_rect(ring, gc, false, maxf(1.5, glow_r * 0.5 * (1.0 - t)))
+	# 粗金边（描边，不填充）
+	draw_rect(outer, INFLUENCE_CFG.enemy_core_border_color, false, INFLUENCE_CFG.enemy_core_border_width)
 
 
 ## 绘制核心城镇中心金色菱形徽记（UI 重构步骤 1 · 核心第二识别特征）

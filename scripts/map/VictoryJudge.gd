@@ -120,26 +120,7 @@ static func _dispatch_victory() -> void:
 		_cycle_victory_sink.call()
 
 
-## P0 第二阶段：兜底胜利监听 —— 地图上 owner=ENEMY_1 的 pack 数 = 0 → 玩家胜利
-##
-## 触发时机（WorldMap 调用）：
-##   - BattleSession.end(WIN) 后（敌方 pack 被消灭路径）
-##   - OccupationSystem.try_occupy 翻转敌方 pack 后（如有此路径；当前 MVP pack 不可被占领，仅消灭）
-##
-## 判定逻辑：
-##   遍历 _level_slots，统计 faction == ENEMY_1 的 pack 数；为 0 即触发胜利
-##   reinforcement 离散 spawn（每 reinforcement_interval 敌方回合 spawn 1 个）
-##   → 通常玩家清场速度跟不上 spawn，兜底不可达；小概率达成时功能正常
-##
-## L1.3：与占据核心路径统一——清场统计后交 _dispatch_victory 分流
-##   非末周期清场 → 周期推进（不再误判为通关，消除"周期 0 清场=通关 vs 攻克核心=推进"语义矛盾）
-##   末周期清场   → 真正通关
-static func check_enemy_packs_clear(level_slots: Dictionary) -> void:
-	var enemy_count: int = 0
-	for entry in level_slots.values():
-		var pack: LevelSlot = entry as LevelSlot
-		if pack != null and pack.faction == Faction.ENEMY_1:
-			enemy_count += 1
-	if enemy_count > 0:
-		return
-	_dispatch_victory()
+## 核心目标传达 L1.5（H1）：兜底清场胜利已移除——占领敌方核心（check_on_slot_owner_changed）
+## 为唯一胜利/周期推进触发。理由：能清场必能占核心（核心也在地图上、清场后占它更易），
+## 结果分叉无意义；周期推进收敛为「昏迷（惩罚）/ 占核心（奖励）」两条。
+## 原 check_enemy_packs_clear（遍历 _level_slots 统计 ENEMY_1 pack 数=0 → _dispatch_victory）已删。

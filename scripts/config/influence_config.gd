@@ -74,6 +74,13 @@ extends Resource
 ## 核心城镇下方徽记（金色小菱形）边长（像素）
 @export_range(2, 24, 1) var core_town_emblem_size: int = 8
 
+## 敌方核心强凸显（核心目标传达_MVP §2.2 / H3）—— 敌方 owned 核心是唯一胜利目标，需最醒目
+## 比常规 core_town_border（2px）更粗的金边 + 外发光晕
+@export var enemy_core_border_color: Color = Color(1.0, 0.84, 0.0)
+@export_range(1.0, 8.0, 0.5) var enemy_core_border_width: float = 4.0
+@export var enemy_core_glow_color: Color = Color(1.0, 0.84, 0.0, 0.30)
+@export_range(0.0, 24.0, 1.0) var enemy_core_glow_radius: float = 10.0
+
 
 # ─────────────────────────────────────────
 # 持久 slot 三层结构（UI 重构步骤 1 + 调色迭代）
