@@ -112,6 +112,10 @@ var on_unit_attacked: Callable = Callable()
 ## 单位跳过；签名 func(actor: BattleUnit) -> void
 var on_unit_skipped: Callable = Callable()
 
+## 批量跳过（结束回合）；签名 func(units: Array[BattleUnit]) -> void
+## 与逐个 on_unit_skipped 区分：让动画层并行 spawn 飘字 + 单门控，避免串行阻塞
+var on_units_batch_skipped: Callable = Callable()
+
 ## 新一轮玩家回合开启；签名 func(battle_round: int) -> void
 var on_round_started: Callable = Callable()
 
@@ -364,6 +368,22 @@ func skip_unit(unit: BattleUnit) -> void:
 	unit.has_moved = true
 	unit.has_attacked = true
 	_emit_unit_skipped(unit)
+
+
+## 批量结束多个玩家单位（结束回合用）：一次性置 flag + 发批量事件
+## 与逐个 skip_unit 的区别：走 on_units_batch_skipped → 飘字并行 spawn + 单门控，避免 N 个串行飘字阻塞
+func skip_units_batch(units: Array[BattleUnit]) -> void:
+	if not is_player_turn():
+		return
+	var skipped: Array[BattleUnit] = []
+	for unit in units:
+		if unit == null or not unit.is_active or not unit.is_alive() or unit.has_attacked:
+			continue
+		unit.has_moved = true
+		unit.has_attacked = true
+		skipped.append(unit)
+	if not skipped.is_empty():
+		_emit_units_batch_skipped(skipped)
 
 
 ## 推进到下一个玩家单位；当前玩家全员行动完 → 切到敌方回合
@@ -710,6 +730,12 @@ func _emit_unit_attacked(actor: BattleUnit, target: BattleUnit, damage: int) -> 
 func _emit_unit_skipped(actor: BattleUnit) -> void:
 	if on_unit_skipped.is_valid():
 		on_unit_skipped.call(actor)
+
+
+## 分发 on_units_batch_skipped 回调（is_valid 守卫 + 转发）
+func _emit_units_batch_skipped(units: Array[BattleUnit]) -> void:
+	if on_units_batch_skipped.is_valid():
+		on_units_batch_skipped.call(units)
 
 
 ## 分发 on_unit_died 回调（is_valid 守卫 + 转发）

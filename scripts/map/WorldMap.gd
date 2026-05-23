@@ -2750,10 +2750,13 @@ func _on_battle_hud_end_turn_pressed() -> void:
 		return
 	if not _battle_session.is_player_turn():
 		return
-	# 1. 先批量结束所有"已移动未攻击"单位
+	# 1. 先批量结束所有"已移动未攻击"单位（走 skip_units_batch → 飘字并行 spawn，避免 N 个串行阻塞）
+	var to_skip: Array[BattleUnit] = []
 	for u in _battle_session.player_units:
 		if u != null and u.is_active and u.is_alive() and u.has_moved and not u.has_attacked:
-			_battle_session.skip_unit(u)
+			to_skip.append(u)
+	if not to_skip.is_empty():
+		_battle_session.skip_units_batch(to_skip)
 	# 2. 扫剩余未结束单位（必为"未移动"Idle）
 	var idle_units: Array[BattleUnit] = []
 	for u in _battle_session.player_units:

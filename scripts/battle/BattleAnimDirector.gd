@@ -98,6 +98,7 @@ func bind_unit_sinks(battle_session) -> void:
 	battle_session.on_unit_moved = _on_battle_unit_moved
 	battle_session.on_unit_attacked = _on_battle_unit_attacked
 	battle_session.on_unit_skipped = _on_battle_unit_skipped
+	battle_session.on_units_batch_skipped = _on_battle_units_batch_skipped
 	battle_session.on_unit_died = _on_battle_unit_died
 	battle_session.on_phase_changed = _on_battle_phase_changed
 	battle_session.on_round_started = _on_battle_round_started
@@ -229,6 +230,21 @@ func _on_battle_unit_skipped(actor: BattleUnit) -> void:
 		return
 	# 跳过 actor 的 battle_position 不变，无需占位
 	var runner: Callable = func() -> void: _run_skip_anim(actor)
+	_enqueue_battle_anim(runner)
+
+
+## sink: BattleSession.on_units_batch_skipped — 结束回合批量跳过
+## 关键：N 个"跳过"飘字**并行同时 spawn** + **单个**门控 interval（而非 N 个串行 runner），避免堆叠阻塞
+func _on_battle_units_batch_skipped(units: Array) -> void:
+	var arr: Array[BattleUnit] = []
+	for u in units:
+		var bu: BattleUnit = u as BattleUnit
+		if bu != null:
+			arr.append(bu)
+	if arr.is_empty():
+		_redraw_target.queue_redraw()
+		return
+	var runner: Callable = func() -> void: _run_batch_skip_anim(arr)
 	_enqueue_battle_anim(runner)
 
 
@@ -391,6 +407,29 @@ func _run_skip_anim(actor: BattleUnit) -> void:
 	var skip_tween: Tween = create_tween()
 	skip_tween.tween_interval(ANIM_CFG.float_skip_duration)
 	skip_tween.tween_callback(func() -> void:
+		_end_battle_anim()
+		_redraw_target.queue_redraw()
+	)
+
+
+## 批量跳过 runner（结束回合）：所有"跳过"飘字同时 spawn（并行）+ 单个门控 interval
+## 与逐个 _run_skip_anim 串行相比，N 个单位只占一段 float_skip_duration，无堆叠阻塞
+func _run_batch_skip_anim(units: Array[BattleUnit]) -> void:
+	for actor in units:
+		if actor == null:
+			continue
+		var float_pos: Vector2 = Vector2(
+			float(actor.battle_position.x * WorldMap.TILE_SIZE) + float(WorldMap.TILE_SIZE) * 0.5,
+			float(actor.battle_position.y * WorldMap.TILE_SIZE) - 4.0
+		)
+		BattleFloatText.spawn_text(
+			_redraw_target, float_pos, "跳过", ANIM_CFG.float_color_skip,
+			ANIM_CFG.float_skip_duration
+		)
+	_begin_battle_anim()
+	var batch_tween: Tween = create_tween()
+	batch_tween.tween_interval(ANIM_CFG.float_skip_duration)
+	batch_tween.tween_callback(func() -> void:
 		_end_battle_anim()
 		_redraw_target.queue_redraw()
 	)
