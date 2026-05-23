@@ -909,7 +909,8 @@ func _init_subsystems() -> void:
 	_core_objective_overlay = CoreObjectiveOverlay.new()
 	_core_objective_overlay.name = "CoreObjectiveOverlay"
 	add_child(_core_objective_overlay)
-	_core_objective_overlay.setup(_camera, _world_view, TILE_SIZE)
+	# 传底部 HudBar 引用：边框下边界跟随其实际顶沿（布局自然，替代 bottom_reserve 手调）
+	_core_objective_overlay.setup(_camera, _world_view, TILE_SIZE, get_node_or_null("UILayer/HudBar"))
 
 	# 入口 4 MVP（2026-05-09）：探索态行动栏 HBoxContainer（攻击 + 扎营平行排布）
 	# 居中屏幕底部偏上；child 数 0 / 1 / 2 都自然布局

@@ -43,8 +43,8 @@ class GlowNode extends Node2D:
 @export var band_inner_line_color: Color = Color(1.0, 0.86, 0.30, 0.22)
 @export_range(0.0, 4.0, 0.5) var band_inner_line_width: float = 1.0
 
-## 底部 HUD 预留（px）：边框整体框在"屏幕底 - 该值"之上 → 底部带落在 HUD 顶沿、不被 HUD（更高 CanvasLayer）遮挡
-## Y 轴上移，非 Z 序；按底部操作栏实际高度取值，可桌面调
+## 底部 HUD 预留（px）：**兜底值**——仅在 HudBar 引用缺失 / 隐藏时使用
+## 正常态边框下边界跟随 _hud_bar 实际顶沿（见 _frame_rect），无需手调此值
 @export_range(0.0, 200.0, 2.0) var bottom_reserve: float = 32.0
 
 ## 离屏核心方向标记：黄色光晕（外晕 + 亮核），由 clip_children 裁到边框带内
@@ -66,13 +66,17 @@ var _battle_active: bool = false
 var _camera: Camera2D = null
 var _world_view: WorldView = null
 var _tile_size: int = 0
+## 底部 HUD 引用（$UILayer/HudBar）：边框下边界跟随其实际顶沿，替代 bottom_reserve 手调
+var _hud_bar: Control = null
 
 
 ## 初始化（WorldMap._init_subsystems 调一次）：挂 CanvasLayer=7 + BandNode（裁剪）+ GlowNode 子节点
-func setup(camera: Camera2D, world_view: WorldView, tile_size: int) -> void:
+## hud_bar：底部 HUD（$UILayer/HudBar），边框下边界跟随其顶沿；传 null 则回退 bottom_reserve
+func setup(camera: Camera2D, world_view: WorldView, tile_size: int, hud_bar: Control = null) -> void:
 	_camera = camera
 	_world_view = world_view
 	_tile_size = tile_size
+	_hud_bar = hud_bar
 	_layer = CanvasLayer.new()
 	_layer.name = "CoreObjectiveCanvas"
 	_layer.layer = 7
@@ -161,11 +165,16 @@ func draw_glow(canvas: Node2D) -> void:
 # 工具
 # ─────────────────────────────────────────
 
-## 边框框定矩形：屏幕去掉底部 HUD 预留高度 → 边框整体落在 HUD 之上（Y 轴上移，非 Z 序）
+## 边框框定矩形：下边界跟随底部 HUD 实际顶沿（布局自然，无需手调）；HudBar 缺失/隐藏时回退 bottom_reserve
+## HudBar 与本覆盖层同为屏幕空间（各自 CanvasLayer，默认无偏移），global_rect.y 即同一屏幕 Y
 func _frame_rect(canvas: Node2D) -> Rect2:
 	var vp: Vector2 = canvas.get_viewport_rect().size
-	var h: float = maxf(vp.y - bottom_reserve, 1.0)
-	return Rect2(0.0, 0.0, vp.x, h)
+	var bottom: float = vp.y - bottom_reserve          # 兜底
+	if _hud_bar != null and _hud_bar.visible:
+		var hud_top: float = _hud_bar.get_global_rect().position.y
+		if hud_top > 1.0 and hud_top <= vp.y:          # 布局已就绪 → 跟随 HUD 顶沿
+			bottom = hud_top
+	return Rect2(0.0, 0.0, vp.x, maxf(bottom, 1.0))
 
 
 ## 边框带实际宽度（钳到框短边的 40% 内，防极端窗口）
