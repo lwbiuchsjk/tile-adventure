@@ -118,19 +118,19 @@ static func get_effective_base_damage(base_damage: float, difficulty: int, damag
 ## 执行战斗结算（公式驱动，双向伤害计算）
 ## player_troops: 我方部队列表
 ## enemy_troops: 敌方部队列表
-## config: 战斗配置字典（从 battle_config.csv 加载）
+## config: 战斗参数 Resource（BattleParamResource，迁自 battle_config.csv）
 ## difficulty: 关卡难度值（轮次索引，默认 0）
 ## damage_increment: 每轮难度增加的伤害值（默认 0）
 ## 返回 BattleResult，damages 与 player_troops 一一对应，enemy_damages 与 enemy_troops 一一对应
-static func resolve(player_troops: Array[TroopData], enemy_troops: Array[TroopData], config: Dictionary, difficulty: int = 0, damage_increment: float = 0.0) -> BattleResult:
+static func resolve(player_troops: Array[TroopData], enemy_troops: Array[TroopData], config: BattleParamResource, difficulty: int = 0, damage_increment: float = 0.0) -> BattleResult:
 	var result: BattleResult = BattleResult.new()
 	result.victory = true
 
-	# 读取配置参数
-	var base_damage: float = float(config.get("base_damage", "50"))
-	var quality_k: float = float(config.get("quality_k", "0.2"))
-	var quality_min: float = float(config.get("quality_min_factor", "0.5"))
-	var max_rounds: int = int(config.get("default_battle_rounds", "3"))
+	# 读取配置参数（类型化直读，无需 int()/float()/get-default）
+	var base_damage: float = config.base_damage
+	var quality_k: float = config.quality_k
+	var quality_min: float = config.quality_min_factor
+	var max_rounds: int = config.default_battle_rounds
 
 	# 计算有效基础伤害（含难度修正）
 	var effective_base: float = get_effective_base_damage(base_damage, difficulty, damage_increment)
@@ -258,7 +258,7 @@ static func would_wipe_enemies(enemy_troops: Array[TroopData], enemy_damages: Ar
 ##   attacker_troop / target_troop —— 战斗双方的 TroopData（hp / 兵种 / 品质）
 ##   altitude_diff   —— attacker 地形高度 - target 地形高度（设计 §2.5）
 ##   altitude_step   —— battle_config.terrain_altitude_step（默认 0.10）
-##   config          —— battle_config（base_damage / quality_k / quality_min_factor）
+##   config          —— BattleParamResource（base_damage / quality_k / quality_min_factor）
 ##   difficulty      —— 关卡难度值（轮次索引），默认 0
 ##   damage_increment—— 每轮难度增加的伤害值，默认 0
 ##
@@ -269,14 +269,14 @@ static func calculate_single_attack(
 	target_troop: TroopData,
 	altitude_diff: int,
 	altitude_step: float,
-	config: Dictionary,
+	config: BattleParamResource,
 	difficulty: int = 0,
 	damage_increment: float = 0.0,
 	attacker_faction: int = -1
 ) -> int:
-	var base_damage: float = float(config.get("base_damage", "50"))
-	var quality_k: float = float(config.get("quality_k", "0.2"))
-	var quality_min: float = float(config.get("quality_min_factor", "0.5"))
+	var base_damage: float = config.base_damage
+	var quality_k: float = config.quality_k
+	var quality_min: float = config.quality_min_factor
 	var effective_base: float = get_effective_base_damage(base_damage, difficulty, damage_increment)
 	# 克制
 	var counter: float = get_counter_factor(
@@ -296,8 +296,8 @@ static func calculate_single_attack(
 	# attacker_faction == -1（默认）= 不应用阵营乘子，兼容旧调用
 	var faction_factor: float = 1.0
 	if attacker_faction == Faction.PLAYER:
-		faction_factor = float(config.get("battle_player_dmg_factor", "1.0"))
+		faction_factor = config.battle_player_dmg_factor
 	elif attacker_faction == Faction.ENEMY_1:
-		faction_factor = float(config.get("battle_enemy_dmg_factor", "1.0"))
+		faction_factor = config.battle_enemy_dmg_factor
 	var final_damage: float = effective_base * counter * quality_factor * hp_factor * altitude_factor * faction_factor
 	return int(final_damage)

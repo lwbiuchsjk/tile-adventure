@@ -75,7 +75,7 @@ static func bfs_reachable(
 static func calc_attack_damage(
 	attacker: BattleUnit, target: BattleUnit,
 	schema: MapSchema, altitude_step: float,
-	battle_config: Dictionary, difficulty: int, damage_increment: float
+	battle_config: BattleParamResource, difficulty: int, damage_increment: float
 ) -> int:
 	var attacker_alt: int = schema.get_terrain_altitude(
 		attacker.battle_position.x, attacker.battle_position.y

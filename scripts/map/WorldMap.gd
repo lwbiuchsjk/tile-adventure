@@ -28,7 +28,6 @@ const CONFIG_TERRAIN: String = "res://assets/config/terrain_config.csv"
 const CONFIG_SLOT: String = "res://assets/config/slot_config.csv"
 const CONFIG_PCG: String = "res://assets/config/pcg_config.csv"
 const CONFIG_UNIT: String = "res://assets/config/unit_config.csv"
-const CONFIG_BATTLE: String = "res://assets/config/battle_config.csv"
 const CONFIG_COUNTER: String = "res://assets/config/counter_matrix.csv"
 const CONFIG_ENEMY_POOL: String = "res://assets/config/enemy_troop_pool.csv"
 const CONFIG_ENEMY_SPAWN: String = "res://assets/config/enemy_spawn_config.csv"
@@ -225,9 +224,6 @@ var _move_tween: Tween = null
 
 ## 关卡 Slot 字典 {Vector2i: LevelSlot}
 var _level_slots: Dictionary = {}
-
-## 战斗配置（从 battle_config.csv 加载）
-var _battle_config: Dictionary = {}
 
 ## 敌方部队生成器
 var _enemy_generator: EnemyTroopGenerator = null
@@ -443,6 +439,10 @@ const RESOURCE_RENDER_CFG: ResourceRenderConfig = preload("res://assets/config/r
 ## 势力 + 影响圈 + 持久 slot 三层结构（MVP-B.2 阶段 4：12 字段 = 势力色 1 + 影响圈 alpha 3 + 描边 2 + 核心金边 1 + 持久 slot 三层 4 + 核心徽记 1）
 ## 跨 2 文件共享：WorldMap.gd / WorldMapRenderer.gd（持久 slot 主使用方）
 const INFLUENCE_CFG: InfluenceConfig = preload("res://assets/config/influence_config.tres")
+
+## 战斗数值参数（MVP-D D.2 批 1：迁自 battle_config.csv，17 字段 = 伤害公式 6 + 轮次范围 4 + 敌方移动 3 + 补给 2 + 援军 2）
+## 全链类型化共享：WorldMap → BattleSession → BattleMath → BattleResolver
+const BATTLE_PARAM_CFG: BattleParamResource = preload("res://assets/config/battle_param_resource.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -453,7 +453,6 @@ func _ready() -> void:
 	var terrain_rows: Array = ConfigLoader.load_csv(CONFIG_TERRAIN)
 	var slot_rows: Array = ConfigLoader.load_csv(CONFIG_SLOT)
 	var unit_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_UNIT)
-	_battle_config = ConfigLoader.load_csv_kv(CONFIG_BATTLE)
 	var counter_rows: Array = ConfigLoader.load_csv(CONFIG_COUNTER)
 	var enemy_pool_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_POOL)
 	var enemy_spawn_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_ENEMY_SPAWN)
@@ -522,42 +521,42 @@ func _ready() -> void:
 	# 加载难度配置
 	_damage_increment = float(difficulty_cfg.get("damage_increment", "10"))
 
-	# 加载敌方移动配置
-	_enemy_movement_enabled = int(_battle_config.get("enemy_movement_enabled", "0")) == 1
-	_enemy_movement_points = int(_battle_config.get("enemy_movement_points", "6"))
+	# 加载敌方移动配置（MVP-D D.2：类型化 Resource 直读，bool/int 字段无需转换）
+	_enemy_movement_enabled = BATTLE_PARAM_CFG.enemy_movement_enabled
+	_enemy_movement_points = BATTLE_PARAM_CFG.enemy_movement_points
 
-	# 审查 P2 修复：CSV 写坏时 int() 静默变 0 会让 AI 几乎永远推核心（阈值失效）
-	# 显式校验：非法值（< 1）回退到默认 10 + push_warning 便于排障
-	var raw_switch_range: int = int(_battle_config.get("enemy_target_switch_range", "10"))
+	# 审查 P2 修复：阈值失效会让 AI 几乎永远推核心
+	# 校验保留：.tres 被设为非法值（< 1）时回退到默认 10 + push_warning 便于排障
+	var raw_switch_range: int = BATTLE_PARAM_CFG.enemy_target_switch_range
 	if raw_switch_range < 1:
-		push_warning("WorldMap: battle_config.enemy_target_switch_range 非法值 %d，回退到 10" % raw_switch_range)
+		push_warning("WorldMap: battle_param.enemy_target_switch_range 非法值 %d，回退到 10" % raw_switch_range)
 		_enemy_target_switch_range = 10
 	else:
 		_enemy_target_switch_range = raw_switch_range
 
 	# 强制战斗触发距离（A 基线收束 MVP）
-	# 默认 3；CSV 写坏（≤ 0）时回退到默认 + push_warning，参考上面 enemy_target_switch_range 的兜底
-	var raw_force_range: int = int(_battle_config.get("forced_battle_range", "3"))
+	# 默认 3；.tres 写坏（≤ 0）时回退到默认 + push_warning，参考上面 enemy_target_switch_range 的兜底
+	var raw_force_range: int = BATTLE_PARAM_CFG.forced_battle_range
 	if raw_force_range < 1:
-		push_warning("WorldMap: battle_config.forced_battle_range 非法值 %d，回退到 3" % raw_force_range)
+		push_warning("WorldMap: battle_param.forced_battle_range 非法值 %d，回退到 3" % raw_force_range)
 		_forced_battle_range = 3
 	else:
 		_forced_battle_range = raw_force_range
 
 	# E 战斗就地展开 MVP 配置（E1 仅加载到字段，E3 实装时由 BattleSession 消费）
-	# battle_trigger_range 缺失时回退到 forced_battle_range（兼容 A MVP 跑测路径）
-	var raw_trigger: int = int(_battle_config.get("battle_trigger_range", str(_forced_battle_range)))
+	# battle_trigger_range 下限 1（maxi 钳制，防 .tres 设为 0）
+	var raw_trigger: int = BATTLE_PARAM_CFG.battle_trigger_range
 	_battle_trigger_range = maxi(1, raw_trigger)
-	var raw_arena: int = int(_battle_config.get("battle_arena_range", "6"))
+	var raw_arena: int = BATTLE_PARAM_CFG.battle_arena_range
 	_battle_arena_range = maxi(_battle_trigger_range, raw_arena)  # 战场至少不小于触发距离
-	_terrain_altitude_step = float(_battle_config.get("terrain_altitude_step", "0.10"))
-	_active_battle_supply_cost = maxi(0, int(_battle_config.get("active_battle_supply_cost", "1")))
-	_passive_battle_supply_cost = maxi(0, int(_battle_config.get("passive_battle_supply_cost", "1")))
+	_terrain_altitude_step = BATTLE_PARAM_CFG.terrain_altitude_step
+	_active_battle_supply_cost = maxi(0, BATTLE_PARAM_CFG.active_battle_supply_cost)
+	_passive_battle_supply_cost = maxi(0, BATTLE_PARAM_CFG.passive_battle_supply_cost)
 
 	# 持久 slot 援军（L1.2）触发参数
 	# 下限 0（不同于 _battle_trigger_range 的下限 1）：range=0 表示"仅战场覆盖 slot 格才触发"，是有效旋钮
-	_garrison_trigger_range = maxi(0, int(_battle_config.get("garrison_trigger_range", "2")))
-	_garrison_total_cap = maxi(0, int(_battle_config.get("garrison_total_cap", "99")))
+	_garrison_trigger_range = maxi(0, BATTLE_PARAM_CFG.garrison_trigger_range)
+	_garrison_total_cap = maxi(0, BATTLE_PARAM_CFG.garrison_total_cap)
 
 	# E MVP：兵种战斗参数（移动 / 攻击范围）解析为 { TroopType_int : Dictionary }
 	# 兵种名 → ID 复用 BattleResolver.TROOP_NAME_TO_ID
@@ -2233,7 +2232,7 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 		_schema,
 		_battle_arena_range,
 		_battle_unit_config,
-		_battle_config,
+		BATTLE_PARAM_CFG,
 		_terrain_altitude_step,
 		_player_lifecycle.coma_hp_threshold_ratio(),
 		0,
@@ -2287,7 +2286,7 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 		_schema,
 		_battle_arena_range,
 		_battle_unit_config,
-		_battle_config,
+		BATTLE_PARAM_CFG,
 		_terrain_altitude_step,
 		_player_lifecycle.coma_hp_threshold_ratio(),
 		0,

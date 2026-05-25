@@ -71,8 +71,8 @@ var participating_packs: Array[LevelSlot] = []
 var unit_config: Dictionary = {}
 
 ## 战斗参数（伤害公式用）
-## 结构：String 键 → String 值（直接来自 ConfigLoader.load_csv_kv）
-var battle_config: Dictionary = {}
+## 类型化 Resource（MVP-D D.2：迁自 battle_config.csv，由 WorldMap preload 注入）
+var battle_config: BattleParamResource = null
 
 ## 地形高度差伤害修正系数（默认 0.10）
 var terrain_altitude_step: float = 0.10
@@ -150,7 +150,7 @@ func start(
 	schema_ref: MapSchema,
 	arena_range: int,
 	unit_cfg: Dictionary,
-	bcfg: Dictionary,
+	bcfg: BattleParamResource,
 	altitude_step: float,
 	coma_threshold: float,
 	diff: int,
