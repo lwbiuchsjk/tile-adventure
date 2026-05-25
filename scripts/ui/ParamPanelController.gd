@@ -145,11 +145,12 @@ func _load_registry_entries() -> void:
 		return
 	var reg: ParamPanelRegistry = registry as ParamPanelRegistry
 	# 1. 收集 Push 通道已注册的 Resource path 集合（用于去重）
+	# 用 _get_snapshot_fields 展开（含 dict_combo_groups.linked_fields），
+	# 避免仅通过 Combo 收录的 Resource 漏入去重集合（codex D.4 审查 P2）
 	var push_paths: Dictionary = {}
 	for scene_any in _scenes:
 		var scene: ParamPanelScene = scene_any as ParamPanelScene
-		for field_any in scene.fields:
-			var field: ParamFieldMapping = field_any as ParamFieldMapping
+		for field: ParamFieldMapping in _get_snapshot_fields(scene):
 			if field != null and field.target_resource_path != "":
 				push_paths[field.target_resource_path] = true
 	# 2. 遍历 registry entries

@@ -268,7 +268,7 @@ var _enemy_movement_points: int = 6
 var _build_upgrade_enabled: bool = false
 
 ## 敌方部队进入玩家曼哈顿距离 ≤ 该值时触发强制战斗（A 基线收束 MVP）
-## 默认 3；从 battle_config.forced_battle_range 读
+## 默认 3；从 BattleParamResource.forced_battle_range 读（battle_param_resource.tres）
 ##
 ## E MVP 起新增 `_battle_trigger_range`（同义不同名，便于语义清晰过渡）；
 ## E3 实装时把强制战斗触发路径切到 BattleSession，本字段可与 _battle_trigger_range 合并

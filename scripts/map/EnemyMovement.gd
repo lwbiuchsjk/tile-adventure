@@ -72,7 +72,7 @@ var _target_switch_range: int = 10
 ## 玩家保护区半径（曼哈顿距离）
 ## 保护区把 dist < _forced_battle_range 的格全部 blocked，pack 永远停在 dist ≥ range 处。
 ## 被动战斗由 _on_enemy_phase_finished 末尾统一扫描保护区内是否有敌方包（设计 §3.2）。
-## 默认 3（与 battle_config.forced_battle_range 同值）；start_phase 注入实际值。
+## 默认 3（与 BattleParamResource.forced_battle_range 同值）；start_phase 注入实际值。
 var _forced_battle_range: int = 3
 
 ## E 战斗就地展开 MVP §2.3：玩家保护区半径（曼哈顿）
