@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="SupplyParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 3：补给参数 Resource 实例（迁自 supply_config.csv）
+
+[ext_resource type="Script" path="res://scripts/config/supply_param_resource.gd" id="1_supply"]
+
+[resource]
+script = ExtResource("1_supply")
+initial_supply = 3
+camp_restore = 2

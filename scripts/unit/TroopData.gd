@@ -76,11 +76,11 @@ func get_display_text() -> String:
 	return "%s(%s)" % [get_type_name(), get_quality_name()]
 
 ## 从配置加载品质升级经验阈值
-## cfg: quality_upgrade_config.csv 的 key-value 字典
-static func load_upgrade_config(cfg: Dictionary) -> void:
+## cfg: QualityUpgradeParamResource（MVP-D D.2 批 3：迁自 quality_upgrade_config.csv）
+static func load_upgrade_config(cfg: QualityUpgradeParamResource) -> void:
 	_upgrade_thresholds = {
-		Quality.R: int(cfg.get("exp_r_to_sr", "100")),
-		Quality.SR: int(cfg.get("exp_sr_to_ssr", "300")),
+		Quality.R: cfg.exp_r_to_sr,
+		Quality.SR: cfg.exp_sr_to_ssr,
 	}
 
 ## 增加经验值，达到阈值自动升级品质（经验归零）

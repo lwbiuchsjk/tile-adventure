@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="LevelRewardParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 3：关卡奖励参数 Resource 实例（迁自 level_reward_config.csv）
+
+[ext_resource type="Script" path="res://scripts/config/level_reward_param_resource.gd" id="1_lr"]
+
+[resource]
+script = ExtResource("1_lr")
+reward_count_min = 1
+reward_count_max = 2

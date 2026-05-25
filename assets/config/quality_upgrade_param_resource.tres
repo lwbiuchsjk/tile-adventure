@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="QualityUpgradeParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 3：品质升级参数 Resource 实例（迁自 quality_upgrade_config.csv）
+
+[ext_resource type="Script" path="res://scripts/config/quality_upgrade_param_resource.gd" id="1_qu"]
+
+[resource]
+script = ExtResource("1_qu")
+exp_r_to_sr = 100
+exp_sr_to_ssr = 300

@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="BuildParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 3：建造经济参数 Resource 实例（迁自 build_config.csv）
+
+[ext_resource type="Script" path="res://scripts/config/build_param_resource.gd" id="1_build"]
+
+[resource]
+script = ExtResource("1_build")
+player_initial_stone = 20
+enemy_initial_stone = 5

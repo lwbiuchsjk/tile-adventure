@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="DifficultyParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 3：难度参数 Resource 实例（迁自 difficulty_config.csv）
+
+[ext_resource type="Script" path="res://scripts/config/difficulty_param_resource.gd" id="1_diff"]
+
+[resource]
+script = ExtResource("1_diff")
+damage_increment = 10.0

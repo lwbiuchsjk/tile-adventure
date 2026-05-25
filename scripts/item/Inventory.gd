@@ -13,8 +13,8 @@ var max_capacity: int = 20
 var _items: Array[ItemData] = []
 
 ## 从配置初始化背包容量
-func init_from_config(cfg: Dictionary) -> void:
-	max_capacity = int(cfg.get("max_capacity", "20"))
+func init_from_config(cfg: InventoryParamResource) -> void:
+	max_capacity = cfg.max_capacity
 
 ## 获取所有道具列表（只读）
 func get_items() -> Array[ItemData]:

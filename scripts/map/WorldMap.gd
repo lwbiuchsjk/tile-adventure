@@ -31,19 +31,12 @@ const CONFIG_UNIT: String = "res://assets/config/unit_config.csv"
 const CONFIG_COUNTER: String = "res://assets/config/counter_matrix.csv"
 const CONFIG_ENEMY_POOL: String = "res://assets/config/enemy_troop_pool.csv"
 const CONFIG_ITEM: String = "res://assets/config/item_config.csv"
-const CONFIG_INVENTORY: String = "res://assets/config/inventory_config.csv"
-const CONFIG_QUALITY_UPGRADE: String = "res://assets/config/quality_upgrade_config.csv"
-const CONFIG_DIFFICULTY: String = "res://assets/config/difficulty_config.csv"
 const CONFIG_LEVEL_REWARD_POOL: String = "res://assets/config/level_reward_pool.csv"
-const CONFIG_LEVEL_REWARD: String = "res://assets/config/level_reward_config.csv"
 const CONFIG_TURN_REWARD_POOL: String = "res://assets/config/turn_reward_pool.csv"
-const CONFIG_TURN_REWARD: String = "res://assets/config/turn_reward_config.csv"
 const CONFIG_HP_RATIO: String = "res://assets/config/hp_ratio_config.csv"
-const CONFIG_SUPPLY: String = "res://assets/config/supply_config.csv"
 const CONFIG_ENEMY_TIER: String = "res://assets/config/enemy_tier_config.csv"
 const CONFIG_ENEMY_TIER_RATIO: String = "res://assets/config/enemy_tier_ratio_config.csv"
 const CONFIG_RESOURCE_SLOT: String = "res://assets/config/resource_slot_config.csv"
-const CONFIG_BUILD: String = "res://assets/config/build_config.csv"
 const CONFIG_TOWN_TROOP_POOL: String = "res://assets/config/town_troop_pool.csv"
 ## B 重生周期 MVP：英雄池 + 整局周期参数
 const CONFIG_HERO_POOL: String = "res://assets/config/hero_pool.csv"
@@ -445,6 +438,15 @@ const RUN_PARAM_CFG: RunParamResource = preload("res://assets/config/run_param_r
 const PLAYER_PARAM_CFG: PlayerParamResource = preload("res://assets/config/player_param_resource.tres")
 const ENEMY_SPAWN_PARAM_CFG: EnemySpawnParamResource = preload("res://assets/config/enemy_spawn_param_resource.tres")
 const SCORE_PARAM_CFG: ScoreParamResource = preload("res://assets/config/score_param_resource.tres")
+
+## 经济类数值参数（MVP-D D.2 批 3：迁自 quality_upgrade/build/level_reward/turn_reward/supply/inventory/difficulty_config.csv）
+const QUALITY_UPGRADE_PARAM_CFG: QualityUpgradeParamResource = preload("res://assets/config/quality_upgrade_param_resource.tres")
+const BUILD_PARAM_CFG: BuildParamResource = preload("res://assets/config/build_param_resource.tres")
+const LEVEL_REWARD_PARAM_CFG: LevelRewardParamResource = preload("res://assets/config/level_reward_param_resource.tres")
+const TURN_REWARD_PARAM_CFG: TurnRewardParamResource = preload("res://assets/config/turn_reward_param_resource.tres")
+const SUPPLY_PARAM_CFG: SupplyParamResource = preload("res://assets/config/supply_param_resource.tres")
+const INVENTORY_PARAM_CFG: InventoryParamResource = preload("res://assets/config/inventory_param_resource.tres")
+const DIFFICULTY_PARAM_CFG: DifficultyParamResource = preload("res://assets/config/difficulty_param_resource.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -458,19 +460,14 @@ func _ready() -> void:
 	var counter_rows: Array = ConfigLoader.load_csv(CONFIG_COUNTER)
 	var enemy_pool_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_POOL)
 	var item_rows: Array = ConfigLoader.load_csv(CONFIG_ITEM)
-	var inventory_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_INVENTORY)
-	var quality_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_QUALITY_UPGRADE)
-	var difficulty_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_DIFFICULTY)
 
 	# 加载奖励池配置（缓存行数据供后续按轮次过滤）
 	_level_reward_pool_rows = ConfigLoader.load_csv(CONFIG_LEVEL_REWARD_POOL)
-	var level_reward_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_LEVEL_REWARD)
-	_level_reward_count_min = int(level_reward_cfg.get("reward_count_min", "1"))
-	_level_reward_count_max = int(level_reward_cfg.get("reward_count_max", "2"))
+	_level_reward_count_min = LEVEL_REWARD_PARAM_CFG.reward_count_min
+	_level_reward_count_max = LEVEL_REWARD_PARAM_CFG.reward_count_max
 
 	_turn_reward_pool_rows = ConfigLoader.load_csv(CONFIG_TURN_REWARD_POOL)
-	var turn_reward_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_TURN_REWARD)
-	_turn_reward_count = int(turn_reward_cfg.get("reward_count", "1"))
+	_turn_reward_count = TURN_REWARD_PARAM_CFG.reward_count
 
 	# 构建地形消耗表和 Slot 允许表
 	var terrain_costs: Dictionary = _build_terrain_costs(terrain_rows)
@@ -484,9 +481,8 @@ func _ready() -> void:
 	BattleResolver.load_hp_ratio_config(hp_ratio_rows)
 
 	# 加载补给配置
-	var supply_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_SUPPLY)
-	_supply = int(supply_cfg.get("initial_supply", "3"))
-	_camp_restore = int(supply_cfg.get("camp_restore", "1"))
+	_supply = SUPPLY_PARAM_CFG.initial_supply
+	_camp_restore = SUPPLY_PARAM_CFG.camp_restore
 
 	# 加载敌人强度配置（generator 初始化后再注入，见下方）
 	var enemy_tier_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_TIER)
@@ -512,10 +508,10 @@ func _ready() -> void:
 	_resource_slot_config_rows = ConfigLoader.load_csv(CONFIG_RESOURCE_SLOT)
 
 	# 加载品质升级配置
-	TroopData.load_upgrade_config(quality_cfg)
+	TroopData.load_upgrade_config(QUALITY_UPGRADE_PARAM_CFG)
 
 	# 加载难度配置
-	_damage_increment = float(difficulty_cfg.get("damage_increment", "10"))
+	_damage_increment = DIFFICULTY_PARAM_CFG.damage_increment
 
 	# 加载敌方移动配置（MVP-D D.2：类型化 Resource 直读，bool/int 字段无需转换）
 	_enemy_movement_enabled = BATTLE_PARAM_CFG.enemy_movement_enabled
@@ -589,7 +585,7 @@ func _ready() -> void:
 
 	# 初始化背包
 	_inventory = Inventory.new()
-	_inventory.init_from_config(inventory_cfg)
+	_inventory.init_from_config(INVENTORY_PARAM_CFG)
 
 	# 初始化敌方部队生成器
 	_enemy_generator = EnemyTroopGenerator.new()
@@ -677,10 +673,9 @@ func _ready() -> void:
 	# M5: 加载升级配置 + 石料库存 + 注册建造 tick
 	# 顺序固定：先 BuildSystem.load_level_config（tick 依赖配置），再 register
 	BuildSystem.load_level_config(ConfigLoader.load_persistent_slot_config())
-	var build_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_BUILD)
 	_stone_by_faction = {
-		Faction.PLAYER: int(build_cfg.get("player_initial_stone", "0")),
-		Faction.ENEMY_1: int(build_cfg.get("enemy_initial_stone", "0")),
+		Faction.PLAYER: BUILD_PARAM_CFG.player_initial_stone,
+		Faction.ENEMY_1: BUILD_PARAM_CFG.enemy_initial_stone,
 	}
 
 	# 地图生成后字段装配（M2/M4 遗留缺口修复）：
@@ -852,7 +847,7 @@ func _init_subsystems() -> void:
 	add_child(_enemy_ai)
 	_enemy_ai.init(_world_view, _turn_manager)
 	# P0 第二阶段：从 cycle_config 注入当前周期的 reinforcement_interval（覆盖 EnemyAI 默认值）
-	# build_config.csv 的 enemy_reinforcement_interval 此后不再生效（cycle 级配置优先）
+	# 早期曾由 build_config 提供 enemy_reinforcement_interval，现已废弃（cycle 级配置优先）
 	_enemy_ai.reinforcement_interval = _current_cycle_reinforcement_interval
 
 	# 事件面板 UI（探索体验·F MVP）—— MVP-α.5：切预制件实例化

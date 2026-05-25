@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="InventoryParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 3：背包参数 Resource 实例（迁自 inventory_config.csv）
+
+[ext_resource type="Script" path="res://scripts/config/inventory_param_resource.gd" id="1_inv"]
+
+[resource]
+script = ExtResource("1_inv")
+max_capacity = 20
