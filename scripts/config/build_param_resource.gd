@@ -1,5 +1,6 @@
 class_name BuildParamResource
 extends Resource
+## @tunable: 部队经济
 
 ## 建造经济参数 Resource（MVP-D D.2 批 3：build_config.csv 迁出，2 字段）
 ## 消费方：WorldMap 内部初始化 _stone_by_faction

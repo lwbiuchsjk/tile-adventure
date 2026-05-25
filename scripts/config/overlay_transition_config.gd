@@ -1,5 +1,6 @@
 class_name OverlayTransitionConfig
 extends Resource
+## @tunable: 视觉动画
 ## OverlayTransitionUI 调参（MVP-B 阶段 2）
 ##
 ## 设计原文：

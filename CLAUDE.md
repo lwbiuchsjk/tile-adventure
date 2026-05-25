@@ -285,17 +285,27 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 
 ### 新增功能涉及调参的流程
 
-**步骤 1：功能开发（与调参无关）**
+**步骤 1：功能开发（与调参无关，但顺手埋标记）**
 
 1. 普通 `extends Resource` 定义 schema + `@export` 字段（`@export_range` 给范围 → 面板自动推断 Slider）
-2. 使用方 `const CFG = preload("...tres")` 引用（项目统一风格，重启生效）
-3. 完成 —— 不碰面板
+2. **文件头埋调参标记**：`extends Resource` 后加一行 `## @tunable: <建议 group>`（轻量埋点，不依赖面板、不注册，仅声明"调参候选 + 建议归类"；详见下方 §调参埋点标记 @tunable）
+3. 使用方 `const CFG = preload("...tres")` 引用（项目统一风格，重启生效）
+4. 完成 —— 不碰面板（是否进面板交给步骤 2 整理流程）
 
 **步骤 2：纳入面板（独立步骤，可推迟）**
 
 1. 编辑 `assets/config/param_panel/_panel_registry.tres`，加 1 个 `ParamPanelRegistryEntry`
 2. 决定 `group`（面板分类 category）/ `skip_fields`（不展示的字段）/ `realtime`（默认 false 重启生效；true 需把对应 const preload 改 var preload）/ `redraw_targets`（特殊刷新节点）
 3. 下次启动面板（F1）即见新条目
+
+### 调参埋点标记 @tunable
+
+剥离原则下"纳入面板"易被遗忘 → 用**埋点标记**让整理时精确检索（而非全量扫描所有 Resource 去猜哪些该进面板）：
+
+- **格式**：调参 Resource schema 文件头 `extends Resource` 后一行 `## @tunable: <建议 group>`
+- **语义**：声明"这是调参候选 + 建议归入哪个 group"。**打标记 ≠ 注册**（仍剥离）——标记只是开发时顺手埋的备忘，是否进面板由步骤 2 独立决定
+- **现有 group**：战斗数值 / 整局节奏 / 玩家与敌方 / 部队经济 / 视觉动画（新建 group 直接写即可）
+- **整理时检索**：`grep -rn "@tunable" scripts/config/` → 所有调参候选 + 建议 group 一览，再对比 registry / ParamPanelScene 即知哪些待纳入（无需全量翻 Resource）
 
 ### 两条通道与去重
 
@@ -313,7 +323,9 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 
 ### 校验脚本
 
-`tools/check_param_panel_coverage.py`：扫 `_panel_registry.tres`，检查每条 `tres_path` 存在 + `group` 非空 + `realtime: true` 条目对应使用方用 `var` preload。失败 warning 不阻断（未挂 pre-commit，按需手动跑）。
+`tools/check_param_panel_coverage.py`（warning 不阻断，未挂 pre-commit，按需手动跑）：
+- **正向**：扫 `_panel_registry.tres`，检查每条 `tres_path` 存在 + `group` 非空 + `realtime: true` 条目对应使用方用 `var` preload
+- **反向（防遗忘）**：扫所有带 `## @tunable` 标记的 Resource，对比 Push（25 ParamPanelScene）+ Pull（registry），报告"标记了调参但两边都未纳入面板"的 Resource —— 精确定位待整理项，不做全量扫描
 
 # 当前进度
 

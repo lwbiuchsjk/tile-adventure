@@ -1,5 +1,6 @@
 class_name BattleAnimConfig
 extends Resource
+## @tunable: 视觉动画
 ## 战斗单位动画调参（MVP-B 阶段 3）
 ##
 ## 设计原文：

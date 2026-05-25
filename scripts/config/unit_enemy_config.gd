@@ -1,5 +1,6 @@
 class_name UnitEnemyConfig
 extends Resource
+## @tunable: 视觉动画
 ## 单位渲染 + 敌方关卡视觉调参（MVP-B.2 阶段 2）
 ##
 ## 设计原文：

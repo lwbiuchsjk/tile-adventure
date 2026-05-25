@@ -1,5 +1,6 @@
 class_name RunParamResource
 extends Resource
+## @tunable: 整局节奏
 
 ## 整局参数 Resource（MVP-D D.2 批 2：run_config.csv 迁出，3 字段）
 ##

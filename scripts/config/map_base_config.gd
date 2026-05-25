@@ -1,5 +1,6 @@
 class_name MapBaseConfig
 extends Resource
+## @tunable: 视觉动画
 ## 地图基础视觉与节奏调参（MVP-B.2 阶段 1）
 ##
 ## 设计原文：

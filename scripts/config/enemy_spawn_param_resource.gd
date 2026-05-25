@@ -1,5 +1,6 @@
 class_name EnemySpawnParamResource
 extends Resource
+## @tunable: 玩家与敌方
 
 ## 敌方生成参数 Resource（MVP-D D.2 批 2：enemy_spawn_config.csv 迁出，2 字段）
 ##

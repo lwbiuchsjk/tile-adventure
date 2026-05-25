@@ -1,5 +1,6 @@
 class_name SupplyParamResource
 extends Resource
+## @tunable: 部队经济
 
 ## 补给参数 Resource（MVP-D D.2 批 3：supply_config.csv 迁出，2 字段）
 ## 消费方：WorldMap 内部 _supply / _camp_restore（补给初值 + 扎营恢复量）

@@ -1,5 +1,6 @@
 class_name BattleParamResource
 extends Resource
+## @tunable: 战斗数值
 
 ## 战斗数值参数 Resource（MVP-D D.2 批 1：battle_config.csv 迁出）
 ##

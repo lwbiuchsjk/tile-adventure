@@ -1,5 +1,6 @@
 class_name ScoreParamResource
 extends Resource
+## @tunable: 整局节奏
 
 ## 分数参数 Resource（MVP-D D.2 批 2：score_config.csv 迁出，3 字段）
 ##

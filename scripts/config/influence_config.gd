@@ -1,5 +1,6 @@
 class_name InfluenceConfig
 extends Resource
+## @tunable: 视觉动画
 ## 势力 + 影响圈 + 持久 slot 三层结构调参（MVP-B.2 阶段 4）
 ##
 ## 设计原文：

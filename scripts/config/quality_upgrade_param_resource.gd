@@ -1,5 +1,6 @@
 class_name QualityUpgradeParamResource
 extends Resource
+## @tunable: 部队经济
 
 ## 品质升级参数 Resource（MVP-D D.2 批 3：quality_upgrade_config.csv 迁出，2 字段）
 ## 消费方：WorldMap → TroopData.load_upgrade_config(cfg: QualityUpgradeParamResource)

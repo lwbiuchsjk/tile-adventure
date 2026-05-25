@@ -1,5 +1,6 @@
 class_name BattleVisualConfig
 extends Resource
+## @tunable: 视觉动画
 ## 战斗视觉调参（MVP-B 阶段 4）
 ##
 ## 设计原文：

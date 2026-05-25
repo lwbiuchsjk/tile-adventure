@@ -1,5 +1,6 @@
 class_name PlayerParamResource
 extends Resource
+## @tunable: 玩家与敌方
 
 ## 玩家参数 Resource（MVP-D D.2 批 2：player_config.csv 迁出）
 ##

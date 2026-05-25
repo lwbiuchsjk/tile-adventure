@@ -1,5 +1,6 @@
 class_name NightVisionConfig
 extends Resource
+## @tunable: 视觉动画
 ## 夜晚视野子系统调参（MVP-B 阶段 1）
 ##
 ## 设计原文：

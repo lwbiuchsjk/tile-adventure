@@ -1,5 +1,6 @@
 class_name InventoryParamResource
 extends Resource
+## @tunable: 部队经济
 
 ## 背包参数 Resource（MVP-D D.2 批 3：inventory_config.csv 迁出，1 字段）
 ## 消费方：WorldMap → Inventory.init_from_config(cfg: InventoryParamResource)

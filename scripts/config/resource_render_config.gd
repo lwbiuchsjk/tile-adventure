@@ -1,5 +1,6 @@
 class_name ResourceRenderConfig
 extends Resource
+## @tunable: 视觉动画
 ## 一次性资源点视觉调参（MVP-B.2 阶段 3）
 ##
 ## 设计原文：
