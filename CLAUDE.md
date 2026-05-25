@@ -279,6 +279,42 @@ for t in test_m1_data_layer test_m2_map_gen test_m3_turn_framework test_m4_occup
 done
 ```
 
+## 调参面板字段维护
+
+MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：功能开发与「纳入调参面板」两步剥离——功能开发者**不感知**调参面板；纳入面板是**独立、可选、可撤销**的步骤。
+
+### 新增功能涉及调参的流程
+
+**步骤 1：功能开发（与调参无关）**
+
+1. 普通 `extends Resource` 定义 schema + `@export` 字段（`@export_range` 给范围 → 面板自动推断 Slider）
+2. 使用方 `const CFG = preload("...tres")` 引用（项目统一风格，重启生效）
+3. 完成 —— 不碰面板
+
+**步骤 2：纳入面板（独立步骤，可推迟）**
+
+1. 编辑 `assets/config/param_panel/_panel_registry.tres`，加 1 个 `ParamPanelRegistryEntry`
+2. 决定 `group`（面板分类 category）/ `skip_fields`（不展示的字段）/ `realtime`（默认 false 重启生效；true 需把对应 const preload 改 var preload）/ `redraw_targets`（特殊刷新节点）
+3. 下次启动面板（F1）即见新条目
+
+### 两条通道与去重
+
+- **Push 通道**：`assets/config/param_panel/*.tres`（25 个 `ParamPanelScene`，场景任务型，跨 Resource 聚合字段，手填中文名）
+- **Pull 通道**：`_panel_registry.tres` 按 Resource 整份自省（每 Resource 一场景，文件名作显示名，按 `group` 分 category）
+- **去重**：同一 Resource path 在 Push 已收录则 Pull 跳过（Push 优先）；去重收集走 `_get_snapshot_fields`（含 Combo 联动字段）
+
+### const cache bug 已知限制（D5 拍板）
+
+`const X = preload(.tres)` 后 `X.field` 对值类型字段（Color/float/int）走编译期 inline，反射 set 改值后直读拿旧值 → 默认 `realtime: false` 接受此限制（F2 写盘 + 重启生效，面板标「⚠ 重启生效」）。需实时调参的 Resource 标 `realtime: true` + 把对应 const preload 改 var preload。详见 [[参数Resource化/MVP-D_CSV数值与auto-include]] §const cache bug 已知限制。
+
+### 设计文档衔接
+
+新 MVP 设计文档**不需要**「调参面板字段映射」段——功能本身（schema + 业务逻辑）与面板纳入剥离，纳入由面板维护者另行编辑 registry。
+
+### 校验脚本
+
+`tools/check_param_panel_coverage.py`：扫 `_panel_registry.tres`，检查每条 `tres_path` 存在 + `group` 非空 + `realtime: true` 条目对应使用方用 `var` preload。失败 warning 不阻断（未挂 pre-commit，按需手动跑）。
+
 # 当前进度
 
 > 进度详情维护在 `tile-advanture-design/进度/` 子目录；本节仅保留索引行（每条 ≤20 字状态摘要）。
@@ -286,13 +322,15 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 进行中（v0.2 变体 A 中心 registry + 剥离原则）；D.1（registry + 拆 ParamPresetManager）+ D.2（12 KV CSV→12 Resource×37 字段，全链类型化，2026-05-25 三批 f181041/f81cd47/b48510e）+ D.3（registry 注册 20 份：12 新进面板 + 8 现有去重，4 category 分类）已落地，待 D.4（codex 审查 + 字段维护工作流 + 路线图 P2 归档）启动
+- （暂无）
+
 ## 预启动（方向已认可，等启动时机）
 
 - （暂无）
 
 ## 已归档
 
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B/B.2/C/D 全部完成（2026-05-25 D 收口）；方案 D 两步走 + 第 3 步：8 视觉/动画 Resource（113 字段）+ 12 数值 Resource（37 字段）全 Resource 化 + imgui 运行时面板（F1/F2/preset）+ registry 自省机制（Push 25 场景 + Pull 20 条目，全链类型化）；codex 全程 P0/P1 清零；字段维护工作流（剥离原则）落 CLAUDE.md
 - [核心目标传达_推进进度](tile-advanture-design/进度/核心目标传达_推进进度.md) — 入口 5 L1.5；移除兜底清场胜利（占核心为唯一目标）/ 敌方核心粗金边+外发光 / 大地图边缘带（窄实体、框在 HUD 之上）+ 离屏核心方向黄色光晕（clip_children 裁带内、可复用为地图外指示区）；桌面三轮迭代定稿验收通过 + push（2026-05-22）；codex 两次卡死，主会话自审无 P0/P1
 - [战斗单位视觉与操作改进_推进进度](tile-advanture-design/进度/战斗单位视觉与操作改进_推进进度.md) — 入口 5 L1.4 后续；品质大小+描边环 / 地格四角呼吸角标（替换棋子白环）/ 结束回合守卫按钮+Enter / HP 条左侧行动状态标记（白未移动·红已移动·灰已结束）；代码 3f5f7da、桌面验收通过 + push（2026-05-22）；codex P0/P1 清零 + P2 已修
 - [敌方援军_推进进度](tile-advanture-design/进度/敌方援军_推进进度.md) — 入口 5 L1.4；敌方 owned slot 援军（独立强度 enemy_garrison_config + AI 控制 + 红条带常显 + 全单位品质角标）；代码 6f6c13c、桌面验收通过 + push（2026-05-22）；两层胜利口径边界已固化于设计 §四
