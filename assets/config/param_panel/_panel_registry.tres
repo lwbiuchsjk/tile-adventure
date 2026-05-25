@@ -1,16 +1,175 @@
-[gd_resource type="Resource" script_class="ParamPanelRegistry" load_steps=4 format=3 uid="uid://dpanelregistryroot"]
+[gd_resource type="Resource" script_class="ParamPanelRegistry" load_steps=23 format=3 uid="uid://dpanelregistryroot"]
+
+; MVP-D D.3：registry 注册 20 份 Resource（12 新数值 + 8 现有视觉）
+; group 归类（4 组新数值 + 1 组现有视觉，中粒度方案）：
+;   战斗数值 / 整局节奏 / 玩家与敌方 / 部队经济 / 视觉动画（现有）
+; 8 个现有视觉 Resource 已被 25 ParamPanelScene（Push 通道）覆盖 → Pull 通道去重跳过；
+;   注册它们用于验证去重逻辑 + 为 MVP-E 全切 registry 预留
+; realtime 全 false（D5 拍板：const cache bug 作已知限制，调完 F2 写盘 + 重启生效）
 
 [ext_resource type="Script" uid="uid://k26amlw3li6h" path="res://scripts/config/param_panel_registry.gd" id="1_registry"]
 [ext_resource type="Script" uid="uid://bohoijet2nq20" path="res://scripts/config/param_panel_registry_entry.gd" id="2_entry"]
 
-[sub_resource type="Resource" id="entry_smoke"]
+[sub_resource type="Resource" id="entry_battle"]
 script = ExtResource("2_entry")
-tres_path = "res://test/v3_registry_smoke/smoke_test.tres"
-group = &"smoke 测试"
+tres_path = "res://assets/config/battle_param_resource.tres"
+group = &"战斗数值"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_difficulty"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/difficulty_param_resource.tres"
+group = &"战斗数值"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_run"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/run_param_resource.tres"
+group = &"整局节奏"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_score"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/score_param_resource.tres"
+group = &"整局节奏"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_player"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/player_param_resource.tres"
+group = &"玩家与敌方"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_enemy_spawn"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/enemy_spawn_param_resource.tres"
+group = &"玩家与敌方"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_quality_upgrade"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/quality_upgrade_param_resource.tres"
+group = &"部队经济"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_build"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/build_param_resource.tres"
+group = &"部队经济"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_level_reward"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/level_reward_param_resource.tres"
+group = &"部队经济"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_turn_reward"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/turn_reward_param_resource.tres"
+group = &"部队经济"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_supply"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/supply_param_resource.tres"
+group = &"部队经济"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_inventory"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/inventory_param_resource.tres"
+group = &"部队经济"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_battle_anim"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/battle_anim_config.tres"
+group = &"视觉动画（现有）"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_battle_visual"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/battle_visual_config.tres"
+group = &"视觉动画（现有）"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_influence"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/influence_config.tres"
+group = &"视觉动画（现有）"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_map_base"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/map_base_config.tres"
+group = &"视觉动画（现有）"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_night_vision"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/night_vision_config.tres"
+group = &"视觉动画（现有）"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_overlay_transition"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/overlay_transition_config.tres"
+group = &"视觉动画（现有）"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_resource_render"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/resource_render_config.tres"
+group = &"视觉动画（现有）"
+skip_fields = PackedStringArray()
+realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_unit_enemy"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/unit_enemy_config.tres"
+group = &"视觉动画（现有）"
 skip_fields = PackedStringArray()
 realtime = false
 redraw_targets = []
 
 [resource]
 script = ExtResource("1_registry")
-entries = Array[Resource]([SubResource("entry_smoke")])
+entries = Array[Resource]([SubResource("entry_battle"), SubResource("entry_difficulty"), SubResource("entry_run"), SubResource("entry_score"), SubResource("entry_player"), SubResource("entry_enemy_spawn"), SubResource("entry_quality_upgrade"), SubResource("entry_build"), SubResource("entry_level_reward"), SubResource("entry_turn_reward"), SubResource("entry_supply"), SubResource("entry_inventory"), SubResource("entry_battle_anim"), SubResource("entry_battle_visual"), SubResource("entry_influence"), SubResource("entry_map_base"), SubResource("entry_night_vision"), SubResource("entry_overlay_transition"), SubResource("entry_resource_render"), SubResource("entry_unit_enemy")])
