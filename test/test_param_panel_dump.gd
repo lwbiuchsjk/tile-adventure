@@ -22,12 +22,18 @@ func _init() -> void:
 		"tier_dot_size_ratio", "tier_slot_margins",
 		"enemy_move_color", "enemy_glow_color",
 	]) and ok
-	ok = _test_dump(panel, "res://assets/config/influence_config.tres", 12, [
+	ok = _test_dump(panel, "res://assets/config/influence_config.tres", 19, [
 		"faction_colors", "influence_alpha_outer", "influence_alpha_mid", "influence_alpha_inner",
 		"influence_border_alpha", "influence_border_width",
 		"core_town_border", "core_town_emblem_size",
+		# 核心目标传达线（eccae0c）新增敌方核心金边 + 外发光
+		"enemy_core_border_color", "enemy_core_border_width",
+		"enemy_core_glow_color", "enemy_core_glow_radius",
 		"persistent_ring_width", "persistent_separator_color",
 		"persistent_separator_width", "persistent_inner_bg",
+		# 入口5 L1.2 援军线（03ac4f5）新增持久 slot 援军条带
+		"reinforcement_band_height", "reinforcement_band_text_color",
+		"reinforcement_band_font_size",
 	]) and ok
 	ok = _test_dump(panel, "res://assets/config/night_vision_config.tres", 10, [
 		"vision_radius_grids", "fog_falloff_grids", "fade_duration",

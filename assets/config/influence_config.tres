@@ -3,6 +3,7 @@
 ; MVP-B.2 阶段 4：势力 + 影响圈 + 持久 slot 三层结构调参 Resource 实例
 ; schema 在 res://scripts/config/influence_config.gd
 ; 字段从 WorldMap.gd 顶部 12 个 M4_* const 迁出；编辑器内双击本文件在 inspector 调参
+; 后续扩展至 19 字段：enemy_core_*（核心目标传达 eccae0c）+ reinforcement_band_*（入口5 L1.2 援军 03ac4f5）
 
 [ext_resource type="Script" path="res://scripts/config/influence_config.gd" id="1_inf"]
 
@@ -20,7 +21,14 @@ influence_border_alpha = 1.0
 influence_border_width = 3.0
 core_town_border = Color(1, 0.85, 0, 1)
 core_town_emblem_size = 8
+enemy_core_border_color = Color(1, 0.84, 0, 1)
+enemy_core_border_width = 4.0
+enemy_core_glow_color = Color(1, 0.84, 0, 0.3)
+enemy_core_glow_radius = 10.0
 persistent_ring_width = 4
 persistent_separator_color = Color(1, 1, 1, 1)
 persistent_separator_width = 1
 persistent_inner_bg = Color(0.9, 0.88, 0.83, 1)
+reinforcement_band_height = 16
+reinforcement_band_text_color = Color(1, 1, 1, 1)
+reinforcement_band_font_size = 12

@@ -286,7 +286,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 启动（2026-05-19 + 当日 v0.2 方向修正）；7 决策点 v0.2 定稿（变体 A 中心 registry + 剥离原则 + cache bug 作已知限制 + realtime 按需）+ V1/V2 验证保留作技术储备 + 设计文档 v0.2 落盘，待新 D.1（registry 机制 + 拆 ParamPresetManager）启动
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 进行中（v0.2 变体 A 中心 registry + 剥离原则）；D.1 已落地（registry 机制 + 拆 ParamPresetManager，2026-05-19 三子提交 bb63afa/393c6b8/580d336，2026-05-25 核实补记 + 顺带修 dump 红测：influence_config 12→19 字段同步），待 D.2（12 KV CSV 迁 Resource）启动
 ## 预启动（方向已认可，等启动时机）
 
 - （暂无）
