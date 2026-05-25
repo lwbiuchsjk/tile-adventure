@@ -505,7 +505,7 @@ func _make_world_mock(core_pos: Vector2i, core_range: int) -> Node:
 	var gen: EnemyTroopGenerator = EnemyTroopGenerator.new()
 	gen.init_from_config(
 		ConfigLoader.load_csv("res://assets/config/enemy_troop_pool.csv"),
-		ConfigLoader.load_csv_kv("res://assets/config/enemy_spawn_config.csv")
+		load("res://assets/config/enemy_spawn_param_resource.tres") as EnemySpawnParamResource
 	)
 	world._enemy_generator = gen
 	return world

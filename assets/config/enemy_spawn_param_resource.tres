@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="EnemySpawnParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 2：敌方生成参数 Resource 实例（迁自 enemy_spawn_config.csv）
+; schema 在 res://scripts/config/enemy_spawn_param_resource.gd
+
+[ext_resource type="Script" path="res://scripts/config/enemy_spawn_param_resource.gd" id="1_spawn"]
+
+[resource]
+script = ExtResource("1_spawn")
+troop_count_min = 1
+troop_count_max = 3

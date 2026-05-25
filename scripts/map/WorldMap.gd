@@ -30,8 +30,6 @@ const CONFIG_PCG: String = "res://assets/config/pcg_config.csv"
 const CONFIG_UNIT: String = "res://assets/config/unit_config.csv"
 const CONFIG_COUNTER: String = "res://assets/config/counter_matrix.csv"
 const CONFIG_ENEMY_POOL: String = "res://assets/config/enemy_troop_pool.csv"
-const CONFIG_ENEMY_SPAWN: String = "res://assets/config/enemy_spawn_config.csv"
-const CONFIG_PLAYER: String = "res://assets/config/player_config.csv"
 const CONFIG_ITEM: String = "res://assets/config/item_config.csv"
 const CONFIG_INVENTORY: String = "res://assets/config/inventory_config.csv"
 const CONFIG_QUALITY_UPGRADE: String = "res://assets/config/quality_upgrade_config.csv"
@@ -44,13 +42,11 @@ const CONFIG_HP_RATIO: String = "res://assets/config/hp_ratio_config.csv"
 const CONFIG_SUPPLY: String = "res://assets/config/supply_config.csv"
 const CONFIG_ENEMY_TIER: String = "res://assets/config/enemy_tier_config.csv"
 const CONFIG_ENEMY_TIER_RATIO: String = "res://assets/config/enemy_tier_ratio_config.csv"
-const CONFIG_SCORE: String = "res://assets/config/score_config.csv"
 const CONFIG_RESOURCE_SLOT: String = "res://assets/config/resource_slot_config.csv"
 const CONFIG_BUILD: String = "res://assets/config/build_config.csv"
 const CONFIG_TOWN_TROOP_POOL: String = "res://assets/config/town_troop_pool.csv"
 ## B 重生周期 MVP：英雄池 + 整局周期参数
 const CONFIG_HERO_POOL: String = "res://assets/config/hero_pool.csv"
-const CONFIG_RUN: String = "res://assets/config/run_config.csv"
 ## 入口 2 MVP 2.3(2026-05-11):事件叙事文本随机池
 const CONFIG_NARRATIVE_POOL: String = "res://assets/config/event_narrative_pool.csv"
 ## E 战斗就地展开 MVP：兵种战斗参数（移动 / 攻击范围）
@@ -259,7 +255,7 @@ var _pending_camp_manage_open: bool = false
 var _camp_count: int = 0
 var _total_hp_lost: int = 0
 ## _total_max_hp 字段定义迁到 PlayerLifecycle（MVP-δ 阶段 2）
-var _score_config: Dictionary = {}
+## _score_config（MVP-D D.2 批 2）迁出为 const SCORE_PARAM_CFG preload
 
 ## 资源点字典 {Vector2i: ResourceSlot}
 var _resource_slots: Dictionary = {}
@@ -443,6 +439,12 @@ const INFLUENCE_CFG: InfluenceConfig = preload("res://assets/config/influence_co
 ## 战斗数值参数（MVP-D D.2 批 1：迁自 battle_config.csv，17 字段 = 伤害公式 6 + 轮次范围 4 + 敌方移动 3 + 补给 2 + 援军 2）
 ## 全链类型化共享：WorldMap → BattleSession → BattleMath → BattleResolver
 const BATTLE_PARAM_CFG: BattleParamResource = preload("res://assets/config/battle_param_resource.tres")
+
+## 整局 / 玩家 / 敌方生成 / 分数 数值参数（MVP-D D.2 批 2：迁自 run/player/enemy_spawn/score_config.csv）
+const RUN_PARAM_CFG: RunParamResource = preload("res://assets/config/run_param_resource.tres")
+const PLAYER_PARAM_CFG: PlayerParamResource = preload("res://assets/config/player_param_resource.tres")
+const ENEMY_SPAWN_PARAM_CFG: EnemySpawnParamResource = preload("res://assets/config/enemy_spawn_param_resource.tres")
+const SCORE_PARAM_CFG: ScoreParamResource = preload("res://assets/config/score_param_resource.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
@@ -455,8 +457,6 @@ func _ready() -> void:
 	var unit_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_UNIT)
 	var counter_rows: Array = ConfigLoader.load_csv(CONFIG_COUNTER)
 	var enemy_pool_rows: Array = ConfigLoader.load_csv(CONFIG_ENEMY_POOL)
-	var enemy_spawn_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_ENEMY_SPAWN)
-	var player_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_PLAYER)
 	var item_rows: Array = ConfigLoader.load_csv(CONFIG_ITEM)
 	var inventory_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_INVENTORY)
 	var quality_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_QUALITY_UPGRADE)
@@ -498,19 +498,15 @@ func _ready() -> void:
 	# RunState.ensure_initialized 幂等：首次进入写入；重生场景 reload 时
 	# _initialized=true，沿用上一周期累积的 _cycle_index / _used_hero_ids 等
 	var hero_pool_rows: Array = ConfigLoader.load_csv(CONFIG_HERO_POOL)
-	var run_cfg: Dictionary = ConfigLoader.load_csv_kv(CONFIG_RUN)
 	# 入口 2 MVP 2.3(2026-05-11):加载事件叙事池(NarrativeProvider 静态工具类内部 _initialized 防重复加载)
 	var narrative_rows: Array = ConfigLoader.load_csv(CONFIG_NARRATIVE_POOL)
 	NarrativeProvider.ensure_loaded(narrative_rows)
-	var max_cycles_v: int = int(run_cfg.get("max_cycles", "3"))
+	var max_cycles_v: int = RUN_PARAM_CFG.max_cycles
 	# MVP-δ 阶段 2：coma_duration_sec / coma_hp_threshold_ratio 从 run_cfg 注入移到
 	# PlayerLifecycle.setup 内（_player_lifecycle 在 _init_player 调用点创建）
 	# rng 传 null：RunState 内部 randomize 一个独立 RNG，不被地图 PCG seed 干扰
 	# （重生抽队长应与地图 PCG 解耦，否则同 seed 重开会抽到同一队长序列）
 	RunState.ensure_initialized(max_cycles_v, hero_pool_rows, null)
-
-	# 加载评分配置
-	_score_config = ConfigLoader.load_csv_kv(CONFIG_SCORE)
 
 	# 加载资源点配置
 	_resource_slot_config_rows = ConfigLoader.load_csv(CONFIG_RESOURCE_SLOT)
@@ -597,7 +593,7 @@ func _ready() -> void:
 
 	# 初始化敌方部队生成器
 	_enemy_generator = EnemyTroopGenerator.new()
-	_enemy_generator.init_from_config(enemy_pool_rows, enemy_spawn_cfg)
+	_enemy_generator.init_from_config(enemy_pool_rows, ENEMY_SPAWN_PARAM_CFG)
 	_enemy_generator.load_tier_config(enemy_tier_rows)
 
 	# M6: 产出结算——城镇部队道具池走独立 CSV（不污染敌方生成权重）
@@ -666,7 +662,7 @@ func _ready() -> void:
 	_player_lifecycle.defeat_triggered.connect(_on_player_defeat_triggered)
 	_player_lifecycle.respawn_intro_ready.connect(_on_player_respawn_intro_ready)
 	_player_lifecycle.cycle_victory_intro_ready.connect(_on_player_cycle_victory_intro_ready)
-	_player_lifecycle.setup(player_cfg, run_cfg)
+	_player_lifecycle.setup(PLAYER_PARAM_CFG, RUN_PARAM_CFG)
 
 	# 视觉位置初始化到起点像素中心
 	_unit_visual_pos = _grid_to_pixel_center(_start_pos)
@@ -1283,7 +1279,7 @@ func _get_all_troops_display() -> String:
 ## 获取评分摘要文本
 func _get_score_text() -> String:
 	var result: Dictionary = ScoreCalculator.calculate(
-		_camp_count, _total_hp_lost, _player_lifecycle.total_max_hp(), _score_config
+		_camp_count, _total_hp_lost, _player_lifecycle.total_max_hp(), SCORE_PARAM_CFG
 	)
 	return "评分 %d（扎营%d次 效率%.0f%% | 损兵%d 存活%.0f%%）" % [
 		int(result["score"]),

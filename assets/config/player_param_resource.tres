@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="PlayerParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 2：玩家参数 Resource 实例（迁自 player_config.csv）
+; schema 在 res://scripts/config/player_param_resource.gd
+; 注：原 CSV 的 initial_character_count 为死字段，迁移时已清理
+
+[ext_resource type="Script" path="res://scripts/config/player_param_resource.gd" id="1_player"]
+
+[resource]
+script = ExtResource("1_player")
+initial_troop_quality = 0

@@ -83,12 +83,12 @@ var _coma_duration_sec: float = 1.5
 ##   3. consume RunState._pending_respawn_intro：命中则 emit respawn_intro_ready signal
 ##
 ## 参数 player_cfg 保留作未来 hero_pool 缺省时的兜底字段来源；本期仅读 initial_troop_quality
-func setup(player_cfg: Dictionary, run_cfg: Dictionary) -> void:
-	_coma_duration_sec = float(run_cfg.get("coma_duration_sec", "1.5"))
-	_coma_hp_threshold_ratio = float(run_cfg.get("coma_hp_threshold_ratio", "0.2"))
+func setup(player_cfg: PlayerParamResource, run_cfg: RunParamResource) -> void:
+	_coma_duration_sec = run_cfg.coma_duration_sec
+	_coma_hp_threshold_ratio = run_cfg.coma_hp_threshold_ratio
 
 	# 默认品质：hero_pool 行未填或解析失败时回退
-	var default_quality: int = int(player_cfg.get("initial_troop_quality", "0"))
+	var default_quality: int = player_cfg.initial_troop_quality
 
 	_characters = []
 	_total_max_hp = 0

@@ -25,8 +25,8 @@ var _tier_configs: Dictionary = {}
 
 ## 从配置初始化随机池
 ## pool_rows: enemy_troop_pool.csv 的行数据
-## spawn_cfg: enemy_spawn_config.csv 的 key-value 字典
-func init_from_config(pool_rows: Array, spawn_cfg: Dictionary) -> void:
+## spawn_cfg: EnemySpawnParamResource（MVP-D D.2 批 2：迁自 enemy_spawn_config.csv）
+func init_from_config(pool_rows: Array, spawn_cfg: EnemySpawnParamResource) -> void:
 	_pool = []
 	_total_weight = 0
 	for entry in pool_rows:
@@ -38,8 +38,8 @@ func init_from_config(pool_rows: Array, spawn_cfg: Dictionary) -> void:
 		_pool.append(e)
 		_total_weight += e.weight
 
-	_count_min = int(spawn_cfg.get("troop_count_min", "1"))
-	_count_max = int(spawn_cfg.get("troop_count_max", "3"))
+	_count_min = spawn_cfg.troop_count_min
+	_count_max = spawn_cfg.troop_count_max
 
 ## 从 enemy_tier_config.csv 加载强度档位配置
 func load_tier_config(rows: Array) -> void:

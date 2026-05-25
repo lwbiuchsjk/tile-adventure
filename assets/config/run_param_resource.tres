@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="RunParamResource" load_steps=2 format=3]
+
+; MVP-D D.2 批 2：整局参数 Resource 实例（迁自 run_config.csv）
+; schema 在 res://scripts/config/run_param_resource.gd
+
+[ext_resource type="Script" path="res://scripts/config/run_param_resource.gd" id="1_run"]
+
+[resource]
+script = ExtResource("1_run")
+max_cycles = 3
+coma_duration_sec = 1.5
+coma_hp_threshold_ratio = 0.5

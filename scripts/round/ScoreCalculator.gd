@@ -9,12 +9,12 @@ extends RefCounted
 ## camp_count: 扎营次数
 ## total_hp_lost: 累计损失兵力（不可逆，恢复不扣回）
 ## total_max_hp: 所有角色部队的 max_hp 总和
-## config: 评分配置字典（从 score_config.csv 加载）
+## config: ScoreParamResource（MVP-D D.2 批 2：迁自 score_config.csv）
 ## 返回 {score: int, efficiency: float, survival: float}
-static func calculate(camp_count: int, total_hp_lost: int, total_max_hp: int, config: Dictionary) -> Dictionary:
-	var base: float = float(config.get("base_score", "1000"))
-	var k1: float = float(config.get("efficiency_k", "10"))
-	var k2: float = float(config.get("survival_k", "1.0"))
+static func calculate(camp_count: int, total_hp_lost: int, total_max_hp: int, config: ScoreParamResource) -> Dictionary:
+	var base: float = config.base_score
+	var k1: float = config.efficiency_k
+	var k2: float = config.survival_k
 
 	# 效率系数：反比衰减，扎营次数等于 K₁ 时为 0.5
 	var efficiency: float = k1 / (k1 + float(camp_count))
