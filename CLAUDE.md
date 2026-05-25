@@ -286,7 +286,7 @@ done
 
 ## 活跃（≤10 条硬上限）
 
-- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 进行中（v0.2 变体 A 中心 registry + 剥离原则）；D.1（registry + 拆 ParamPresetManager）+ D.2（12 KV CSV→12 Resource×37 字段，全链类型化，2026-05-25 三批 f181041/f81cd47/b48510e）已落地，待 D.3（registry 注册 20 份 Resource）启动
+- [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-D 进行中（v0.2 变体 A 中心 registry + 剥离原则）；D.1（registry + 拆 ParamPresetManager）+ D.2（12 KV CSV→12 Resource×37 字段，全链类型化，2026-05-25 三批 f181041/f81cd47/b48510e）+ D.3（registry 注册 20 份：12 新进面板 + 8 现有去重，4 category 分类）已落地，待 D.4（codex 审查 + 字段维护工作流 + 路线图 P2 归档）启动
 ## 预启动（方向已认可，等启动时机）
 
 - （暂无）
