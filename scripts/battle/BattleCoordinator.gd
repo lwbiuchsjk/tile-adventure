@@ -101,3 +101,92 @@ func _get_battle_unit_at_pos(pos: Vector2i) -> BattleUnit:
 		if u != null and u.is_active and u.is_alive() and u.battle_position == pos:
 			return u
 	return null
+
+
+# ─────────────────────────────────────
+# 阶段 b：战斗 Camera / zoom
+# ─────────────────────────────────────
+
+## 入口 4 MVP：战斗 Camera zoom + 战场居中（进入战斗触发）
+##
+## zoom 公式（设计文档 §流程）：
+##   need_grids = 战场尺寸(2*range+1) + 上下各 1 格余量
+##   zoom = min(viewport_width / (need_grids*TILE_SIZE),
+##              (viewport_height - HUD_RESERVE) / (need_grids*TILE_SIZE))
+##   Godot 4 Camera2D.zoom 语义：< 1 = 视野扩大；这里目标 zoom 必然 ≤ 1
+## Tween 0.3s 平滑过渡 zoom + position；战斗中 Camera 锁定，不再被 _sync_camera_to_unit_visual 同步
+func start_battle_camera(battle_center: Vector2i) -> void:
+	if _world_map._camera == null:
+		return
+	var zoom_target: float = _compute_battle_zoom_target()
+	var center_pixel: Vector2 = _world_map._grid_to_pixel_center(battle_center)
+	if _world_map._battle_zoom_tween != null and _world_map._battle_zoom_tween.is_valid():
+		_world_map._battle_zoom_tween.kill()
+	_world_map._battle_zoom_active = true
+	_world_map._battle_center_grid = battle_center  # 入口 4 MVP（追加）：缓存战场中心供 _draw_battle_dim_overlay 使用
+	_world_map._battle_zoom_tween = _world_map.create_tween().set_parallel(true)
+	_world_map._battle_zoom_tween.tween_property(_world_map._camera, "zoom", Vector2(zoom_target, zoom_target), _world_map.VISUAL_CFG.zoom_tween_duration) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_world_map._battle_zoom_tween.tween_property(_world_map._camera, "position", center_pixel, _world_map.VISUAL_CFG.zoom_tween_duration) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 入口 4 MVP（2026-05-09 补）：战斗倾斜 5° —— 营造不平衡 / 紧张感
+	_world_map._battle_zoom_tween.tween_property(_world_map._camera, "rotation", _world_map.VISUAL_CFG.tilt_rad, _world_map.VISUAL_CFG.zoom_tween_duration) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	# MVP-δ 阶段 2：战斗强制白天 fade —— NightVisionLayer 自管理 pending_post_battle_phase
+	# + force_day flag + Tween + 浮层清空，WorldMap 一行调用即可
+	if _world_map._night_vision != null:
+		_world_map._night_vision.set_battle_force_day_on()
+
+	# 核心目标传达 L1.5：战斗中相机 zoom 到战场，核心指引无意义且干扰 → 隐藏整层
+	if _world_map._core_objective_overlay != null:
+		_world_map._core_objective_overlay.set_battle_active(true)
+
+
+## 入口 4 MVP：战斗结束 Camera zoom 回归 + 镜头回到队长（_on_battle_session_ended 开头调用）
+##
+## 配对调用：每次 start_battle_camera 必有一次 end_battle_camera
+## 注意：本函数应在 _sync_world_unit_from_battle_leader（如调用）之前/之后皆可——
+##   如之后则 _unit.position 已是战斗结束最终位置；如之前则可能仍是开战时位置。
+##   当前选择：在 _on_battle_session_ended 顶部调用，与 _battle_hud.hide_hud 同时机
+func end_battle_camera() -> void:
+	# MVP-δ 阶段 2：force-day 解除前置（codex P1-4 历史修复语义保留）—— NightVisionLayer 自管理
+	# 无论后续 _battle_zoom_active=false / _camera==null 异常路径，本调用总会跑完
+	if _world_map._night_vision != null:
+		_world_map._night_vision.resync_to_post_battle_state()
+	# 核心目标传达 L1.5：战斗结束 → 恢复暗角 + 核心指引
+	if _world_map._core_objective_overlay != null:
+		_world_map._core_objective_overlay.set_battle_active(false)
+	if not _world_map._battle_zoom_active:
+		return
+	_world_map._battle_zoom_active = false
+	if _world_map._battle_zoom_tween != null and _world_map._battle_zoom_tween.is_valid():
+		_world_map._battle_zoom_tween.kill()
+	if _world_map._camera == null:
+		return
+	var leader_pos: Vector2 = _world_map._camera.position
+	if _world_map._unit != null:
+		leader_pos = _world_map._grid_to_pixel_center(_world_map._unit.position)
+	_world_map._battle_zoom_tween = _world_map.create_tween().set_parallel(true)
+	_world_map._battle_zoom_tween.tween_property(_world_map._camera, "zoom", Vector2.ONE, _world_map.VISUAL_CFG.zoom_tween_duration) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_world_map._battle_zoom_tween.tween_property(_world_map._camera, "position", leader_pos, _world_map.VISUAL_CFG.zoom_tween_duration) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 入口 4 MVP（2026-05-09 补）：倾斜归位
+	_world_map._battle_zoom_tween.tween_property(_world_map._camera, "rotation", 0.0, _world_map.VISUAL_CFG.zoom_tween_duration) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+## 入口 4 MVP：战斗 zoom 目标值计算（设计文档公式）
+## 取 viewport 实际尺寸（不依赖基线 1280×720，stretch 等比缩放在更上层处理）
+## HUD 占位用 VISUAL_CFG.zoom_hud_reserve_px 估值；跑测后改 battle_visual_config.tres
+func _compute_battle_zoom_target() -> float:
+	var battle_size: int = _world_map._battle_arena_range * 2 + 1
+	var need_grids: int = battle_size + _world_map.VISUAL_CFG.zoom_margin_grid * 2
+	var need_world_px: float = float(need_grids * _world_map.TILE_SIZE)
+	var vp: Vector2 = _world_map.get_viewport().get_visible_rect().size
+	var usable_h: float = maxf(vp.y - float(_world_map.VISUAL_CFG.zoom_hud_reserve_px), 1.0)
+	var zoom_x: float = vp.x / need_world_px
+	var zoom_y: float = usable_h / need_world_px
+	# zoom 取较小者（保证两轴都能装下）；上限钳到 1.0 避免在大窗口下反向放大
+	return minf(minf(zoom_x, zoom_y), 1.0)

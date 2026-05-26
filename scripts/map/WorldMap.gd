@@ -639,74 +639,9 @@ func _setup_camera_limits() -> void:
 	_camera.limit_bottom = _schema.height * TILE_SIZE + EXPLORE_HUD_BOTTOM_RESERVE_PX
 
 
-## 入口 4 MVP：战斗 Camera zoom + 战场居中（进入战斗触发）
-##
-## zoom 公式（设计文档 §流程）：
-##   need_grids = 战场尺寸(2*range+1) + 上下各 1 格余量
-##   zoom = min(viewport_width / (need_grids*TILE_SIZE),
-##              (viewport_height - HUD_RESERVE) / (need_grids*TILE_SIZE))
-##   Godot 4 Camera2D.zoom 语义：< 1 = 视野扩大；这里目标 zoom 必然 ≤ 1
-## Tween 0.3s 平滑过渡 zoom + position；战斗中 Camera 锁定，不再被 _sync_camera_to_unit_visual 同步
-func _start_battle_camera(battle_center: Vector2i) -> void:
-	if _camera == null:
-		return
-	var zoom_target: float = _compute_battle_zoom_target()
-	var center_pixel: Vector2 = _grid_to_pixel_center(battle_center)
-	if _battle_zoom_tween != null and _battle_zoom_tween.is_valid():
-		_battle_zoom_tween.kill()
-	_battle_zoom_active = true
-	_battle_center_grid = battle_center  # 入口 4 MVP（追加）：缓存战场中心供 _draw_battle_dim_overlay 使用
-	_battle_zoom_tween = create_tween().set_parallel(true)
-	_battle_zoom_tween.tween_property(_camera, "zoom", Vector2(zoom_target, zoom_target), VISUAL_CFG.zoom_tween_duration) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	_battle_zoom_tween.tween_property(_camera, "position", center_pixel, VISUAL_CFG.zoom_tween_duration) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	# 入口 4 MVP（2026-05-09 补）：战斗倾斜 5° —— 营造不平衡 / 紧张感
-	_battle_zoom_tween.tween_property(_camera, "rotation", VISUAL_CFG.tilt_rad, VISUAL_CFG.zoom_tween_duration) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-
-	# MVP-δ 阶段 2：战斗强制白天 fade —— NightVisionLayer 自管理 pending_post_battle_phase
-	# + force_day flag + Tween + 浮层清空，WorldMap 一行调用即可
-	if _night_vision != null:
-		_night_vision.set_battle_force_day_on()
-
-	# 核心目标传达 L1.5：战斗中相机 zoom 到战场，核心指引无意义且干扰 → 隐藏整层
-	if _core_objective_overlay != null:
-		_core_objective_overlay.set_battle_active(true)
-
-
-## 入口 4 MVP：战斗结束 Camera zoom 回归 + 镜头回到队长（_on_battle_session_ended 开头调用）
-##
-## 配对调用：每次 _start_battle_camera 必有一次 _end_battle_camera
-## 注意：本函数应在 _sync_world_unit_from_battle_leader（如调用）之前/之后皆可——
-##   如之后则 _unit.position 已是战斗结束最终位置；如之前则可能仍是开战时位置。
-##   当前选择：在 _on_battle_session_ended 顶部调用，与 _battle_hud.hide_hud 同时机
-func _end_battle_camera() -> void:
-	# MVP-δ 阶段 2：force-day 解除前置（codex P1-4 历史修复语义保留）—— NightVisionLayer 自管理
-	# 无论后续 _battle_zoom_active=false / _camera==null 异常路径，本调用总会跑完
-	if _night_vision != null:
-		_night_vision.resync_to_post_battle_state()
-	# 核心目标传达 L1.5：战斗结束 → 恢复暗角 + 核心指引
-	if _core_objective_overlay != null:
-		_core_objective_overlay.set_battle_active(false)
-	if not _battle_zoom_active:
-		return
-	_battle_zoom_active = false
-	if _battle_zoom_tween != null and _battle_zoom_tween.is_valid():
-		_battle_zoom_tween.kill()
-	if _camera == null:
-		return
-	var leader_pos: Vector2 = _camera.position
-	if _unit != null:
-		leader_pos = _grid_to_pixel_center(_unit.position)
-	_battle_zoom_tween = create_tween().set_parallel(true)
-	_battle_zoom_tween.tween_property(_camera, "zoom", Vector2.ONE, VISUAL_CFG.zoom_tween_duration) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	_battle_zoom_tween.tween_property(_camera, "position", leader_pos, VISUAL_CFG.zoom_tween_duration) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	# 入口 4 MVP（2026-05-09 补）：倾斜归位
-	_battle_zoom_tween.tween_property(_camera, "rotation", 0.0, VISUAL_CFG.zoom_tween_duration) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+## 战斗 Camera/zoom 三函数（start_battle_camera / end_battle_camera /
+## _compute_battle_zoom_target）已迁出至 BattleCoordinator（批 2 阶段 b）
+## 调用方改走 _battle_coordinator.start_battle_camera() / end_battle_camera()
 
 
 ## MVP-δ 阶段 2：以下 17 个夜晚视野相关函数 + FogSignalNode 内嵌类整体迁到 NightVisionLayer.gd
@@ -721,19 +656,6 @@ func _end_battle_camera() -> void:
 ## 顺带清理：_apply_blink_modulate（grep 验证全项目无调用者，γ 阶段抽 Renderer 后留下的死代码）
 
 
-## 入口 4 MVP：战斗 zoom 目标值计算（设计文档公式）
-## 取 viewport 实际尺寸（不依赖基线 1280×720，stretch 等比缩放在更上层处理）
-## HUD 占位用 VISUAL_CFG.zoom_hud_reserve_px 估值；跑测后改 battle_visual_config.tres
-func _compute_battle_zoom_target() -> float:
-	var battle_size: int = _battle_arena_range * 2 + 1
-	var need_grids: int = battle_size + VISUAL_CFG.zoom_margin_grid * 2
-	var need_world_px: float = float(need_grids * TILE_SIZE)
-	var vp: Vector2 = get_viewport().get_visible_rect().size
-	var usable_h: float = maxf(vp.y - float(VISUAL_CFG.zoom_hud_reserve_px), 1.0)
-	var zoom_x: float = vp.x / need_world_px
-	var zoom_y: float = usable_h / need_world_px
-	# zoom 取较小者（保证两轴都能装下）；上限钳到 1.0 避免在大窗口下反向放大
-	return minf(minf(zoom_x, zoom_y), 1.0)
 
 # ─────────────────────────────────────────
 # HUD 更新（CanvasLayer 上的 Label 节点）
@@ -1696,7 +1618,7 @@ func _start_battle_session(packs: Array[LevelSlot]) -> void:
 	# 战斗中清掉探索态可达高亮（避免视觉与战场叠加层干扰）
 	_reachable_tiles = {}
 	# 入口 4 MVP：战斗 Camera zoom + 战场居中（队长位置 = 战场中心）
-	_start_battle_camera(_unit.position)
+	_battle_coordinator.start_battle_camera(_unit.position)
 	# HUD 先显示（refresh 内部读 session 状态）
 	if _battle_hud != null:
 		_battle_hud.show_hud(_battle_session)
@@ -1745,7 +1667,7 @@ func _start_passive_battle(packs: Array[LevelSlot]) -> void:
 	_inject_reinforcements()
 	_reachable_tiles = {}
 	# 入口 4 MVP：被动战斗同样触发战场镜头 zoom（战场中心 = 队长位置）
-	_start_battle_camera(_unit.position)
+	_battle_coordinator.start_battle_camera(_unit.position)
 	if _battle_hud != null:
 		_battle_hud.show_hud(_battle_session)
 	_update_hud()
@@ -1979,7 +1901,7 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 		_battle_session = null
 		# 入口 4 MVP：先 zoom 回归（用开战时 _unit.position 作 tween 终点）
 		# 重生分支由 _player_lifecycle.trigger_coma_or_lose 内部处理 _unit.position 重置 + camera 同步（瞬移到 spawn）
-		_end_battle_camera()
+		_battle_coordinator.end_battle_camera()
 		_player_lifecycle.trigger_coma_or_lose()
 		return
 
@@ -1997,7 +1919,7 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 	_sync_world_unit_from_battle_leader()
 	# 入口 4 MVP：sync 之后再 zoom 回归 —— _end_battle_camera 内取 _unit.position 已是最终队长格
 	# Tween 起点 = sync 设的 camera.position（=队长最终位置），终点 = 同位置；只 zoom 在变（视觉自然）
-	_end_battle_camera()
+	_battle_coordinator.end_battle_camera()
 
 	if reason == BattleSession.EndReason.VICTORY:
 		# 1. 收集合并奖励
