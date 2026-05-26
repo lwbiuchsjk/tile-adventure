@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="VisionConfig" load_steps=2 format=3 uid="uid://djvision1l1config"]
+
+[ext_resource type="Script" uid="uid://djvision1l1schema" path="res://scripts/config/vision_config.gd" id="1_vision"]
+
+[resource]
+script = ExtResource("1_vision")
+player_vision_radius = 5
+fog_delay_turns = 1
+shadow_decay_turns = 5
+chunk_size = 16
+poi_spawn_rate_per_chunk = 0.3
