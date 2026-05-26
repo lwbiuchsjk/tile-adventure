@@ -459,7 +459,6 @@ func _ready() -> void:
 	bootstrap.load_configs()
 	# 局部别名：让后续 _ready 代码访问 bootstrap 中间数据时书写不啰嗦
 	# 后续阶段抽离时会逐步消除（如阶段 b 抽 _apply_cycle_config / _load_pcg 时 map_cfg / terrain_costs 别名一并消除）
-	var unit_cfg: Dictionary = bootstrap.unit_cfg
 	var town_pool_rows: Array = bootstrap.town_pool_rows
 
 	# 阶段 b：cycle 应用 + 起终点 + 地图加载 + schema 配置注入 + enemy_core 缓存（已抽离到 MapBootstrap，批1-b）
@@ -472,35 +471,9 @@ func _ready() -> void:
 	# 设置 Camera 边界限制（不超出地图像素范围）
 	_setup_camera_limits()
 
-	# 初始化单位（移动系统）
-	var default_movement: int = int(unit_cfg.get("default_movement", "6"))
-	_unit = UnitData.new()
-	_unit.position = _start_pos
-	_unit.max_movement = default_movement
-	_unit.current_movement = default_movement
-
-	# MVP-δ 阶段 2：玩家 lifecycle 子系统创建 + setup（原 _init_player 主体迁入）
-	# 必须在 _turn_manager 创建之前——setup 内 emit respawn_intro_ready / coma_triggered 等
-	# 信号目前不立即触发，但 sink 接线要在 setup 之前完成，否则首次 emit 会丢
-	_player_lifecycle = PlayerLifecycle.new()
-	_player_lifecycle.name = "PlayerLifecycle"
-	add_child(_player_lifecycle)
-	# Sink 接线：3 个信号让 PlayerLifecycle 不直接依赖 OverlayTransitionUI / VictoryJudge
-	_player_lifecycle.coma_triggered.connect(_on_player_coma_triggered)
-	_player_lifecycle.defeat_triggered.connect(_on_player_defeat_triggered)
-	_player_lifecycle.respawn_intro_ready.connect(_on_player_respawn_intro_ready)
-	_player_lifecycle.cycle_victory_intro_ready.connect(_on_player_cycle_victory_intro_ready)
-	_player_lifecycle.setup(PLAYER_PARAM_CFG, RUN_PARAM_CFG)
-
-	# 视觉位置初始化到起点像素中心
-	_unit_visual_pos = _grid_to_pixel_center(_start_pos)
-
-	# 初始化回合管理器
-	_turn_manager = TurnManager.new()
-	_turn_manager.register_unit(_unit)
-	# M7：迁至阵营回合流程，监听 faction_turn_started 替代 legacy turn_ended
-	# 玩家侧 handler 在本 handler 中处理；敌方侧由 EnemyAI 自己 connect
-	_turn_manager.faction_turn_started.connect(_on_faction_turn_started)
+	# 阶段 c：世界状态创建（_unit / _player_lifecycle / _turn_manager，已抽离到 MapBootstrap，批1-c）
+	# 详见 scripts/world/MapBootstrap.gd::create_world_state
+	bootstrap.create_world_state()
 
 	# M5: 加载升级配置 + 石料库存 + 注册建造 tick
 	# 顺序固定：先 BuildSystem.load_level_config（tick 依赖配置），再 register

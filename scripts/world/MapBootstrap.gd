@@ -452,3 +452,51 @@ func _cache_enemy_core_origin_pos_internal() -> void:
 			return
 	push_warning("WorldMap: PCG 后未找到敌方 CORE_TOWN，_enemy_core_origin_pos 保持 (-1,-1)；reinforcement 将跳过")
 	_world_map._enemy_core_origin_pos = Vector2i(-1, -1)
+
+
+# ─────────────────────────────────────
+# 阶段 c：世界状态创建
+# ─────────────────────────────────────
+
+## 抽离自 WorldMap._ready 原 L475-L503 区段（29 行）
+##
+## 副作用（写 _world_map）：
+##   _unit / _player_lifecycle / _unit_visual_pos / _turn_manager
+##
+## 顺序固定（不能调）：
+##   1. _unit 创建（PlayerLifecycle 不依赖；后续 _turn_manager.register_unit 依赖）
+##   2. _player_lifecycle 创建 + sink 接线 + setup
+##      ↑ 必须在 _turn_manager 创建之前——setup 内可能 emit signal（respawn_intro_ready /
+##        coma_triggered 等），sink 要先接线否则首次 emit 会丢
+##   3. _unit_visual_pos 初始化（_grid_to_pixel_center 依赖 _world_map._start_pos）
+##   4. _turn_manager 创建 + register_unit + faction_turn_started sink
+func create_world_state() -> void:
+	# 初始化单位（移动系统）
+	var default_movement: int = int(unit_cfg.get("default_movement", "6"))
+	_world_map._unit = UnitData.new()
+	_world_map._unit.position = _world_map._start_pos
+	_world_map._unit.max_movement = default_movement
+	_world_map._unit.current_movement = default_movement
+
+	# MVP-δ 阶段 2：玩家 lifecycle 子系统创建 + setup（原 _init_player 主体迁入）
+	# 必须在 _turn_manager 创建之前——setup 内 emit respawn_intro_ready / coma_triggered 等
+	# 信号目前不立即触发，但 sink 接线要在 setup 之前完成，否则首次 emit 会丢
+	_world_map._player_lifecycle = PlayerLifecycle.new()
+	_world_map._player_lifecycle.name = "PlayerLifecycle"
+	_world_map.add_child(_world_map._player_lifecycle)
+	# Sink 接线：3 个信号让 PlayerLifecycle 不直接依赖 OverlayTransitionUI / VictoryJudge
+	_world_map._player_lifecycle.coma_triggered.connect(_world_map._on_player_coma_triggered)
+	_world_map._player_lifecycle.defeat_triggered.connect(_world_map._on_player_defeat_triggered)
+	_world_map._player_lifecycle.respawn_intro_ready.connect(_world_map._on_player_respawn_intro_ready)
+	_world_map._player_lifecycle.cycle_victory_intro_ready.connect(_world_map._on_player_cycle_victory_intro_ready)
+	_world_map._player_lifecycle.setup(WorldMap.PLAYER_PARAM_CFG, WorldMap.RUN_PARAM_CFG)
+
+	# 视觉位置初始化到起点像素中心
+	_world_map._unit_visual_pos = _world_map._grid_to_pixel_center(_world_map._start_pos)
+
+	# 初始化回合管理器
+	_world_map._turn_manager = TurnManager.new()
+	_world_map._turn_manager.register_unit(_world_map._unit)
+	# M7：迁至阵营回合流程，监听 faction_turn_started 替代 legacy turn_ended
+	# 玩家侧 handler 在本 handler 中处理；敌方侧由 EnemyAI 自己 connect
+	_world_map._turn_manager.faction_turn_started.connect(_world_map._on_faction_turn_started)
