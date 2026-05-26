@@ -179,8 +179,13 @@ func get_battle_center_grid() -> Vector2i:
 # ─────────────────────────────────────────
 
 ## 是否处于战斗态
+## WorldMap 二次重构 批 2 阶段 a：转发指向 _battle_coordinator.is_in_battle()
+## null 守卫兼容 _MockWorld（测试 mock 不持 BC 字段）—— 返回 false 即"非战斗态"
 func is_in_battle() -> bool:
-	return _wm.call("_is_in_battle")
+	var bc: Object = _wm.get("_battle_coordinator")
+	if bc == null:
+		return false
+	return bc.call("is_in_battle")
 
 
 ## 世界像素坐标是否落在浓雾内
@@ -204,8 +209,13 @@ func get_level_at(pos: Vector2i) -> LevelSlot:
 
 
 ## 指定格的敌方包是否正在战斗中
+## WorldMap 二次重构 批 2 阶段 a：转发指向 _battle_coordinator._is_pack_in_battle()
+## null 守卫兼容 _MockWorld（测试 mock 不持 BC 字段）—— 返回 false 即"该格不在战斗"
 func is_pack_in_battle(pos: Vector2i) -> bool:
-	return _wm.call("_is_pack_in_battle", pos)
+	var bc: Object = _wm.get("_battle_coordinator")
+	if bc == null:
+		return false
+	return bc.call("_is_pack_in_battle", pos)
 
 
 ## 格坐标 → 像素中心

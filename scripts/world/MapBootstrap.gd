@@ -791,6 +791,15 @@ func init_world_subsystems() -> void:
 	# 解绑由 RunState.clear_sinks 在 _world_map._exit_tree 处理，与其他 sink 同生命周期
 	RunState.register_recruit_sink(_world_map._on_recruit_triggered)
 
+	# WorldMap 二次重构 批 2 阶段 a：创建 BattleCoordinator + attach_sinks
+	# 设计：tile-advanture-design/WorldMap二次重构/批2_BattleCoordinator_MVP.md
+	# 必须在所有战斗子模块（_battle_session / _battle_hud / _battle_anim_director /
+	# _enemy_movement）创建 + add_child + 信号 connect 完成**之后**调用，否则
+	# BC.attach_sinks() 接到的子模块字段为 null（见实装包 §风险与回滚 #4）
+	# 阶段 a：attach_sinks 暂为空骨架，仅迁出 4 个查询函数；阶段 e/f 再接 signal
+	_world_map._battle_coordinator = BattleCoordinator.new(_world_map)
+	_world_map._battle_coordinator.attach_sinks()
+
 
 
 # ─────────────────────────────────────
