@@ -478,51 +478,11 @@ func _ready() -> void:
 	# 详见 scripts/world/MapBootstrap.gd::init_world_subsystems
 	bootstrap.init_world_subsystems()
 
-	# 初始化地图标签字体：使用顶部 const MAIN_FONT（preload 形式，编辑期校验路径）
-	_label_font = MAIN_FONT
-
-	# M7：开局预置 5 支敌方部队包（在敌方核心影响范围内随机空地）
-	# 必须在资源点铺好之后、首个玩家回合开始之前，避免位置冲突。
-	_deploy_initial_enemy_packs()
-
-	# M7：启动首个玩家回合（TickRegistry 跑 M4/M5 tick → emit faction_turn_started(PLAYER)
-	# → _on_faction_turn_started 接管 HUD / reachable 刷新）
-	_turn_manager.start_faction_turn(Faction.PLAYER)
-
-	# 入口 2 MVP 2.1 议题 5（2026-05-10）：游戏首次启动 → 黑屏揭幕过渡
-	# 分流：
-	#   - 应用首次启动：is_initial_play_done() == false → play_with_blackout_start 单句揭幕
-	#   - reload 触发的新场景：_init_player 内已调 notify_world_ready 推进过渡，本路径跳过
-	# OverlayTransitionUI _ready 时已黑屏 alpha=1，掩盖应用启动到此处的全部加载耗时
-	if not OverlayTransitionUI.is_initial_play_done():
-		var line: String = _player_lifecycle.format_respawn_line_for_current_leader()
-		var lines: PackedStringArray = PackedStringArray([line])
-		# 火苗团数 = 过渡完成后的玩家总命数；游戏开始无消耗 → 当前 respawns_left + 1（含当前队长）
-		# 例：max_cycles=3, _cycle_index=0 → respawns_left=2 → 显示 3 团火苗
-		var icon_data: Dictionary = {"icon": "🔥", "count": RunState.respawns_left() + 1}
-		OverlayTransitionUI.play_with_blackout_start(lines, icon_data)
+	# 阶段 e：启动末尾收口（_label_font / _deploy_initial / start_faction_turn / 揭幕，已抽离到 MapBootstrap，批1-e）
+	# 详见 scripts/world/MapBootstrap.gd::finalize_startup
+	bootstrap.finalize_startup()
 
 
-## M7 开局预置敌方部队包（敌方 AI 设计 §3.1）
-## P0 第二阶段：数量从 cycle_config 当前周期 initial_enemy_pack_count 读
-## 若核心影响范围内空地不足时，能放几支放几支（不强制）
-##
-## P1-1a 修复：has_enemy_core 周期（末周期）强制第 1 个 pack tier=3（最强敌人）
-## 实现"末周期必有强敌"设计承诺（整局节奏重设计_MVP §2.5）；其余 pack 走权重抽
-func _deploy_initial_enemy_packs() -> void:
-	var target_count: int = _current_cycle_initial_pack_count
-	var placed: int = 0
-	# has_enemy_core 周期：第 1 个 pack 强制 tier=3；其余按权重抽
-	# 通过 force_tier 参数（仅本路径使用）覆盖 EnemyReinforcement 内部权重抽样
-	for i in range(target_count):
-		var force_tier: int = -1
-		if _current_cycle_has_enemy_core and i == 0:
-			force_tier = 3
-		var pack: LevelSlot = EnemyReinforcement.spawn_batch(_world_view, force_tier)
-		if pack != null:
-			placed += 1
-	if placed < target_count:
-		push_warning("WorldMap._deploy_initial_enemy_packs: 仅预置 %d / %d 支（核心影响范围空地不足）" % [placed, target_count])
 
 
 ## 场景退出时清理全局注册，避免 TickRegistry 残留悬空 Callable
