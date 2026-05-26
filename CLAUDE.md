@@ -334,7 +334,8 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 
 ## 活跃（≤10 条硬上限）
 
-- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — 入口 3 启动（2026-05-26）；C-lite 路线 + 三层视野 + 据点机制（= P0 一阶段被取消的玩家核心城镇）；4 份 L1 串行（L1.1 视野循环+chunk 底座设计落盘待实装，L1.2-L1.4 待前份落地后撰写）
+- [WorldMap二次重构_推进进度](tile-advanture-design/进度/WorldMap二次重构_推进进度.md) — P1 续作（2026-05-26 启动）；L1.x 启动后发现 WorldMap 仍 3574 行带息债务，暂停 L1.x 先做基础；诊断报告落盘待用户审稿（推荐路径 A 三批：MapBootstrap → BattleCoordinator → ExplorationCoordinator）；目标净降 ~48% 到 ~1844 行
+- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — **🔧 主线挂起**（2026-05-26）：L1.1 阶段 1 已落地（commit `661cbb6`，chunk/视野子模块底座，与 WorldMap 解耦），阶段 2-4 + L1.2/1.3/1.4 等 WorldMap 二次重构完成后接续
 
 ## 预启动（方向已认可，等启动时机）
 
