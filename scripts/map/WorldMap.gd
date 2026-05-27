@@ -571,7 +571,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					and not _battle_session.is_ended() \
 					and _battle_session.is_player_turn() \
 					and not _battle_anim_director.is_animating():
-				_on_battle_hud_end_turn_pressed()
+				_battle_coordinator._on_battle_hud_end_turn_pressed()
 
 
 ## 入口 4 MVP（2026-05-09）：SPACE 上下文确认路由
@@ -604,7 +604,7 @@ func _route_space_confirm() -> bool:
 	if _battle_coordinator.is_in_battle() and _battle_session != null \
 			and not _battle_session.is_ended() \
 			and _battle_session.is_player_turn():
-		_on_battle_hud_skip_pressed()
+		_battle_coordinator._on_battle_hud_skip_pressed()
 		return true
 	return false
 
@@ -1551,102 +1551,10 @@ func _get_enemy_target_pos() -> Vector2i:
 ## 调用方改走 _battle_coordinator._xxx —— 见上方字段声明
 
 
-# ─── BattleHUD 按钮 sink ───
-
-## [攻击] 按钮：MVP 简化 = 攻击范围内 hp 最低的目标
-## 玩家若想换目标，直接点击地图敌人触发 _handle_click 战斗态分流
-func _on_battle_hud_attack_pressed() -> void:
-	if _battle_session == null or _battle_session.is_ended():
-		return
-	if not _battle_session.is_player_turn():
-		return
-	var targets: Array[BattleUnit] = _battle_session.get_attackable_targets()
-	if targets.is_empty():
-		return
-	# hp 最低的（与 BattleAI 决策一致）
-	var picked: BattleUnit = targets[0]
-	for i in range(1, targets.size()):
-		if targets[i].troop.current_hp < picked.troop.current_hp:
-			picked = targets[i]
-	var result: Dictionary = _battle_session.try_player_attack(picked)
-	if not result.get("success", false):
-		return
-	_battle_coordinator._post_player_action_check()
-
-
-## [跳过] 按钮：当前单位本回合行动结束（先移动后攻击都不做 / 移动后不攻击）
-func _on_battle_hud_skip_pressed() -> void:
-	if _battle_session == null or _battle_session.is_ended():
-		return
-	if not _battle_session.is_player_turn():
-		return
-	_battle_session.skip_current_unit()
-	_battle_coordinator._post_player_action_check()
-
-
-## [结束回合] 按钮 / Enter 路由（战斗单位视觉与操作改进_MVP §2.3）
-##
-## 处理顺序（关键，G5 拍板）：
-##   1. 先批量结束所有"已移动未攻击"（Moved）单位 —— 解决多单位逐个收尾的操作负担
-##   2. 再扫剩余未结束单位（此时必为"未移动"Idle 单位，因 Moved 已在步骤 1 结束）
-##   3. 有 Idle → 守卫：选中第一个 Idle 单位 + 弹板提示「还有 N 个单位未移动」，不结束回合
-##      无 Idle → 全员已结束 → _post_player_action_check 推进切敌方回合
-func _on_battle_hud_end_turn_pressed() -> void:
-	if _battle_session == null or _battle_session.is_ended():
-		return
-	if not _battle_session.is_player_turn():
-		return
-	# 1. 先批量结束所有"已移动未攻击"单位（走 skip_units_batch → 飘字并行 spawn，避免 N 个串行阻塞）
-	var to_skip: Array[BattleUnit] = []
-	for u in _battle_session.player_units:
-		if u != null and u.is_active and u.is_alive() and u.has_moved and not u.has_attacked:
-			to_skip.append(u)
-	if not to_skip.is_empty():
-		_battle_session.skip_units_batch(to_skip)
-	# 2. 扫剩余未结束单位（必为"未移动"Idle）
-	var idle_units: Array[BattleUnit] = []
-	for u in _battle_session.player_units:
-		if u != null and u.is_active and u.is_alive() and not u.has_attacked:
-			idle_units.append(u)
-	# 3. 分支
-	if not idle_units.is_empty():
-		# 守卫：选中第一个未移动单位（地格呼吸角标即定位过去）+ 弹板提示，不结束回合
-		_battle_session.try_select_player_unit(idle_units[0])
-		_show_end_turn_guard_dialog(idle_units.size())
-	else:
-		# 全员已结束 → 推进 / 切敌方回合（_post_player_action_check 内部 await 动画 + advance）
-		_battle_coordinator._post_player_action_check()
-
-
-## 结束回合守卫弹板（§2.3）：提示玩家还有未移动单位，确定关闭（不结束回合）
-## 弹板用 Godot AcceptDialog（MVP；样式后续可 .tscn 化，见待跟踪 P2）
-func _show_end_turn_guard_dialog(unmoved_count: int) -> void:
-	if _end_turn_guard_dialog == null:
-		_end_turn_guard_dialog = AcceptDialog.new()
-		_end_turn_guard_dialog.title = "结束回合"
-		_end_turn_guard_dialog.ok_button_text = "确定"
-		var ui_layer: CanvasLayer = $UILayer
-		ui_layer.add_child(_end_turn_guard_dialog)
-	_end_turn_guard_dialog.dialog_text = "还有 %d 个单位未移动，请继续行动。" % unmoved_count
-	_end_turn_guard_dialog.popup_centered()
-
-
-## [退出战斗] / [撤离] 按钮路由（持久 slot 战场参与设计 L1.1：信号扩展为携带 mode）
-##
-## mode == "exit"    —— 战场内无敌，走 try_manual_exit；失败时给 notice（理论上 HUD 已只在无敌时显示"退出战斗"，但仍兜底）
-## mode == "retreat" —— 队长在战场边界，走 try_retreat；失败时表示前置不满足（防御性兜底，正常不应触发）
-func _on_battle_hud_exit_pressed(mode: String) -> void:
-	if _battle_session == null or _battle_session.is_ended():
-		return
-	match mode:
-		"exit":
-			if not _battle_session.try_manual_exit():
-				_show_notice("战场内仍有敌人，无法退出")
-		"retreat":
-			if not _battle_session.try_retreat():
-				_show_notice("队长不在战场边界，无法撤离")
-		_:
-			push_error("[WorldMap] _on_battle_hud_exit_pressed 收到未知 mode：%s" % mode)
+## BattleHUD 4 sink + 守卫弹板（_on_battle_hud_attack_pressed / _skip_pressed /
+## _end_turn_pressed / _exit_pressed + _show_end_turn_guard_dialog）已迁出至
+## BattleCoordinator（批 2 阶段 f，批 2 收口）
+## attach_sinks() 内接 BattleHUD 4 signal → BC._on_battle_hud_*
 
 
 # ─────────────────────────────────────────
@@ -2278,7 +2186,7 @@ func _handle_f_key() -> void:
 	# 设计意图：F 在两态语义统一为"进攻 / 推进战斗"——探索态主动战斗 + 战斗态选最弱目标攻击
 	# 内部守卫（session 存在 / 玩家回合 / 有可攻击目标）由 _on_battle_hud_attack_pressed 处理
 	if _battle_coordinator.is_in_battle():
-		_on_battle_hud_attack_pressed()
+		_battle_coordinator._on_battle_hud_attack_pressed()
 		return
 	# 探索态：补给 / 候选 / 触发由 _try_trigger_active_battle 内部判定
 	if _game_finished or _player_lifecycle.is_in_coma() or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:

@@ -653,10 +653,8 @@ func init_world_subsystems() -> void:
 	_world_map._battle_hud = preload("res://scenes/ui/BattleHUD.tscn").instantiate()
 	_world_map._battle_hud.name = "BattleHUD"
 	ui_layer.add_child(_world_map._battle_hud)
-	_world_map._battle_hud.attack_pressed.connect(_world_map._on_battle_hud_attack_pressed)
-	_world_map._battle_hud.skip_pressed.connect(_world_map._on_battle_hud_skip_pressed)
-	_world_map._battle_hud.end_turn_pressed.connect(_world_map._on_battle_hud_end_turn_pressed)
-	_world_map._battle_hud.exit_pressed.connect(_world_map._on_battle_hud_exit_pressed)
+	# WorldMap 二次重构 批 2 阶段 f：BattleHUD 4 signal connect 已迁到 BattleCoordinator.attach_sinks()
+	# 本处保留空行（BC 在 init_world_subsystems 末尾创建并 attach，时序仍正确）
 
 	# MVP-γ 阶段 1：战斗瞬时视觉态 + 动画编排器（跨战斗复用，每场战斗 setup 注入上下文）
 	_world_map._battle_view = BattleViewState.new()
