@@ -334,8 +334,7 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 
 ## 活跃（≤10 条硬上限）
 
-- [WorldMap二次重构_推进进度](tile-advanture-design/进度/WorldMap二次重构_推进进度.md) — P1 续作（2026-05-26 启动）；路径 A 三批：批 1 MapBootstrap ✅ + 批 2 BattleCoordinator ✅（2026-05-27 完成 6 阶段 commit + codex P1 修复）+ 批 3 ExplorationCoordinator ⏳；WorldMap.gd 已从 3639 → 2239（净降 1400 / 38.5%）；批 3 完成后接续 L1.1 阶段 2
-- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — **🔧 主线挂起**（2026-05-26）：L1.1 阶段 1 已落地（commit `661cbb6`，chunk/视野子模块底座，与 WorldMap 解耦），阶段 2-4 + L1.2/1.3/1.4 等 WorldMap 二次重构完成后接续
+- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — **🟢 主线已解除挂起**（2026-05-27）：WorldMap 二次重构完成后接续；L1.1 阶段 1 已落地（commit `661cbb6`），阶段 2-4 + L1.2/1.3/1.4 待启动；chunk/视野系统接入点已统一到 EC 钩子
 
 ## 预启动（方向已认可，等启动时机）
 
@@ -343,6 +342,7 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 
 ## 已归档
 
+- [WorldMap二次重构_推进进度](tile-advanture-design/进度/WorldMap二次重构_推进进度.md) — P1 续作（2026-05-26 启动 / 2026-05-27 整批闭环）；路径 A 三批 7 commit 全部完成：批 1 MapBootstrap ✅（`d46a515`）+ 批 2 BattleCoordinator ✅（`6010af6` + codex P1 修复 `5000a4a`）+ 批 3 ExplorationCoordinator ✅（`5a28f04`）；**WorldMap.gd 3639 → 1701 净降 1938 / 53.3%（超目标 5.3%）**；3 协调器合计 2473 行（MapBootstrap 876 + BC 865 + EC 732）；15 套件 0 regression + 桌面跑测全路径通过；3 批 codex 审查累计 P0/P1 净中性（仅 4 个历史 P1 + 6 个 P2 假设性，2 修 / 标 P3）
 - [参数Resource化_推进进度](tile-advanture-design/进度/参数Resource化_推进进度.md) — MVP-B/B.2/C/D 全部完成（2026-05-25 D 收口）；方案 D 两步走 + 第 3 步：8 视觉/动画 Resource（113 字段）+ 12 数值 Resource（37 字段）全 Resource 化 + imgui 运行时面板（F1/F2/preset）+ registry 自省机制（Push 25 场景 + Pull 20 条目，全链类型化）；codex 全程 P0/P1 清零；字段维护工作流（剥离原则）落 CLAUDE.md
 - [核心目标传达_推进进度](tile-advanture-design/进度/核心目标传达_推进进度.md) — 入口 5 L1.5；移除兜底清场胜利（占核心为唯一目标）/ 敌方核心粗金边+外发光 / 大地图边缘带（窄实体、框在 HUD 之上）+ 离屏核心方向黄色光晕（clip_children 裁带内、可复用为地图外指示区）；桌面三轮迭代定稿验收通过 + push（2026-05-22）；codex 两次卡死，主会话自审无 P0/P1
 - [战斗单位视觉与操作改进_推进进度](tile-advanture-design/进度/战斗单位视觉与操作改进_推进进度.md) — 入口 5 L1.4 后续；品质大小+描边环 / 地格四角呼吸角标（替换棋子白环）/ 结束回合守卫按钮+Enter / HP 条左侧行动状态标记（白未移动·红已移动·灰已结束）；代码 3f5f7da、桌面验收通过 + push（2026-05-22）；codex P0/P1 清零 + P2 已修
