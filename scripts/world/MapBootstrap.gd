@@ -662,7 +662,8 @@ func init_world_subsystems() -> void:
 	_world_map._battle_anim_director = BattleAnimDirector.new()
 	_world_map._battle_anim_director.name = "BattleAnimDirector"
 	_world_map.add_child(_world_map._battle_anim_director)
-	_world_map._battle_anim_director.anims_drained.connect(_world_map._try_schedule_next_enemy_step)
+	# WorldMap 二次重构 批 2 阶段 d：anims_drained.connect 已迁到 BattleCoordinator.attach_sinks()
+	# 本处保留空行（BC 在 init_world_subsystems 末尾创建并 attach，时序仍正确）
 
 	# MVP-γ 阶段 2：渲染层注入 —— WorldView（探索态只读入口）+ BattleViewState（战斗态）
 	# 均已在本函数前文创建（_world_map._world_view / _world_map._battle_view），此处一次性注入，跨战斗复用

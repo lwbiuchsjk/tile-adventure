@@ -31,11 +31,13 @@ func _init(world_map: WorldMap) -> void:
 ## 由 MapBootstrap.init_world_subsystems() 末尾调一次
 ##
 ## BC 自己接 BattleHUD / BattleAnimDirector / EnemyMovement / BattleSession 的 signal
-## 阶段 a：先留空骨架；阶段 e/f 迁入对应 signal 接线
+## 阶段 a：先留空骨架；阶段 d 起逐步填充
 func attach_sinks() -> void:
-	# 阶段 a：暂无 signal 接线；阶段 e 接 EnemyMovement.phase_finished + BattleAnimDirector.anims_drained
-	# 阶段 f 接 BattleHUD 4 sink。BattleSession sinks 由 _bind_battle_session_sinks 在每次战斗启动时绑定
-	pass
+	# 阶段 d：BattleAnimDirector 动画清空时调度下一敌方 step
+	# （MapBootstrap L665 原接 _world_map._try_schedule_next_enemy_step，现 receiver 改为 BC）
+	_world_map._battle_anim_director.anims_drained.connect(_try_schedule_next_enemy_step)
+	# 阶段 e 接 EnemyMovement.phase_finished；阶段 f 接 BattleHUD 4 sink
+	# BattleSession sinks 由 _bind_battle_session_sinks 在每次战斗启动时绑定
 
 
 # ─────────────────────────────────────
@@ -216,8 +218,8 @@ func start_battle_session(packs: Array[LevelSlot]) -> void:
 	# WorldMapRenderer，动画 tween 每帧须重绘 _renderer，重绘空的 WorldMap 无效；
 	# BattleFloatText 也挂到 _renderer（同坐标空间的 Node2D）
 	_world_map._battle_anim_director.setup(_world_map._renderer, _world_map._battle_hud, _world_map._battle_view, _world_map._terrain_altitude_step)
-	# _bind_battle_session_sinks 阶段 d 抽出后，本调用改为 self；当前阶段仍在 WorldMap
-	_world_map._bind_battle_session_sinks()
+	# _bind_battle_session_sinks 阶段 d 已迁入 BC，self 调
+	_bind_battle_session_sinks()
 	_world_map._battle_session.start(
 		_world_map._player_lifecycle.characters(),
 		_world_map._unit.position,
@@ -271,7 +273,8 @@ func start_passive_battle(packs: Array[LevelSlot]) -> void:
 	# WorldMapRenderer，动画 tween 每帧须重绘 _renderer，重绘空的 WorldMap 无效；
 	# BattleFloatText 也挂到 _renderer（同坐标空间的 Node2D）
 	_world_map._battle_anim_director.setup(_world_map._renderer, _world_map._battle_hud, _world_map._battle_view, _world_map._terrain_altitude_step)
-	_world_map._bind_battle_session_sinks()
+	# _bind_battle_session_sinks 阶段 d 已迁入 BC，self 调
+	_bind_battle_session_sinks()
 	_world_map._battle_session.start(
 		_world_map._player_lifecycle.characters(),
 		_world_map._unit.position,
@@ -437,3 +440,208 @@ func try_trigger_active_battle() -> void:
 		# 兜底走 trigger_candidates 不至于触发后无人参战
 		packs_in_arena = trigger_candidates
 	start_battle_session(packs_in_arena)
+
+
+# ─────────────────────────────────────
+# 阶段 d：战斗会话 sink + 结算（_on_battle_session_ended 145 行）
+# ─────────────────────────────────────
+
+## BattleSession 状态变化 sink：刷新战场叠加 + HUD
+## 注入到 BattleSession.on_redraw_requested
+func _on_battle_redraw_requested() -> void:
+	_world_map._renderer.queue_redraw()
+	if _world_map._battle_hud != null and _world_map._battle_session != null:
+		_world_map._battle_hud.refresh(_world_map._battle_session)
+
+
+## 注入 BattleSession 所有 sink（入口 1.2 信号粒度扩展后集中管理）
+## 主动战斗 / 被动战斗两路径都通过本 helper 绑定，避免重复维护两份字段赋值
+##
+## 阶段 c 迁出时由 BC.start_battle_session / start_passive_battle 在创建 BattleSession 后调用；
+## 阶段 d 起本 helper 也归 BC（同时迁出 4 个 sink handler）
+func _bind_battle_session_sinks() -> void:
+	if _world_map._battle_session == null:
+		return
+	_world_map._battle_session.on_battle_ended = _on_battle_session_ended
+	_world_map._battle_session.on_redraw_requested = _on_battle_redraw_requested
+	# MVP-γ 阶段 1：6 个单位动画 sink 委派 BattleAnimDirector
+	_world_map._battle_anim_director.bind_unit_sinks(_world_map._battle_session)
+
+
+## 调度下一个敌方 step：仅在 anim 完成 + queue 空 + 仍敌方回合时启动 0.18s 间隔 timer
+## 由 BattleAnimDirector 动画清空时 emit anims_drained 触发，或 _run_enemy_turn_async 在 step 无 anim 时兜底
+##
+## attach_sinks() 内接 BattleAnimDirector.anims_drained → 本函数
+## 阶段 e 抽出 _run_enemy_turn_async 后，timer timeout connect 改为 self
+func _try_schedule_next_enemy_step() -> void:
+	if _world_map._battle_session == null or _world_map._battle_session.is_ended():
+		return
+	if not _world_map._battle_session.is_enemy_turn():
+		return
+	if _world_map._battle_anim_director.is_animating():
+		return
+	var t: SceneTreeTimer = _world_map.get_tree().create_timer(_world_map.ANIM_CFG.enemy_step_gap)
+	# _run_enemy_turn_async 仍在 WorldMap（阶段 e 抽出后改为 self）
+	t.timeout.connect(_world_map._run_enemy_turn_async)
+
+
+## 战斗结束时把战斗内队长位置同步回探索态（设计 §2.8 / §3.4 "玩家位置保持队长当前格"）
+##
+## 玩家可能在战斗中移动队长几格；战斗结束后探索态单位应停在队长当前 battle_position
+## 不同步会导致 _draw_unit_marker / Camera 用旧的开战前位置，玩家观感断裂
+##
+## 调用时机：sink 处理 VICTORY / MANUAL_EXIT 之前；COMA 走 reload 场景，无需同步
+func _sync_world_unit_from_battle_leader() -> void:
+	if _world_map._battle_session == null or _world_map._unit == null:
+		return
+	if _world_map._battle_session.player_units.is_empty():
+		return
+	var leader_unit: BattleUnit = _world_map._battle_session.player_units[0]
+	if leader_unit == null or not leader_unit.is_alive():
+		return
+	_world_map._unit.position = leader_unit.battle_position
+	_world_map._unit_visual_pos = _world_map._grid_to_pixel_center(_world_map._unit.position)
+	# 入口 4 MVP（codex 审查 P1 修复 2026-05-09）：不再直接瞬移 _camera.position
+	# 原因：调用顺序是 sync → end_battle_camera()，sync 把 camera 瞬移到队长位置后，
+	#       end_battle_camera 的 position tween 起点 = 终点 = 队长位置 → tween 没有视觉变化（瞬移而非平滑）
+	# 修复：让 camera 暂时停在战场中心（_battle_zoom_active 期间的位置），
+	#       由 end_battle_camera 从战场中心 tween 平滑过渡到队长位置
+
+
+## 战斗结束 sink（设计 §3.4 / §2.8）
+##
+## 三分支处理：
+##   VICTORY     —— 收集每个 defeated_pack 的关卡 / 部队奖励 → 合并 _push_battle_victory_event
+##                  → 清理 _level_slots / 恢复 schema slot
+##                  → _player_lifecycle.evaluate_party_state 兜底队员阵亡（队长不会跌阈值，否则走 COMA）
+##   MANUAL_EXIT —— 不发奖励，敌方残余保留；_player_lifecycle.evaluate_party_state 兜底
+##   COMA        —— 走 B MVP 重生分支（_player_lifecycle.trigger_coma_or_lose）
+##
+## 收尾通用：清空 _battle_session / 隐藏 HUD / 重置移动力 / 刷新可达
+func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
+	# 持久 slot 援军（L1.2）：战后回收——本场入场援军条目从储备永久扣减（一次性消耗）
+	# 与结束原因无关（VICTORY / RETREAT / COMA / MANUAL_EXIT 一致），置于任何 _battle_session = null 之前
+	_consume_reinforcement_rosters()
+	# 入口 2 MVP 2.1 议题 5（2026-05-10 跑测调整）：COMA 分支与其他分支的动画清理时机不同
+	#
+	# COMA 分支：先 await 致命一击的攻击 / 死亡动画跑完，玩家能看到完整因果，再清理 + 黑屏
+	#   不这么做的体验问题：致命一击的 anim runner 还在队列中就被 clear，玩家"敌人没动作就黑屏"
+	# VICTORY / MANUAL_EXIT 分支：保持原行为（立即清理 + 进入收尾流程）
+	if reason == BattleSession.EndReason.COMA:
+		# 隐藏 HUD（提前；防止 await 期间玩家点按钮）
+		if _world_map._battle_hud != null:
+			_world_map._battle_hud.hide_hud()
+		# 等致命一击的攻击 / 死亡动画完整播放（队列空 + 没在跑）
+		await _world_map._battle_anim_director.await_anims_finished()
+		# 此时动画已自然跑完；清理瞬时视觉态 + 动画并发状态（理论应已空，防御性归零）
+		_world_map._battle_view.clear()
+		_world_map._battle_anim_director.reset()
+		# B MVP 重生分支：_player_lifecycle.trigger_coma_or_lose 内部会处理 _player_lifecycle.is_in_coma() 守卫
+		# _battle_session 在 reload 场景后由新 _ready 重新初始化（默认 null），无需手动清
+		_world_map._battle_session = null
+		# 入口 4 MVP：先 zoom 回归（用开战时 _unit.position 作 tween 终点）
+		# 重生分支由 _player_lifecycle.trigger_coma_or_lose 内部处理 _unit.position 重置 + camera 同步（瞬移到 spawn）
+		end_battle_camera()
+		_world_map._player_lifecycle.trigger_coma_or_lose()
+		return
+
+	# VICTORY / MANUAL_EXIT：原入口 1.2 P1-4 修复路径（立即清理）
+	# Tween 完成回调可能在战斗结束后异步触发，但回调内的 erase / count -= 都对清空后的状态安全
+	# 不主动 kill Tween：让 Tween 自然跑完，回调即 noop（BattleViewState 已空 + Director 计数已 0）
+	_world_map._battle_view.clear()
+	_world_map._battle_anim_director.reset()
+	if _world_map._battle_hud != null:
+		_world_map._battle_hud.hide_hud()
+
+	# E MVP §2.8 / §3.4：胜利 / 手动退出 → 玩家位置保持队长当前格
+	# 同步战斗内队长 battle_position 回 _unit.position + 视觉位置 + 摄像机；
+	# 不调用会让探索态单位回到开战前位置，违背设计约束
+	_sync_world_unit_from_battle_leader()
+	# 入口 4 MVP：sync 之后再 zoom 回归 —— end_battle_camera 内取 _unit.position 已是最终队长格
+	# Tween 起点 = sync 设的 camera.position（=队长最终位置），终点 = 同位置；只 zoom 在变（视觉自然）
+	end_battle_camera()
+
+	if reason == BattleSession.EndReason.VICTORY:
+		# 1. 收集合并奖励
+		var combined: Array[ItemData] = []
+		for pack_v in defeated_packs:
+			var pack: LevelSlot = pack_v as LevelSlot
+			if pack == null:
+				continue
+			combined.append_array(_world_map._grant_level_rewards_for(pack))
+			# 部队抽样奖励：含未上场 troops 一并视作消灭，从 pack.troops 抽样
+			combined.append_array(_world_map._grant_troop_reward(pack.troops))
+		_world_map._push_battle_victory_event(combined)
+
+		# 2. 清理 _level_slots + 恢复 schema slot 标记
+		# 显式 mark_defeated + remove_defeated_troops：保证仍持引用的旁路系统看到一致状态
+		for pack_v in defeated_packs:
+			var pack: LevelSlot = pack_v as LevelSlot
+			if pack == null:
+				continue
+			pack.remove_defeated_troops()
+			pack.mark_defeated()
+			var lvpos: Vector2i = pack.position
+			if _world_map._level_slots.has(lvpos):
+				_world_map._level_slots.erase(lvpos)
+			if _world_map._schema != null:
+				var orig_type: int = _world_map._original_slot_types.get(lvpos, MapSchema.SlotType.NONE) as int
+				_world_map._schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
+				_world_map._original_slot_types.erase(lvpos)
+
+		# 核心目标传达 L1.5（H1）：移除兜底清场胜利——占领敌方核心为唯一胜利路径
+		# （清场后核心仍在地图上，玩家需走到核心占领；能清场必能占核心、分叉无意义）
+	elif reason == BattleSession.EndReason.RETREAT:
+		# 持久 slot 战场参与设计 L1.1：撤离分支
+		# defeated_packs 实际是 BattleSession.participating_packs（全部参战敌包）
+		# 对每个 pack 区分两种处置：
+		#   1. troops 全死（current_hp<=0 全部移除后空了）→ 与 VICTORY 同处置（erase + schema 恢复），但不发奖励
+		#   2. troops 部分残余 → 敌包保留在 _level_slots 原位置，HP / 剩余 troop 已在战斗中实时写入
+		for pack_v in defeated_packs:
+			var pack: LevelSlot = pack_v as LevelSlot
+			if pack == null:
+				continue
+			pack.remove_defeated_troops()
+			if pack.troops.is_empty():
+				# 全灭路径（与 VICTORY 同步处置 _level_slots / _schema）
+				pack.mark_defeated()
+				var lvpos: Vector2i = pack.position
+				if _world_map._level_slots.has(lvpos):
+					_world_map._level_slots.erase(lvpos)
+				if _world_map._schema != null:
+					var orig_type: int = _world_map._original_slot_types.get(lvpos, MapSchema.SlotType.NONE) as int
+					_world_map._schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
+					_world_map._original_slot_types.erase(lvpos)
+			# 否则：敌包部分残余,保留在 _level_slots,troops HP 已是战斗结果
+
+		# 核心目标传达 L1.5（H1）：兜底清场胜利已移除——撤离即便清空全部 pack 也不胜利，需占核心
+
+	# MANUAL_EXIT：不发奖励，敌方残余保留；走通用收尾
+
+	# 4. 队员阵亡评估
+	#    VICTORY / MANUAL_EXIT：完整 evaluate（含队长跌阈值昏迷判定）；返回 true 表示已触发昏迷 / 失败遮罩，中断后续收尾
+	#      （队长跌阈值的极端情况通常已在战斗中走 COMA 路径，不走到此处）
+	#    RETREAT：撤离 ≠ 昏迷（持久 slot 战场参与设计 L1.1）—— 只清理阵亡队员、保留低 HP 队长，继续走通用收尾
+	#      不复用 evaluate_party_state，避免低 HP 队长撤离后被误判昏迷（codex 审查 P1）
+	if reason == BattleSession.EndReason.RETREAT:
+		_world_map._player_lifecycle.cleanup_dead_members()
+	elif _world_map._player_lifecycle.evaluate_party_state(_world_map._game_finished):
+		_world_map._battle_session = null
+		return
+
+	# 5. 通用收尾：清状态 + 重置移动力 + 刷新可达
+	_world_map._battle_session = null
+	if _world_map._unit != null:
+		_world_map._unit.current_movement = _world_map._unit.max_movement
+
+	# E4 被动战斗收尾：current_faction == ENEMY_1 表示战斗在敌方阶段末尾触发
+	# 这里替代 _on_enemy_phase_finished 末尾的"切 PLAYER"逻辑（被动战斗时跳过了那一段）
+	# 走 end_faction_turn + start_faction_turn 让 TickRegistry / EnemyAI / DayNightState 正常运转
+	if _world_map._turn_manager != null and _world_map._turn_manager.current_faction == Faction.ENEMY_1 and not _world_map._game_finished:
+		_world_map._turn_manager.end_faction_turn()
+		_world_map._turn_manager.current_faction = Faction.PLAYER
+		_world_map._turn_manager.start_faction_turn(Faction.PLAYER)
+
+	_world_map._refresh_reachable()
+	_world_map._update_hud()
+	_world_map._renderer.queue_redraw()
