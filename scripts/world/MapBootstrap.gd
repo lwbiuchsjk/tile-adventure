@@ -800,6 +800,13 @@ func init_world_subsystems() -> void:
 	_world_map._battle_coordinator = BattleCoordinator.new(_world_map)
 	_world_map._battle_coordinator.attach_sinks()
 
+	# WorldMap 二次重构 批 3 阶段 a：创建 ExplorationCoordinator + attach_sinks
+	# 设计：tile-advanture-design/WorldMap二次重构/批3_ExplorationCoordinator_MVP.md
+	# 必须在 BC 创建 + attach 之后调用，确保 EC 内部访问 BC 时不悬空
+	# 阶段 a：attach_sinks 暂为空骨架，仅迁出 4 个移动 + 可达性函数；阶段 f 接 TurnManager / TickRegistry
+	_world_map._exploration_coordinator = ExplorationCoordinator.new(_world_map)
+	_world_map._exploration_coordinator.attach_sinks()
+
 
 
 # ─────────────────────────────────────

@@ -301,6 +301,11 @@ var _battle_unit_config: Dictionary = {}
 ## 设计：tile-advanture-design/WorldMap二次重构/批2_BattleCoordinator_MVP.md
 var _battle_coordinator: BattleCoordinator = null
 
+## WorldMap 二次重构 批 3：探索行动协调器
+## 由 MapBootstrap.init_world_subsystems() 末尾创建 + attach_sinks（在 BC 之后）
+## 设计：tile-advanture-design/WorldMap二次重构/批3_ExplorationCoordinator_MVP.md
+var _exploration_coordinator: ExplorationCoordinator = null
+
 ## E 战斗就地展开 MVP：当前活跃战斗会话；null = 探索态，非 null = 战斗态
 ## 战斗态期间所有面板 / 输入需通过 _battle_coordinator.is_in_battle() 守卫拦截
 ## 由 [F] 键主动战斗触发创建（E3）；战斗结束在 _on_battle_session_ended sink 中清空
@@ -791,7 +796,7 @@ func _handle_click(screen_pos: Vector2) -> void:
 	_renderer.queue_redraw()
 
 	# 启动视觉移动动画
-	_start_move_animation(path_result.path)
+	_exploration_coordinator.start_move_animation(path_result.path)
 
 
 ## E 战斗就地展开 MVP：战斗态点击分流
@@ -852,77 +857,9 @@ func _handle_battle_click(grid_pos: Vector2i) -> void:
 	# 其他点击无响应（避免误操作直接结束当前单位）
 
 
-## 启动沿路径逐格移动的 Tween 动画
-func _start_move_animation(path: Array[Vector2i]) -> void:
-	_is_moving = true
-
-	# 终止可能残留的旧 Tween
-	if _move_tween != null and _move_tween.is_valid():
-		_move_tween.kill()
-
-	_move_tween = create_tween()
-
-	# 从路径第二个点开始（第一个是出发点），逐格插值视觉位置
-	for i in range(1, path.size()):
-		var target_pixel: Vector2 = _grid_to_pixel_center(path[i])
-		# 每步动画：移动视觉位置到下一格中心
-		_move_tween.tween_property(self, "_unit_visual_pos", target_pixel, MAP_BASE_CFG.move_step_duration)
-		# 每步回调：同步 Camera 位置并重绘
-		_move_tween.tween_callback(_on_move_step)
-
-	# 动画全部完成后的回调
-	_move_tween.tween_callback(_on_move_finished)
-
-## 每移动一格时的回调：同步 Camera 并重绘
-func _on_move_step() -> void:
-	# Camera 跟随视觉位置（平滑由 Camera2D 内置处理）
-	_camera.position = _unit_visual_pos
-	_renderer.queue_redraw()
-
-## 移动动画全部完成后的回调
-func _on_move_finished() -> void:
-	_is_moving = false
-
-	# 确保视觉位置精确对齐到逻辑位置
-	_unit_visual_pos = _grid_to_pixel_center(_unit.position)
-	_camera.position = _unit_visual_pos
-
-	# 消耗 1 补给
-	_supply = maxi(0, _supply - 1)
-
-	# 检查当前位置是否有一次性资源点并采集
-	_try_collect_resource_at(_unit.position)
-
-	# 全灭检查（战斗后部队全灭但玩家仍可移动的情况）
-	if _check_defeat():
-		return
-
-	# 设计 §3.1 主动战斗只走 [F] 键：UNCHALLENGED 敌方 LevelSlot 由 _get_blocked_positions
-	# 加进玩家阻挡，玩家走不到敌格；战斗入口统一由 _handle_f_key 触发，本路径不再分流战斗。
-
-	# M4: 无战斗分支 —— 若停留格有持久 slot，尝试占据（§6.5 边界：格上无敌方单位）
-	_try_player_occupy_at(_unit.position)
-
-	# 每次移动后重置移动力，为下一次移动做准备
-	_unit.current_movement = _unit.max_movement
-
-	_update_hud()
-	# 刷新可达范围（补给为 0 时会显示空集）
-	_refresh_reachable()
-
-## 刷新可达范围并触发重绘
-## 补给为 0 时不显示可达格；击退状态的关卡格视为不可通行
-func _refresh_reachable() -> void:
-	if _unit != null and _schema != null and not _game_finished and _supply > 0:
-		var blocked: Dictionary = _get_blocked_positions()
-		_reachable_tiles = MovementSystem.get_reachable_tiles(
-			_schema, _unit.position, float(_unit.current_movement), {}, blocked
-		)
-	else:
-		_reachable_tiles = {}
-	# E MVP：玩家移动后位置变化 → 触发距离内的候选可能变化 → 刷攻击按钮可见性
-	_update_explore_action_button()
-	_renderer.queue_redraw()
+## 玩家移动动画链 + 可达性（_start_move_animation / _on_move_step /
+## _on_move_finished / _refresh_reachable）已迁出至 ExplorationCoordinator（批 3 阶段 a）
+## 调用方改走 _exploration_coordinator.xxx —— 见上方字段声明
 
 ## 获取所有阻挡位置（未挑战敌方格阻挡玩家通行）
 func _get_blocked_positions() -> Dictionary:
@@ -946,7 +883,7 @@ func _on_faction_turn_started(faction: int) -> void:
 	# 玩家回合开始：重置单位移动力
 	_unit.current_movement = _unit.max_movement
 	_update_hud()
-	_refresh_reachable()
+	_exploration_coordinator.refresh_reachable()
 
 
 ## M4 自阵营回合 tick 回调：快照本势力所属 slot 的 garrison / occupy / influence 状态
@@ -1074,7 +1011,7 @@ func _open_build_panel() -> void:
 ## 关闭不推进回合（和 ManageUI 非扎营模式同语义）
 func _on_build_panel_closed() -> void:
 	_update_hud()
-	_refresh_reachable()
+	_exploration_coordinator.refresh_reachable()
 
 
 ## 升级请求回调（BuildPanelUI 按钮点击）
@@ -1707,7 +1644,7 @@ func _on_manage_closed() -> void:
 		_is_camping = false
 		_on_turn_end_settlement()
 	else:
-		_refresh_reachable()
+		_exploration_coordinator.refresh_reachable()
 
 ## 装配部队操作回调
 ## 旧部队转为 TROOP 道具放回背包（保留兵力和经验状态）

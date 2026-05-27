@@ -650,7 +650,7 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 		_world_map._turn_manager.current_faction = Faction.PLAYER
 		_world_map._turn_manager.start_faction_turn(Faction.PLAYER)
 
-	_world_map._refresh_reachable()
+	_world_map._exploration_coordinator.refresh_reachable()
 	_world_map._update_hud()
 	_world_map._renderer.queue_redraw()
 
