@@ -108,8 +108,8 @@ func _on_move_finished() -> void:
 	# 加进玩家阻挡，玩家走不到敌格；战斗入口统一由 _handle_f_key 触发，本路径不再分流战斗。
 
 	# M4: 无战斗分支 —— 若停留格有持久 slot，尝试占据（§6.5 边界：格上无敌方单位）
-	# 阶段 b 抽出后 self 自调；阶段 a 仍跨模块
-	_world_map._try_player_occupy_at(_world_map._unit.position)
+	# 阶段 b 已迁入 EC，self 调
+	try_player_occupy_at(_world_map._unit.position)
 
 	# 每次移动后重置移动力，为下一次移动做准备
 	_world_map._unit.current_movement = _world_map._unit.max_movement
@@ -139,3 +139,62 @@ func refresh_reachable() -> void:
 	# E MVP：玩家移动后位置变化 → 触发距离内的候选可能变化 → 刷攻击按钮可见性
 	_world_map._update_explore_action_button()
 	_world_map._renderer.queue_redraw()
+
+
+# ─────────────────────────────────────
+# 阶段 b：玩家占领 + 持久 slot 查询
+# ─────────────────────────────────────
+
+## 按坐标查找 PersistentSlot；未命中返回 null
+## MVP 总量 26，线性扫描开销可忽略
+func _find_persistent_slot_at(pos: Vector2i) -> PersistentSlot:
+	if _world_map._schema == null:
+		return null
+	for entry in _world_map._schema.persistent_slots:
+		var ps: PersistentSlot = entry as PersistentSlot
+		if ps.position == pos:
+			return ps
+	return null
+
+
+## 玩家在 pos 尝试占据持久 slot（移动结束 / 战斗胜利后调用）
+## 返回是否发生归属翻转；翻转后触发重绘以刷新影响范围覆盖
+##
+## 调用方：EC._on_move_finished 内 self 调 + WorldMap 其他路径跨模块调
+func try_player_occupy_at(pos: Vector2i) -> bool:
+	var ps: PersistentSlot = _find_persistent_slot_at(pos)
+	if ps == null:
+		return false
+	var flipped: bool = OccupationSystem.try_occupy(ps, Faction.PLAYER)
+	if flipped:
+		_world_map._renderer.queue_redraw()
+	return flipped
+
+
+## 获取当前归属于 PLAYER 的所有持久 slot
+##
+## 调用方：WorldMap._open_build_panel / _on_upgrade_requested（建造面板）+
+## BattleCoordinator._inject_reinforcements（援军注入）
+func get_player_persistent_slots() -> Array[PersistentSlot]:
+	return _get_persistent_slots_by_faction(Faction.PLAYER)
+
+
+## 获取当前归属于 ENEMY_1 的所有持久 slot（敌方援军_MVP / L1.4）
+##
+## 调用方：BattleCoordinator._inject_reinforcements（敌方援军注入）
+func get_enemy_persistent_slots() -> Array[PersistentSlot]:
+	return _get_persistent_slots_by_faction(Faction.ENEMY_1)
+
+
+## 按阵营过滤持久 slot（L1.4 抽出，玩家 / 敌方 getter 共用）
+func _get_persistent_slots_by_faction(faction: int) -> Array[PersistentSlot]:
+	var result: Array[PersistentSlot] = []
+	if _world_map._schema == null:
+		return result
+	for entry in _world_map._schema.persistent_slots:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null:
+			continue
+		if slot.owner_faction == faction:
+			result.append(slot)
+	return result

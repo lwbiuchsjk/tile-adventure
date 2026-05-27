@@ -331,10 +331,10 @@ func _inject_reinforcements() -> void:
 	var injected_total: int = 0
 	# 玩家方援军 → player_units
 	injected_total = _inject_side(
-		_world_map._get_player_persistent_slots(), _world_map._battle_session.player_units, Faction.PLAYER, arena, occupied, injected_total)
+		_world_map._exploration_coordinator.get_player_persistent_slots(), _world_map._battle_session.player_units, Faction.PLAYER, arena, occupied, injected_total)
 	# 敌方援军（L1.4）→ enemy_units（AI 控制）
 	injected_total = _inject_side(
-		_world_map._get_enemy_persistent_slots(), _world_map._battle_session.enemy_units, Faction.ENEMY_1, arena, occupied, injected_total)
+		_world_map._exploration_coordinator.get_enemy_persistent_slots(), _world_map._battle_session.enemy_units, Faction.ENEMY_1, arena, occupied, injected_total)
 
 
 ## 单阵营援军注入（敌方援军_MVP / L1.4 抽出）：命中判定 + 排序 + 逐条入场 + consumed 暂存 + 命中 slot 并入回收列表

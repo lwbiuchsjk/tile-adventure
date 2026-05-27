@@ -913,28 +913,9 @@ func _build_units_by_pos() -> Dictionary:
 	return out
 
 
-## 按坐标查找 PersistentSlot；未命中返回 null
-## MVP 总量 26，线性扫描开销可忽略
-func _find_persistent_slot_at(pos: Vector2i) -> PersistentSlot:
-	if _schema == null:
-		return null
-	for entry in _schema.persistent_slots:
-		var ps: PersistentSlot = entry as PersistentSlot
-		if ps.position == pos:
-			return ps
-	return null
-
-
-## 玩家在 pos 尝试占据持久 slot（移动结束 / 战斗胜利后调用）
-## 返回是否发生归属翻转；翻转后触发重绘以刷新影响范围覆盖
-func _try_player_occupy_at(pos: Vector2i) -> bool:
-	var ps: PersistentSlot = _find_persistent_slot_at(pos)
-	if ps == null:
-		return false
-	var flipped: bool = OccupationSystem.try_occupy(ps, Faction.PLAYER)
-	if flipped:
-		_renderer.queue_redraw()
-	return flipped
+## 玩家占领 + 持久 slot 查询（_find_persistent_slot_at / try_player_occupy_at）
+## 已迁出至 ExplorationCoordinator（批 3 阶段 b）
+## 调用方改走 _exploration_coordinator.try_player_occupy_at()
 
 
 # ─────────────────────────────────────────
@@ -1004,7 +985,7 @@ func _open_build_panel() -> void:
 	if not _build_upgrade_enabled:
 		_show_notice("当前阶段不可手动升级")
 		return
-	_build_panel_ui.open(_get_player_persistent_slots(), get_stone(Faction.PLAYER))
+	_build_panel_ui.open(_exploration_coordinator.get_player_persistent_slots(), get_stone(Faction.PLAYER))
 
 
 ## 建造面板关闭回调
@@ -1034,32 +1015,13 @@ func _on_upgrade_requested(slot: PersistentSlot) -> void:
 	_show_notice("%s 开始升级 → L%d" % [start_id_text, slot.level + 1])
 	# 面板仍打开：刷新显示
 	if _build_panel_ui.is_open:
-		_build_panel_ui.refresh(_get_player_persistent_slots(), get_stone(Faction.PLAYER))
+		_build_panel_ui.refresh(_exploration_coordinator.get_player_persistent_slots(), get_stone(Faction.PLAYER))
 	_renderer.queue_redraw()
 
 
-## 获取当前归属于 PLAYER 的所有持久 slot
-func _get_player_persistent_slots() -> Array[PersistentSlot]:
-	return _get_persistent_slots_by_faction(Faction.PLAYER)
-
-
-## 获取当前归属于 ENEMY_1 的所有持久 slot（敌方援军_MVP / L1.4）
-func _get_enemy_persistent_slots() -> Array[PersistentSlot]:
-	return _get_persistent_slots_by_faction(Faction.ENEMY_1)
-
-
-## 按阵营过滤持久 slot（L1.4 抽出，玩家 / 敌方 getter 共用）
-func _get_persistent_slots_by_faction(faction: int) -> Array[PersistentSlot]:
-	var result: Array[PersistentSlot] = []
-	if _schema == null:
-		return result
-	for entry in _schema.persistent_slots:
-		var slot: PersistentSlot = entry as PersistentSlot
-		if slot == null:
-			continue
-		if slot.owner_faction == faction:
-			result.append(slot)
-	return result
+## 持久 slot 查询（get_player/_enemy_persistent_slots / _get_persistent_slots_by_faction）
+## 已迁出至 ExplorationCoordinator（批 3 阶段 b）
+## 调用方改走 _exploration_coordinator.get_xxx_persistent_slots()
 
 
 ## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
