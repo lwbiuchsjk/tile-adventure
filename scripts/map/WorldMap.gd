@@ -564,7 +564,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
 		if key.pressed and not key.echo and key.keycode == KEY_SPACE:
-			_start_camp()
+			_exploration_coordinator.start_camp()
 
 	# 回车键（视觉与操作改进 §2.3）：战斗中玩家回合 → 结束回合（带未移动守卫）
 	# 放在通用锁守卫之后 + 显式 is_animating 守卫 → 动画期间 / 面板态不触发
@@ -1024,111 +1024,9 @@ func _on_upgrade_requested(slot: PersistentSlot) -> void:
 ## 调用方改走 _exploration_coordinator.get_xxx_persistent_slots()
 
 
-## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
-func _start_camp() -> void:
-	# E MVP：战斗态守卫——_is_in_battle 期间不允许扎营（设计 §2.10）
-	if _game_finished or _is_cycle_advancing or _is_moving or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open or _event_panel.is_open or _player_lifecycle.is_in_coma() or _battle_coordinator.is_in_battle():
-		return
-	_is_camping = true
-	_camp_count += 1
-	# B 重生周期 MVP：累计本周期扎营次数（C MVP 入队判定的输入）
-	# 放在 _camp_count += 1 紧后；advance_cycle 时 RunState 会把这个值 push 入 milestones
-	RunState.record_camp()
-
-	# D MVP：扎营按下瞬间进入夜晚（用户跑测 2026-05-06 反馈）
-	# 不等到 ENEMY_1 回合切换才生效——玩家心智上扎营即入夜
-	# override 由 DayNightState 在新 PLAYER 回合开始时自动清
-	DayNightState.set_phase_override(DayNightState.Phase.NIGHT)
-
-	# 扎营恢复补给
-	# F MVP：作为"扎营整顿"的第一条事件呈现；放在持久 slot 产出之前 push，
-	# 保证事件队列顺序与玩家心智一致（先恢复，再产出）
-	#
-	# 入口 2 MVP 2.3 扩展（2026-05-11）：补给恢复 event 也走 NarrativeProvider
-	# 场景:camp_supply_{wild|village|town}(独立池,与产出叙事分开)
-	# 占位符:leader_name / count(补给恢复量) / slot_name(村庄/城镇场景)
-	_supply += _camp_restore
-	if _camp_restore > 0:
-		var supply_info: Dictionary = _resolve_camp_scenario()
-		var supply_scenario: String = "camp_supply_" + String(supply_info.get("scenario", "camp_wild")).substr(5)
-		var supply_ctx: Dictionary = {
-			"leader_name": _player_lifecycle.current_leader_name(),
-			"count": _camp_restore,
-		}
-		if supply_scenario != "camp_supply_wild":
-			supply_ctx["slot_name"] = String(supply_info.get("slot_name", ""))
-		var supply_narrative: String = NarrativeProvider.pick(supply_scenario, supply_ctx)
-		_event_panel.push_event(_build_reward_event("扎营休整", supply_narrative))
-
-	# M6: 持久 slot 扎营结算（玩家侧）
-	# 流程：camp_pos 查 C 作用域覆盖 → 逐 slot 按类型 × 作用域覆盖 → 落地到石料 / 补给 / 背包
-	_settle_persistent_camp_production()
-
-	# C 重生周期 MVP：扎营产出事件 push 完后再做里程碑检查
-	# 顺序意图：玩家心智上"扎营整顿 → 物资产出 → 新人加入"，叙事节奏自然
-	# RunState.check_recruit_milestone 内部命中时调 _on_recruit_triggered → push_event
-	# 入队事件因此排在扎营产出事件之后，由 EventPanelUI FIFO 依次弹出
-	RunState.check_recruit_milestone(_player_lifecycle.get_team_hero_ids())
-
-	_update_hud()
-
-	# 入口 2 MVP 2.1 议题 1：扎营时事件队列清空后再开 ManageUI
-	# 流程拆分：
-	#   - 有事件入队（_event_panel.is_open）→ 置 _pending_camp_manage_open，等 closed 信号回调
-	#   - 无事件入队（产出 / 里程碑都未命中）→ 直接打开 ManageUI（保持原行为）
-	# 设计意图：避免事件面板与 ManageUI 同帧叠加弹出（详见 [[事件流程与队长过渡_MVP#流程 1]]）
-	if _event_panel != null and _event_panel.is_open:
-		_pending_camp_manage_open = true
-	else:
-		_manage_ui.open(_player_lifecycle.characters(), _inventory, true)
-
-
-## M6 扎营结算：ProductionSystem.settle_camp + apply_production + 飘字
-## RNG 使用 _world_rng 保证同 seed 运行结果可复现
-## 背包满 / 池空等失败条目另行通过 format_dropped_text 提示，避免"飘字说获得实际没有"的误导
-func _settle_persistent_camp_production() -> void:
-	if _schema == null or _unit == null:
-		return
-	var results: Array = ProductionSystem.settle_camp(
-		_unit.position, Faction.PLAYER, _schema.persistent_slots, _world_rng
-	)
-	if results.is_empty():
-		return
-	var add_supply: Callable = func(amount: int) -> void: _supply += amount
-	var add_stone_cb: Callable = func(amount: int) -> void: add_stone(Faction.PLAYER, amount)
-	# 背包入库返回是否成功（满时返回 false 供 apply_production 归 dropped）
-	var add_item_cb: Callable = func(item: ItemData) -> bool:
-		var n: int = _inventory.add_items([item])
-		return n > 0
-	var outcome: Dictionary = ProductionSystem.apply_production(
-		results, add_supply, add_stone_cb, add_item_cb
-	)
-
-	var applied: Array = outcome.get("applied", []) as Array
-	var dropped: Array = outcome.get("dropped", []) as Array
-	# F MVP：成功条目走事件面板（每条产出独立事件，符合 §3 / §7 场景 2 逐条呈现预期）
-	# 失败条目（背包满 / 池空）属于错误反馈，仍走 _show_notice 飘字
-	#
-	# 入口 2 MVP 2.3（2026-05-11）：narrative 走 NarrativeProvider 池抽取
-	# 整次扎营单一 scenario:玩家位置一次性判定,所有 entry 共用同一情境(野外/村庄/城镇)
-	if not applied.is_empty():
-		var camp_info: Dictionary = _resolve_camp_scenario()
-		var camp_scenario: String = String(camp_info.get("scenario", "camp_wild"))
-		var slot_name: String = String(camp_info.get("slot_name", ""))
-		for entry in applied:
-			var entry_dict: Dictionary = entry as Dictionary
-			var item_count: Dictionary = _entry_to_item_count(entry_dict)
-			var ctx: Dictionary = {
-				"leader_name": _player_lifecycle.current_leader_name(),
-				"item": item_count["item"],
-				"count": item_count["count"],
-			}
-			if camp_scenario != "camp_wild":
-				ctx["slot_name"] = slot_name
-			var narrative: String = NarrativeProvider.pick(camp_scenario, ctx)
-			_event_panel.push_event(_build_reward_event("扎营产出", narrative))
-	if not dropped.is_empty():
-		_show_notice("扎营产出部分失败：%s" % ProductionSystem.format_dropped_text(dropped))
+## 扎营 + 持久 slot 营收（start_camp / _settle_persistent_camp_production）已迁出至
+## ExplorationCoordinator（批 3 阶段 c）
+## 调用方改走 _exploration_coordinator.start_camp()
 
 
 ## 构造 reward 事件 payload（F MVP §4 reward 模板）
@@ -1196,7 +1094,7 @@ func _try_collect_resource_at(pos: Vector2i) -> void:
 	if not applied.is_empty():
 		for applied_entry in applied:
 			var entry_dict: Dictionary = applied_entry as Dictionary
-			var item_count: Dictionary = _entry_to_item_count(entry_dict)
+			var item_count: Dictionary = _exploration_coordinator._entry_to_item_count(entry_dict)
 			var ctx: Dictionary = {
 				"leader_name": _player_lifecycle.current_leader_name(),
 				"item": item_count["item"],
@@ -1660,80 +1558,9 @@ func _on_use_item(character: CharacterData, item: ItemData) -> void:
 	# 但 EXP 升级品质后 max_hp 会刷新，理论上有跨阈值可能。统一调用以保持入口对齐）
 	_player_lifecycle.evaluate_party_state(_game_finished)
 
-## 入口 2 MVP 2.3（2026-05-11）：扎营场景判定
-##
-## 返回 Dictionary:
-##   {"scenario": "camp_wild" | "camp_village" | "camp_town", "slot_name": String}
-##   wild 场景 slot_name 为空字符串
-##
-## 优先级:TOWN > VILLAGE > WILD(玩家位置同时在多个 slot 范围内时取最高级)
-## slot_name 取该次判定命中的同类型 slot 中曼哈顿距离最近的 display_id
-func _resolve_camp_scenario() -> Dictionary:
-	var result: Dictionary = {"scenario": "camp_wild", "slot_name": ""}
-	if _schema == null or _unit == null:
-		return result
-	# OccupationSystem.slots_covering 返回无类型 Array;不能直接赋给 Array[PersistentSlot]
-	# 用 Array 接收 + 循环内 cast,符合项目类型化规范(避免 LSP 报错)
-	var covered: Array = OccupationSystem.slots_covering(
-		_unit.position, Faction.PLAYER, _schema.persistent_slots
-	)
-	# 过滤玩家方 + 分类
-	var towns: Array[PersistentSlot] = []
-	var villages: Array[PersistentSlot] = []
-	for entry in covered:
-		var slot: PersistentSlot = entry as PersistentSlot
-		if slot == null or slot.owner_faction != Faction.PLAYER:
-			continue
-		if slot.type == PersistentSlot.Type.TOWN:
-			towns.append(slot)
-		elif slot.type == PersistentSlot.Type.VILLAGE:
-			villages.append(slot)
-	# 取曼哈顿距离最近的 slot 为 slot_name 来源
-	var pick_nearest: Callable = func(slots: Array[PersistentSlot]) -> PersistentSlot:
-		var best: PersistentSlot = null
-		var best_dist: int = 99999
-		for s in slots:
-			var d: int = absi(_unit.position.x - s.position.x) + absi(_unit.position.y - s.position.y)
-			if d < best_dist:
-				best_dist = d
-				best = s
-		return best
-	if not towns.is_empty():
-		result["scenario"] = "camp_town"
-		var nearest: PersistentSlot = pick_nearest.call(towns)
-		if nearest != null:
-			result["slot_name"] = nearest.display_id
-	elif not villages.is_empty():
-		result["scenario"] = "camp_village"
-		var nearest: PersistentSlot = pick_nearest.call(villages)
-		if nearest != null:
-			result["slot_name"] = nearest.display_id
-	return result
-
-
-## 入口 2 MVP 2.3（2026-05-11）：把 ProductionSystem entry 转为 {item, count} 字典
-##
-## entry 字段结构因 kind 不同:
-##   KIND_RESOURCE: resource_type / amount → 取 ResourceSlot.RESOURCE_TYPE_NAMES + amount
-##   KIND_STONE:    amount → "石料" + amount
-##   KIND_ITEM:     item: ItemData → display_name + stack_count
-##   其他:          fallback "物资" / 1
-func _entry_to_item_count(entry: Dictionary) -> Dictionary:
-	var kind: String = String(entry.get("kind", ""))
-	match kind:
-		ProductionSystem.KIND_RESOURCE:
-			var res_type: int = int(entry.get("resource_type", 0))
-			var name: String = ResourceSlot.RESOURCE_TYPE_NAMES.get(res_type, "?") as String
-			return {"item": name, "count": int(entry.get("amount", 0))}
-		ProductionSystem.KIND_STONE:
-			return {"item": "石料", "count": int(entry.get("amount", 0))}
-		ProductionSystem.KIND_ITEM:
-			var item: ItemData = entry.get("item") as ItemData
-			if item != null:
-				return {"item": item.display_name, "count": item.stack_count}
-			return {"item": "物资", "count": 1}
-		_:
-			return {"item": "物资", "count": 1}
+## 扎营 helper（_resolve_camp_scenario / _entry_to_item_count）已迁出至
+## ExplorationCoordinator（批 3 阶段 c 主会话补做 —— 设计文档漏列）
+## 调用方改走 _exploration_coordinator._xxx（阶段 d/f 抽出后 EC 内 self 调）
 
 
 
@@ -1993,7 +1820,7 @@ func _on_explore_attack_pressed() -> void:
 ## 入口 4 MVP（2026-05-09）：探索态【扎营】按钮点击 handler
 ## 守卫由 _start_camp 内部处理（与空格键路径共用单一入口）
 func _on_explore_camp_pressed() -> void:
-	_start_camp()
+	_exploration_coordinator.start_camp()
 
 
 ## 入口 4 MVP（2026-05-09 BUG 修复）：事件面板关闭后刷新探索态行动按钮

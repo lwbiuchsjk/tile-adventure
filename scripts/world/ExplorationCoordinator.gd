@@ -198,3 +198,196 @@ func _get_persistent_slots_by_faction(faction: int) -> Array[PersistentSlot]:
 		if slot.owner_faction == faction:
 			result.append(slot)
 	return result
+
+
+# ─────────────────────────────────────
+# 阶段 c：扎营 + 持久 slot 营收
+# ─────────────────────────────────────
+
+## 扎营入口：恢复补给 → 资源点结算 → 打开养成面板
+##
+## 调用方：WorldMap 输入路由（空格键 / 探索按钮）
+func start_camp() -> void:
+	# E MVP：战斗态守卫——is_in_battle 期间不允许扎营（设计 §2.10）
+	if _world_map._game_finished or _world_map._is_cycle_advancing or _world_map._is_moving or _world_map._is_camping or _world_map._manage_ui.is_open or _world_map._build_panel_ui.is_open or _world_map._event_panel.is_open or _world_map._player_lifecycle.is_in_coma() or _world_map._battle_coordinator.is_in_battle():
+		return
+	_world_map._is_camping = true
+	_world_map._camp_count += 1
+	# B 重生周期 MVP：累计本周期扎营次数（C MVP 入队判定的输入）
+	# 放在 _camp_count += 1 紧后；advance_cycle 时 RunState 会把这个值 push 入 milestones
+	RunState.record_camp()
+
+	# D MVP：扎营按下瞬间进入夜晚（用户跑测 2026-05-06 反馈）
+	# 不等到 ENEMY_1 回合切换才生效——玩家心智上扎营即入夜
+	# override 由 DayNightState 在新 PLAYER 回合开始时自动清
+	DayNightState.set_phase_override(DayNightState.Phase.NIGHT)
+
+	# 扎营恢复补给
+	# F MVP：作为"扎营整顿"的第一条事件呈现；放在持久 slot 产出之前 push，
+	# 保证事件队列顺序与玩家心智一致（先恢复，再产出）
+	#
+	# 入口 2 MVP 2.3 扩展（2026-05-11）：补给恢复 event 也走 NarrativeProvider
+	# 场景:camp_supply_{wild|village|town}(独立池,与产出叙事分开)
+	# 占位符:leader_name / count(补给恢复量) / slot_name(村庄/城镇场景)
+	_world_map._supply += _world_map._camp_restore
+	if _world_map._camp_restore > 0:
+		var supply_info: Dictionary = _resolve_camp_scenario()
+		var supply_scenario: String = "camp_supply_" + String(supply_info.get("scenario", "camp_wild")).substr(5)
+		var supply_ctx: Dictionary = {
+			"leader_name": _world_map._player_lifecycle.current_leader_name(),
+			"count": _world_map._camp_restore,
+		}
+		if supply_scenario != "camp_supply_wild":
+			supply_ctx["slot_name"] = String(supply_info.get("slot_name", ""))
+		var supply_narrative: String = NarrativeProvider.pick(supply_scenario, supply_ctx)
+		# _build_reward_event 阶段 f 抽出后改 self 调；阶段 c 仍跨模块
+		_world_map._event_panel.push_event(_world_map._build_reward_event("扎营休整", supply_narrative))
+
+	# M6: 持久 slot 扎营结算（玩家侧）
+	# 流程：camp_pos 查 C 作用域覆盖 → 逐 slot 按类型 × 作用域覆盖 → 落地到石料 / 补给 / 背包
+	_settle_persistent_camp_production()
+
+	# C 重生周期 MVP：扎营产出事件 push 完后再做里程碑检查
+	# 顺序意图：玩家心智上"扎营整顿 → 物资产出 → 新人加入"，叙事节奏自然
+	# RunState.check_recruit_milestone 内部命中时调 _on_recruit_triggered → push_event
+	# 入队事件因此排在扎营产出事件之后，由 EventPanelUI FIFO 依次弹出
+	RunState.check_recruit_milestone(_world_map._player_lifecycle.get_team_hero_ids())
+
+	_world_map._update_hud()
+
+	# 入口 2 MVP 2.1 议题 1：扎营时事件队列清空后再开 ManageUI
+	# 流程拆分：
+	#   - 有事件入队（_event_panel.is_open）→ 置 _pending_camp_manage_open，等 closed 信号回调
+	#   - 无事件入队（产出 / 里程碑都未命中）→ 直接打开 ManageUI（保持原行为）
+	# 设计意图：避免事件面板与 ManageUI 同帧叠加弹出（详见 [[事件流程与队长过渡_MVP#流程 1]]）
+	if _world_map._event_panel != null and _world_map._event_panel.is_open:
+		_world_map._pending_camp_manage_open = true
+	else:
+		_world_map._manage_ui.open(_world_map._player_lifecycle.characters(), _world_map._inventory, true)
+
+
+## M6 扎营结算：ProductionSystem.settle_camp + apply_production + 飘字
+## RNG 使用 _world_rng 保证同 seed 运行结果可复现
+## 背包满 / 池空等失败条目另行通过 format_dropped_text 提示，避免"飘字说获得实际没有"的误导
+func _settle_persistent_camp_production() -> void:
+	if _world_map._schema == null or _world_map._unit == null:
+		return
+	var results: Array = ProductionSystem.settle_camp(
+		_world_map._unit.position, Faction.PLAYER, _world_map._schema.persistent_slots, _world_map._world_rng
+	)
+	if results.is_empty():
+		return
+	var wm: WorldMap = _world_map  # 闭包内便于 lambda 访问
+	var add_supply: Callable = func(amount: int) -> void: wm._supply += amount
+	var add_stone_cb: Callable = func(amount: int) -> void: wm.add_stone(Faction.PLAYER, amount)
+	# 背包入库返回是否成功（满时返回 false 供 apply_production 归 dropped）
+	var add_item_cb: Callable = func(item: ItemData) -> bool:
+		var n: int = wm._inventory.add_items([item])
+		return n > 0
+	var outcome: Dictionary = ProductionSystem.apply_production(
+		results, add_supply, add_stone_cb, add_item_cb
+	)
+
+	var applied: Array = outcome.get("applied", []) as Array
+	var dropped: Array = outcome.get("dropped", []) as Array
+	# F MVP：成功条目走事件面板（每条产出独立事件，符合 §3 / §7 场景 2 逐条呈现预期）
+	# 失败条目（背包满 / 池空）属于错误反馈，仍走 _show_notice 飘字
+	#
+	# 入口 2 MVP 2.3（2026-05-11）：narrative 走 NarrativeProvider 池抽取
+	# 整次扎营单一 scenario:玩家位置一次性判定,所有 entry 共用同一情境(野外/村庄/城镇)
+	if not applied.is_empty():
+		var camp_info: Dictionary = _resolve_camp_scenario()
+		var camp_scenario: String = String(camp_info.get("scenario", "camp_wild"))
+		var slot_name: String = String(camp_info.get("slot_name", ""))
+		for entry in applied:
+			var entry_dict: Dictionary = entry as Dictionary
+			var item_count: Dictionary = _entry_to_item_count(entry_dict)
+			var ctx: Dictionary = {
+				"leader_name": _world_map._player_lifecycle.current_leader_name(),
+				"item": item_count["item"],
+				"count": item_count["count"],
+			}
+			if camp_scenario != "camp_wild":
+				ctx["slot_name"] = slot_name
+			var narrative: String = NarrativeProvider.pick(camp_scenario, ctx)
+			# _build_reward_event 阶段 f 抽出后改 self 调
+			_world_map._event_panel.push_event(_world_map._build_reward_event("扎营产出", narrative))
+	if not dropped.is_empty():
+		_world_map._show_notice("扎营产出部分失败：%s" % ProductionSystem.format_dropped_text(dropped))
+
+
+## 解析当前扎营场景（优先级 TOWN > VILLAGE > WILD）
+##
+## 优先级:TOWN > VILLAGE > WILD(玩家位置同时在多个 slot 范围内时取最高级)
+## slot_name 取该次判定命中的同类型 slot 中曼哈顿距离最近的 display_id
+##
+## 主会话补做（设计文档漏列）：批 3 阶段 c 顺带迁入（仅扎营相关，与扎营流程同生命周期）
+func _resolve_camp_scenario() -> Dictionary:
+	var result: Dictionary = {"scenario": "camp_wild", "slot_name": ""}
+	if _world_map._schema == null or _world_map._unit == null:
+		return result
+	# OccupationSystem.slots_covering 返回无类型 Array;不能直接赋给 Array[PersistentSlot]
+	# 用 Array 接收 + 循环内 cast,符合项目类型化规范(避免 LSP 报错)
+	var covered: Array = OccupationSystem.slots_covering(
+		_world_map._unit.position, Faction.PLAYER, _world_map._schema.persistent_slots
+	)
+	# 过滤玩家方 + 分类
+	var towns: Array[PersistentSlot] = []
+	var villages: Array[PersistentSlot] = []
+	for entry in covered:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null or slot.owner_faction != Faction.PLAYER:
+			continue
+		if slot.type == PersistentSlot.Type.TOWN:
+			towns.append(slot)
+		elif slot.type == PersistentSlot.Type.VILLAGE:
+			villages.append(slot)
+	# 取曼哈顿距离最近的 slot 为 slot_name 来源
+	var wm: WorldMap = _world_map
+	var pick_nearest: Callable = func(slots: Array[PersistentSlot]) -> PersistentSlot:
+		var best: PersistentSlot = null
+		var best_dist: int = 99999
+		for s in slots:
+			var d: int = absi(wm._unit.position.x - s.position.x) + absi(wm._unit.position.y - s.position.y)
+			if d < best_dist:
+				best_dist = d
+				best = s
+		return best
+	if not towns.is_empty():
+		result["scenario"] = "camp_town"
+		var nearest: PersistentSlot = pick_nearest.call(towns)
+		if nearest != null:
+			result["slot_name"] = nearest.display_id
+	elif not villages.is_empty():
+		result["scenario"] = "camp_village"
+		var nearest: PersistentSlot = pick_nearest.call(villages)
+		if nearest != null:
+			result["slot_name"] = nearest.display_id
+	return result
+
+
+## 入口 2 MVP 2.3（2026-05-11）：把 ProductionSystem entry 转为 {item, count} 字典
+##
+## entry 字段结构因 kind 不同:
+##   KIND_RESOURCE: resource_type / amount → 取 ResourceSlot.RESOURCE_TYPE_NAMES + amount
+##   KIND_STONE:    amount → "石料" + amount
+##   KIND_ITEM:     item: ItemData → display_name + stack_count
+##   其他:          fallback "物资" / 1
+##
+## 主会话补做（设计文档漏列）：批 3 阶段 c 顺带迁入（扎营 + 阶段 f 奖励工厂共用）
+func _entry_to_item_count(entry: Dictionary) -> Dictionary:
+	var kind: String = String(entry.get("kind", ""))
+	match kind:
+		ProductionSystem.KIND_RESOURCE:
+			var res_type: int = int(entry.get("resource_type", 0))
+			var name: String = ResourceSlot.RESOURCE_TYPE_NAMES.get(res_type, "?") as String
+			return {"item": name, "count": int(entry.get("amount", 0))}
+		ProductionSystem.KIND_STONE:
+			return {"item": "石料", "count": int(entry.get("amount", 0))}
+		ProductionSystem.KIND_ITEM:
+			var item: ItemData = entry.get("item") as ItemData
+			if item != null:
+				return {"item": item.display_name, "count": item.stack_count}
+			return {"item": "物资", "count": 1}
+		_:
+			return {"item": "物资", "count": 1}
