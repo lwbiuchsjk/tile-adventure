@@ -834,7 +834,7 @@ func _handle_battle_click(grid_pos: Vector2i) -> void:
 		if targets.has(hit_unit):
 			var result: Dictionary = _battle_session.try_player_attack(hit_unit)
 			if result.get("success", false):
-				_post_player_action_check()
+				_battle_coordinator._post_player_action_check()
 		# 不在攻击范围内的敌方单位 → 静默（不当作"移动失败"提示）
 		return
 
@@ -842,7 +842,7 @@ func _handle_battle_click(grid_pos: Vector2i) -> void:
 	var reachable: Array[Vector2i] = _battle_session.get_reachable_for_current()
 	if reachable.has(grid_pos):
 		if _battle_session.try_player_move(grid_pos):
-			_post_player_action_check()
+			_battle_coordinator._post_player_action_check()
 		return
 
 	# 其他点击无响应（避免误操作直接结束当前单位）
@@ -1355,11 +1355,11 @@ func _on_turn_end_settlement() -> void:
 ## 字典引用，改为通过 _world_view facade 读写。签名相应缩 2 参（旧 9 参 → 新 8 参）。
 func start_enemy_move_phase() -> void:
 	if _game_finished or not _enemy_movement_enabled:
-		_on_enemy_phase_finished()
+		_battle_coordinator._on_enemy_phase_finished()
 		return
 	if _schema == null:
 		push_warning("WorldMap.start_enemy_move_phase: schema 未初始化，跳过本回合敌方移动")
-		_on_enemy_phase_finished()
+		_battle_coordinator._on_enemy_phase_finished()
 		return
 	# P0 第二阶段：target_pos 参数 deprecated（保留作签名兼容），EnemyMovement 不再读取
 	# 传 _start_pos 仅作占位；per-pack target 由 EnemyMovement._pick_target_for 内部决策
@@ -1510,45 +1510,9 @@ func _get_enemy_target_pos() -> Vector2i:
 
 
 # ─────────────────────────────────────────
-# 敌方移动信号处理（M7 改造）
+# 敌方移动信号处理（_on_enemy_phase_finished 已迁出至 BattleCoordinator 批 2 阶段 e）
+# attach_sinks() 内接 EnemyMovement.phase_finished → BC._on_enemy_phase_finished
 # ─────────────────────────────────────────
-
-## 敌方移动阶段完成回调
-## M7 迁移：end_faction_turn(ENEMY_1) → start_faction_turn(PLAYER)
-## start_faction_turn(PLAYER) 内部会跑 PLAYER tick，然后 emit signal → _on_faction_turn_started 继续玩家侧
-##
-## 防御（P2 审查）：仅在 current_faction == ENEMY_1 时切换；若被误调在玩家回合中，直接返回避免错误双 start
-##
-## B 重生周期 MVP：昏迷过渡期间（_player_lifecycle.is_in_coma()=true）也直接 return——
-## 战斗结算时若触发昏迷，BattleSession 走 COMA 退出，由 _on_battle_session_ended
-## 处理 _enemy_movement.finish_phase()。让 phase_finished 信号发出后本回调若切回
-## PLAYER 回合会跑额外 tick / HUD 刷新，
-## 1.5s 后 reload 时这些状态被覆盖，但中间存在时序风险（如 tick 触发新增建造）
-func _on_enemy_phase_finished() -> void:
-	if _game_finished:
-		return
-	if _player_lifecycle.is_in_coma():
-		return
-	if _turn_manager.current_faction != Faction.ENEMY_1:
-		push_warning("WorldMap._on_enemy_phase_finished: current_faction != ENEMY_1，忽略该次回调")
-		return
-
-	# E4 被动战斗（用户拍板 2026-05-08 与主动战斗语义统一）：
-	#   触发判断 = 玩家保护区内（dist ≤ _battle_trigger_range）有敌方包 → 才触发被动战斗
-	#   入战范围 = 战场范围（dist ≤ _battle_arena_range）内全部敌方包入战
-	#   早前只收集 trigger_range 内会让 dist 4-6 的包游离在战场视觉但不参战
-	if not _battle_coordinator.is_in_battle() and _unit != null:
-		var trigger_zone: Array[LevelSlot] = _battle_coordinator.get_packs_in_range(_unit.position, _battle_trigger_range)
-		if not trigger_zone.is_empty():
-			var packs_in_arena: Array[LevelSlot] = _battle_coordinator.get_packs_in_range(_unit.position, _battle_arena_range)
-			if packs_in_arena.is_empty():
-				packs_in_arena = trigger_zone
-			_battle_coordinator.start_passive_battle(packs_in_arena)
-			return
-
-	_turn_manager.end_faction_turn()
-	_turn_manager.current_faction = Faction.PLAYER
-	_turn_manager.start_faction_turn(Faction.PLAYER)
 
 # ─────────────────────────────────────────
 # E 战斗就地展开 MVP — 战斗会话 helper / sink
@@ -1582,69 +1546,9 @@ func _on_enemy_phase_finished() -> void:
 ## attach_sinks() 内接 BattleAnimDirector.anims_drained → _try_schedule_next_enemy_step
 
 
-## 玩家行动后判断：当前单位回合结束（has_attacked = true）→ 自动切下一玩家单位
-## try_player_attack 已置 has_attacked = true；try_player_move 仅 has_moved，不切
-##
-## 切到下一单位 / 切敌方回合都由 BattleSession.advance_to_next_player_unit 处理
-## 敌方回合启动后由 _step_enemy_turn_loop 串行驱动
-##
-## 时序修复 B（2026-05-11）：玩家攻击 / 跳过 anim 还在跑时，
-## 直接 advance → 敌方 step 会让"敌方逻辑判定 + COMA 检测"先于玩家攻击动画完成
-## 玩家观感：攻击完毕立刻 COMA 黑屏，看不到敌方反击的因果
-##
-## 修复：在 advance 前 await 当前 anim 队列空（含玩家攻击三段 anim + 死亡 anim）
-## 效果：玩家攻击动画完整播完 → 敌方 step → 敌方攻击动画 → COMA 黑屏（如果命中）
-##
-## 调用方（_handle_battle_click / _on_battle_hud_attack_pressed / _on_battle_hud_skip_pressed）
-## fire-and-forget 即可，不必 await 本函数；
-## await 期间玩家点击被 _handle_battle_click 内 _battle_anim_director.is_animating() 守卫拦截，
-## 按钮被 BattleAnimDirector 在动画期间 set_actions_enabled(false) 锁住，无并发风险
-func _post_player_action_check() -> void:
-	if _battle_session == null or _battle_session.is_ended():
-		return
-	if not _battle_session.is_player_turn():
-		return
-	var actor: BattleUnit = _battle_session.current_actor()
-	if actor == null or actor.has_attacked:
-		# 关键 await：等当前 anim 队列空，让玩家攻击 anim 完整播完
-		await _battle_anim_director.await_anims_finished()
-		# await 期间状态可能变化（理论 VICTORY 由 try_player_attack 内同步触发；
-		# 此处仍做防御性校验，避免 await 期间被外部代码意外结束 session）
-		if _battle_session == null or _battle_session.is_ended():
-			return
-		if not _battle_session.is_player_turn():
-			return
-		var actor2: BattleUnit = _battle_session.current_actor()
-		if actor2 == null or actor2.has_attacked:
-			_battle_session.advance_to_next_player_unit()
-			# 切到敌方回合 → 串行驱动敌方单位行动
-			if _battle_session.is_enemy_turn():
-				_run_enemy_turn_async()
-
-
-## 敌方回合串行驱动（异步推进 + 等动画完成才推下一个）
-##
-## 入口 1.2 P1-1 修复：
-##   - 不再 step 后立即用固定 0.18s timer 推下一个 step（会与 0.35s 移动 / 0.30s 攻击 Tween 重叠）
-##   - 改为：本次 step 触发 emit → sink 入队 anim runner → BattleAnimDirector 动画清空时
-##     emit anims_drained → _try_schedule_next_enemy_step（带 ANIM_CFG.enemy_step_gap=0.18s 间隔）
-##   - 兜底：若本次 step 没产生任何 anim（BattleAI 极端短路），Director 不在动画态，主动调度
-##
-## 战斗结束（_check_battle_end_after_action 命中胜利 / 昏迷）时 step_enemy_turn 返回 false
-## sink 已在 BattleSession.end 中触发；这里只需停止串行
-func _run_enemy_turn_async() -> void:
-	if _battle_session == null or _battle_session.is_ended():
-		return
-	if not _battle_session.is_enemy_turn():
-		return
-	var has_more: bool = _battle_session.step_enemy_turn()
-	if _battle_session == null or _battle_session.is_ended():
-		return
-	if not has_more:
-		return
-	# 推下一个 step：若本次 step 启动了 anim（队列非空 / count > 0），等 _end_battle_anim 触发；
-	# 否则（极端：step 无 emit）兜底立即调度
-	_battle_coordinator._try_schedule_next_enemy_step()
+## 战斗内推进（_post_player_action_check / _run_enemy_turn_async）已迁出至
+## BattleCoordinator（批 2 阶段 e）
+## 调用方改走 _battle_coordinator._xxx —— 见上方字段声明
 
 
 # ─── BattleHUD 按钮 sink ───
@@ -1667,7 +1571,7 @@ func _on_battle_hud_attack_pressed() -> void:
 	var result: Dictionary = _battle_session.try_player_attack(picked)
 	if not result.get("success", false):
 		return
-	_post_player_action_check()
+	_battle_coordinator._post_player_action_check()
 
 
 ## [跳过] 按钮：当前单位本回合行动结束（先移动后攻击都不做 / 移动后不攻击）
@@ -1677,7 +1581,7 @@ func _on_battle_hud_skip_pressed() -> void:
 	if not _battle_session.is_player_turn():
 		return
 	_battle_session.skip_current_unit()
-	_post_player_action_check()
+	_battle_coordinator._post_player_action_check()
 
 
 ## [结束回合] 按钮 / Enter 路由（战斗单位视觉与操作改进_MVP §2.3）
@@ -1711,7 +1615,7 @@ func _on_battle_hud_end_turn_pressed() -> void:
 		_show_end_turn_guard_dialog(idle_units.size())
 	else:
 		# 全员已结束 → 推进 / 切敌方回合（_post_player_action_check 内部 await 动画 + advance）
-		_post_player_action_check()
+		_battle_coordinator._post_player_action_check()
 
 
 ## 结束回合守卫弹板（§2.3）：提示玩家还有未移动单位，确定关闭（不结束回合）

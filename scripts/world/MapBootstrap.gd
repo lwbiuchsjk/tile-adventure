@@ -606,7 +606,8 @@ func init_world_subsystems() -> void:
 	_world_map._enemy_movement.tile_size = WorldMap.TILE_SIZE
 	_world_map._enemy_movement._camera = _world_map._camera
 	_world_map.add_child(_world_map._enemy_movement)
-	_world_map._enemy_movement.phase_finished.connect(_world_map._on_enemy_phase_finished)
+	# WorldMap 二次重构 批 2 阶段 e：phase_finished.connect 已迁到 BattleCoordinator.attach_sinks()
+	# 本处保留空行（BC 在 init_world_subsystems 末尾创建并 attach，时序仍正确）
 	_world_map._enemy_movement.redraw_requested.connect(_world_map._renderer.queue_redraw)
 
 	# 装配管理面板子系统 —— MVP-α.5：切预制件实例化
