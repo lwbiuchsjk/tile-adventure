@@ -601,9 +601,13 @@ func _route_space_confirm() -> bool:
 		return true
 	# 入口 4 MVP（2026-05-09 追加）：战斗态结束行动
 	# 内部守卫（session 存在 / 未结束 / 玩家回合）由 _on_battle_hud_skip_pressed 处理
+	# WorldMap 二次重构 批 2 codex P1-1 修复：补动画守卫，与 L574 SHIFT+Enter 对齐
+	# 防止 await 期间二次 skip（按钮路径已由 BattleAnimDirector.set_actions_enabled(false) 锁住，
+	# 键盘路径不走按钮，原代码缺该守卫属批 2 前历史遗留）
 	if _battle_coordinator.is_in_battle() and _battle_session != null \
 			and not _battle_session.is_ended() \
-			and _battle_session.is_player_turn():
+			and _battle_session.is_player_turn() \
+			and not _battle_anim_director.is_animating():
 		_battle_coordinator._on_battle_hud_skip_pressed()
 		return true
 	return false
@@ -2185,8 +2189,13 @@ func _handle_f_key() -> void:
 	# 原语义「退出战斗」（try_manual_exit）极低频，仅保留按钮入口
 	# 设计意图：F 在两态语义统一为"进攻 / 推进战斗"——探索态主动战斗 + 战斗态选最弱目标攻击
 	# 内部守卫（session 存在 / 玩家回合 / 有可攻击目标）由 _on_battle_hud_attack_pressed 处理
+	# WorldMap 二次重构 批 2 codex P1-2 修复：补动画守卫，与 L574 SHIFT+Enter 对齐
+	# 防止动画期间重复 attack（按钮路径已由 BattleAnimDirector.set_actions_enabled(false) 锁住，
+	# 键盘路径不走按钮，原代码缺该守卫属批 2 前历史遗留）
+	# 动画期间 F 键被战斗态吞掉（不走探索态分支），与按钮锁定语义对齐
 	if _battle_coordinator.is_in_battle():
-		_battle_coordinator._on_battle_hud_attack_pressed()
+		if not _battle_anim_director.is_animating():
+			_battle_coordinator._on_battle_hud_attack_pressed()
 		return
 	# 探索态：补给 / 候选 / 触发由 _try_trigger_active_battle 内部判定
 	if _game_finished or _player_lifecycle.is_in_coma() or _is_moving or _manage_ui.is_open or _is_camping or _build_panel_ui.is_open:
