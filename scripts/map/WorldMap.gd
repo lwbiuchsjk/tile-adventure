@@ -1060,86 +1060,9 @@ func _push_battle_victory_event(rewards: Array[ItemData]) -> void:
 	_event_panel.push_event(_build_reward_event("战斗胜利", narrative))
 
 
-## 尝试采集当前位置的一次性资源点（M6 改造）
-## 采集走 M6 等权池：忽略 slot 自身 resource_type / output_amount 配置，
-## 统一按 4 项等权随机抽 × 1/2 等权数量。视觉上 slot 仍按生成类型显示（盲盒式）
-## 备忘：视觉与采集结果的对齐是后续 UX 回看项，不在 M6 范围内
-func _try_collect_resource_at(pos: Vector2i) -> void:
-	if not _resource_slots.has(pos):
-		return
-	var rs: ResourceSlot = _resource_slots[pos] as ResourceSlot
-	if rs.is_collected:
-		return
-	# M6 等权抽取（单条产出结构）；注入 _world_rng 保证同 seed 复现
-	var entry: Dictionary = ProductionSystem.collect_immediate_slot(_world_rng)
-	var add_supply: Callable = func(amount: int) -> void: _supply += amount
-	var add_stone_cb: Callable = func(amount: int) -> void: add_stone(Faction.PLAYER, amount)
-	var add_item_cb: Callable = func(item: ItemData) -> bool:
-		var n: int = _inventory.add_items([item])
-		return n > 0
-	var outcome: Dictionary = ProductionSystem.apply_production(
-		[entry], add_supply, add_stone_cb, add_item_cb
-	)
-
-	rs.is_collected = true
-	if _schema != null:
-		_schema.set_slot(pos.x, pos.y, MapSchema.SlotType.NONE)
-
-	var applied: Array = outcome.get("applied", []) as Array
-	var dropped: Array = outcome.get("dropped", []) as Array
-	# F MVP：即时 slot 采集走事件面板（与扎营产出同 reward 模板，叙事前缀不同）
-	# 池空 / 背包满等失败走 _show_notice，与扎营保持一致
-	# 注意：本函数早前已有 var entry，这里循环变量改名避免 shadow 冲突
-	# 入口 2 MVP 2.3（2026-05-11）:走 NarrativeProvider resource_slot_pickup 池
-	if not applied.is_empty():
-		for applied_entry in applied:
-			var entry_dict: Dictionary = applied_entry as Dictionary
-			var item_count: Dictionary = _exploration_coordinator._entry_to_item_count(entry_dict)
-			var ctx: Dictionary = {
-				"leader_name": _player_lifecycle.current_leader_name(),
-				"item": item_count["item"],
-				"count": item_count["count"],
-			}
-			var narrative: String = NarrativeProvider.pick("resource_slot_pickup", ctx)
-			_event_panel.push_event(_build_reward_event("采集所获", narrative))
-	if not dropped.is_empty():
-		_show_notice("采集失败：%s" % ProductionSystem.format_dropped_text(dropped))
-	_renderer.queue_redraw()
-
-## 玩家回合结束结算流程（M7 迁移）
-## 扎营养成确认后调用：发放奖励 → 触发敌方阵营回合（TurnManager.start_faction_turn）
-##
-## M7 前的 legacy 流程：直接调 _enemy_movement.start_phase 或 end_turn
-## M7 新流程：end_faction_turn(PLAYER) → start_faction_turn(ENEMY_1) → EnemyAI 六步 → 回到 PLAYER
-func _on_turn_end_settlement() -> void:
-	if _game_finished or _check_defeat():
-		return
-	# 发放回合奖励
-	if _reward_generator != null:
-		var rewards: Array[ItemData] = _reward_generator.generate_rewards(
-			_turn_reward_pool_rows, 1, _turn_reward_count
-		)
-		if not rewards.is_empty():
-			_inventory.add_items(rewards)
-			var reward_text: String = _format_rewards_text(rewards)
-			# F MVP：回合奖励是"一次性整组"奖励，合并到一条事件呈现
-			_event_panel.push_event(_build_reward_event(
-				"回合奖励", "回合结束清点物资，获得：%s" % reward_text
-			))
-
-	# M7 敌方回合触发：end 当前（PLAYER）+ start ENEMY_1
-	# start_faction_turn 内部会：TickRegistry.run_ticks（建造 tick / 占据快照）→ 计数 +1 → emit signal
-	# signal 被 EnemyAI 接收，执行六步 2-5（步骤 1 已由 TickRegistry 完成）
-	#
-	# enemy_movement_enabled == false（调试开关）：
-	#   仍必须调 start_faction_turn(ENEMY_1) 让 TickRegistry 跑敌方建造 tick / 占据快照，
-	#   否则敌方状态冻结；只短路移动阶段（由 start_enemy_move_phase 内部检查开关提前 phase_finished）
-	_turn_manager.end_faction_turn()
-	_turn_manager.current_faction = Faction.ENEMY_1
-	_turn_manager.start_faction_turn(Faction.ENEMY_1)
-	# E MVP：切到敌方回合时显式隐藏【攻击】按钮
-	# _on_faction_turn_started 仅在 PLAYER 回合刷 _update_hud，敌方阶段不会自动触发刷新
-	_update_explore_action_button()
+## 资源采集 + 回合结算（try_collect_resource_at / _on_turn_end_settlement）已迁出至
+## ExplorationCoordinator（批 3 阶段 d）
+## 调用方改走 _exploration_coordinator.xxx —— EC 内 _on_move_finished 已 self 调
 
 
 # ─────────────────────────────────────────
@@ -1502,7 +1425,7 @@ func _on_manage_closed() -> void:
 	_update_hud()
 	if _is_camping:
 		_is_camping = false
-		_on_turn_end_settlement()
+		_exploration_coordinator._on_turn_end_settlement()
 	else:
 		_exploration_coordinator.refresh_reachable()
 
