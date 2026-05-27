@@ -105,8 +105,14 @@ func try_spend_stone(faction: int, amount: int) -> bool:
 
 
 ## 启动敌方移动阶段
+## WorldMap 二次重构 批 3 阶段 e：转发指向 _exploration_coordinator.start_enemy_move_phase()
+## fallback 兼容 _MockWorld（测试 mock 无 EC 字段但提供 start_enemy_move_phase 同名 stub）
 func start_enemy_move_phase() -> void:
-	_wm.call("start_enemy_move_phase")
+	var ec: Object = _wm.get("_exploration_coordinator")
+	if ec != null:
+		ec.call("start_enemy_move_phase")
+	else:
+		_wm.call("start_enemy_move_phase")
 
 
 # ─────────────────────────────────────────
@@ -238,7 +244,13 @@ func grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 ##   - _schema.set_slot(old, restored_original_type) / set_slot(new, FUNCTION)
 ##   - _original_slot_types erase(old) / 条件 set(new, schema 当前类型)
 func commit_enemy_move(level: LevelSlot, old_pos: Vector2i, new_pos: Vector2i) -> void:
-	_wm.call("_commit_enemy_move", level, old_pos, new_pos)
+	# WorldMap 二次重构 批 3 阶段 e：转发指向 _exploration_coordinator._commit_enemy_move()
+	# fallback 兼容 _MockWorld（测试 mock 无 EC 字段，但当前测试不触发本路径）
+	var ec: Object = _wm.get("_exploration_coordinator")
+	if ec != null:
+		ec.call("_commit_enemy_move", level, old_pos, new_pos)
+	else:
+		_wm.call("_commit_enemy_move", level, old_pos, new_pos)
 
 
 ## 尝试让指定势力占据指定位置的持久 slot
@@ -249,4 +261,10 @@ func commit_enemy_move(level: LevelSlot, old_pos: Vector2i, new_pos: Vector2i) -
 ##   - 调 OccupationSystem.try_occupy(ps, faction)
 ##   - 成功时 WorldMap 内调 _renderer.queue_redraw()（EnemyMovement 侧不再 emit redraw）
 func try_enemy_occupy_persistent_slot(pos: Vector2i, faction: int) -> void:
-	_wm.call("_try_enemy_occupy_persistent_slot", pos, faction)
+	# WorldMap 二次重构 批 3 阶段 e：转发指向 _exploration_coordinator._try_enemy_occupy_persistent_slot()
+	# fallback 兼容 _MockWorld（测试 mock 无 EC 字段，但当前测试不触发本路径）
+	var ec: Object = _wm.get("_exploration_coordinator")
+	if ec != null:
+		ec.call("_try_enemy_occupy_persistent_slot", pos, faction)
+	else:
+		_wm.call("_try_enemy_occupy_persistent_slot", pos, faction)
