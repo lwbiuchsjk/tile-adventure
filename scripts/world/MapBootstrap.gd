@@ -497,9 +497,9 @@ func create_world_state() -> void:
 	# 初始化回合管理器
 	_world_map._turn_manager = TurnManager.new()
 	_world_map._turn_manager.register_unit(_world_map._unit)
-	# M7：迁至阵营回合流程，监听 faction_turn_started 替代 legacy turn_ended
-	# 玩家侧 handler 在本 handler 中处理；敌方侧由 EnemyAI 自己 connect
-	_world_map._turn_manager.faction_turn_started.connect(_world_map._on_faction_turn_started)
+	# WorldMap 二次重构 批 3 阶段 f：faction_turn_started.connect 已迁到 EC.attach_sinks()
+	# 本处保留空行（EC 在 init_world_subsystems 末尾创建并 attach，时序仍正确）
+	# 敌方侧由 EnemyAI 自己 connect 不变
 
 
 # ─────────────────────────────────────
@@ -572,9 +572,8 @@ func init_world_subsystems() -> void:
 	# 再跑 M4 占据快照（用新 max_range 增长）
 	TickRegistry.register(_world_map._on_build_tick)
 
-	# M4: 注册占据快照到 TickRegistry（自阵营回合开始锚点）
-	# M7 迁移后：WorldMap 完全走 start_faction_turn，TickRegistry 自动分发；无需手动 run_ticks
-	TickRegistry.register(_world_map._on_faction_tick)
+	# WorldMap 二次重构 批 3 阶段 f：TickRegistry.register(_on_faction_tick) 已迁到 EC.attach_sinks()
+	# 本处保留空行（EC 在 init_world_subsystems 末尾创建并 attach，时序仍正确）
 
 	# Camera 初始位置直接设到单位位置（首帧不需要平滑）
 	_world_map._camera.position = _world_map._unit_visual_pos

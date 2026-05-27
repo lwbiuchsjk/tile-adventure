@@ -576,10 +576,10 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 			var pack: LevelSlot = pack_v as LevelSlot
 			if pack == null:
 				continue
-			combined.append_array(_world_map._grant_level_rewards_for(pack))
+			combined.append_array(_world_map._exploration_coordinator.grant_level_rewards_for(pack))
 			# 部队抽样奖励：含未上场 troops 一并视作消灭，从 pack.troops 抽样
-			combined.append_array(_world_map._grant_troop_reward(pack.troops))
-		_world_map._push_battle_victory_event(combined)
+			combined.append_array(_world_map._exploration_coordinator.grant_troop_reward(pack.troops))
+		_world_map._exploration_coordinator.push_battle_victory_event(combined)
 
 		# 2. 清理 _level_slots + 恢复 schema slot 标记
 		# 显式 mark_defeated + remove_defeated_troops：保证仍持引用的旁路系统看到一致状态

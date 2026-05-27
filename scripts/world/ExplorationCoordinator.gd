@@ -31,13 +31,14 @@ func _init(world_map: WorldMap) -> void:
 
 ## 由 MapBootstrap.init_world_subsystems() 末尾调一次（在 BC.attach_sinks 之后）
 ##
-## EC 接 EnemyMovement / PlayerLifecycle / Inventory 等 signal
-## 阶段 a：先留空骨架；阶段 f 接 TurnManager.faction_turn_started + TickRegistry tick handler
+## EC 接 TurnManager / TickRegistry / PlayerLifecycle / Inventory 等 signal
 func attach_sinks() -> void:
-	# 阶段 a：暂无 signal 接线；EnemyMovement.commit_enemy_move 等 sink 仍由
-	# MapBootstrap 通过 WorldView facade 转发（本批阶段 e 改 facade null 守卫）
-	# 阶段 f 起接：TurnManager.faction_turn_started + TickRegistry tick handler
-	pass
+	# 阶段 f：玩家回合开始 + 各阵营 tick 注册
+	# （MapBootstrap L502 原接 _world_map._on_faction_turn_started，现 receiver 改为 EC）
+	# （MapBootstrap L577 原 register _world_map._on_faction_tick，现注册 EC._on_faction_tick）
+	_world_map._turn_manager.faction_turn_started.connect(_on_faction_turn_started)
+	TickRegistry.register(_on_faction_tick)
+	# EnemyMovement / BattleHUD / BattleAnimDirector 等 sink 由 WorldView facade 转发 / BC.attach_sinks 处理
 
 
 # ─────────────────────────────────────
@@ -241,7 +242,7 @@ func start_camp() -> void:
 			supply_ctx["slot_name"] = String(supply_info.get("slot_name", ""))
 		var supply_narrative: String = NarrativeProvider.pick(supply_scenario, supply_ctx)
 		# _build_reward_event 阶段 f 抽出后改 self 调；阶段 c 仍跨模块
-		_world_map._event_panel.push_event(_world_map._build_reward_event("扎营休整", supply_narrative))
+		_world_map._event_panel.push_event(_build_reward_event("扎营休整", supply_narrative))
 
 	# M6: 持久 slot 扎营结算（玩家侧）
 	# 流程：camp_pos 查 C 作用域覆盖 → 逐 slot 按类型 × 作用域覆盖 → 落地到石料 / 补给 / 背包
@@ -311,7 +312,7 @@ func _settle_persistent_camp_production() -> void:
 				ctx["slot_name"] = slot_name
 			var narrative: String = NarrativeProvider.pick(camp_scenario, ctx)
 			# _build_reward_event 阶段 f 抽出后改 self 调
-			_world_map._event_panel.push_event(_world_map._build_reward_event("扎营产出", narrative))
+			_world_map._event_panel.push_event(_build_reward_event("扎营产出", narrative))
 	if not dropped.is_empty():
 		_world_map._show_notice("扎营产出部分失败：%s" % ProductionSystem.format_dropped_text(dropped))
 
@@ -443,7 +444,7 @@ func try_collect_resource_at(pos: Vector2i) -> void:
 			}
 			var narrative: String = NarrativeProvider.pick("resource_slot_pickup", ctx)
 			# _build_reward_event 阶段 f 抽出后改 self 调
-			_world_map._event_panel.push_event(_world_map._build_reward_event("采集所获", narrative))
+			_world_map._event_panel.push_event(_build_reward_event("采集所获", narrative))
 	if not dropped.is_empty():
 		_world_map._show_notice("采集失败：%s" % ProductionSystem.format_dropped_text(dropped))
 	_world_map._renderer.queue_redraw()
@@ -469,7 +470,7 @@ func _on_turn_end_settlement() -> void:
 			var reward_text: String = _world_map._format_rewards_text(rewards)
 			# F MVP：回合奖励是"一次性整组"奖励，合并到一条事件呈现
 			# _build_reward_event 阶段 f 抽出后改 self 调
-			_world_map._event_panel.push_event(_world_map._build_reward_event(
+			_world_map._event_panel.push_event(_build_reward_event(
 				"回合奖励", "回合结束清点物资，获得：%s" % reward_text
 			))
 
@@ -565,3 +566,167 @@ func _try_enemy_occupy_persistent_slot(pos: Vector2i, faction: int) -> void:
 		if OccupationSystem.try_occupy(ps, faction):
 			_world_map._renderer.queue_redraw()
 		return
+
+
+# ─────────────────────────────────────
+# 阶段 f：Slot 生成 + 奖励工厂 + 回合钩子（批 3 收口）
+# ─────────────────────────────────────
+
+## M7 阵营回合开始回调（玩家侧）
+## 由 TurnManager.start_faction_turn(PLAYER) 触发，在 TickRegistry 跑完 M4 快照 / M5 建造 tick 后执行
+## 职责：重置玩家单位移动力、刷新 HUD、刷新可达范围
+##
+## 敌方侧（ENEMY_1）由 EnemyAI._on_faction_turn_started 独立处理，两个 handler 按 faction 分流互不干扰
+func _on_faction_turn_started(faction: int) -> void:
+	if faction != Faction.PLAYER:
+		return
+	# 玩家回合开始：重置单位移动力
+	_world_map._unit.current_movement = _world_map._unit.max_movement
+	_world_map._update_hud()
+	refresh_reachable()
+
+
+## M4 自阵营回合 tick 回调：快照本势力所属 slot 的 garrison / occupy / influence 状态
+## 由 TickRegistry 在 TurnManager.start_faction_turn 中自动触发（M7 迁移后）
+func _on_faction_tick(faction: int) -> void:
+	if _world_map._schema == null:
+		return
+	# _build_units_by_pos 留 WM（涉及多字段读，与战斗状态等耦合），跨模块调
+	var units_by_pos: Dictionary = _world_map._build_units_by_pos()
+	OccupationSystem.snapshot_turn_end(faction, _world_map._schema.persistent_slots, units_by_pos)
+	_world_map._renderer.queue_redraw()
+
+
+## 构造 reward 事件 payload（F MVP §4 reward 模板）
+## title / narrative 由调用方组装；本函数只负责套通用结构
+## 入库统一在调用方完成，事件仅作叙事呈现，result_callback 留空
+func _build_reward_event(title: String, narrative: String) -> Dictionary:
+	return {
+		"type": "reward",
+		"title": title,
+		"narrative": narrative,
+		"actions": [{"label": "确认", "result": "confirm"}],
+		"payload": {},
+	}
+
+
+## 战斗胜利事件 helper：把关卡奖励 + 部队奖励合并到单条事件
+## 用户跑测反馈：战斗一次性获得多个奖励应合并展示，避免连点 N 次确认
+## rewards 为空（背包满全丢 / 关卡无奖励）则跳过，不弹空事件
+##
+## 入口 2 MVP 2.3（2026-05-11）：narrative 走 NarrativeProvider battle_victory 池抽取
+## item 占位符 = 合并奖励文本(已含数量,如"草药×2, 盾×1"),不需要 count
+##
+## 调用方：BattleCoordinator._on_battle_session_ended VICTORY 分支
+func push_battle_victory_event(rewards: Array[ItemData]) -> void:
+	if rewards.is_empty():
+		return
+	# _format_rewards_text 留 WM（与 ItemData 显示格式紧），跨模块调
+	var reward_text: String = _world_map._format_rewards_text(rewards)
+	var ctx: Dictionary = {
+		"leader_name": _world_map._player_lifecycle.current_leader_name(),
+		"item": reward_text,
+	}
+	var narrative: String = NarrativeProvider.pick("battle_victory", ctx)
+	_world_map._event_panel.push_event(_build_reward_event("战斗胜利", narrative))
+
+
+## 清除所有资源点（每轮次刷新前调用）
+## M1 重构：ResourceSlot 已无持久分支，全部清空并恢复 MapSchema slot 为 NONE；
+## 持久 slot 由 PersistentSlot 独立通道维护，不在此处处理
+##
+## 当前无调用方（可能 cycle 推进重设计时废弃），保留作 P3 候选
+func clear_onetime_resource_slots() -> void:
+	for pos in _world_map._resource_slots:
+		var p: Vector2i = pos as Vector2i
+		if _world_map._schema != null:
+			_world_map._schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
+	_world_map._resource_slots = {}
+
+
+## 从配置生成本轮资源点
+##
+## 当前无调用方（可能 cycle 推进重设计时废弃），保留作 P3 候选
+func generate_resource_slots() -> void:
+	if _world_map._schema == null or _world_map._resource_slot_config_rows.is_empty():
+		return
+	# 构建排除列表
+	var exclude: Array[Vector2i] = [_world_map._start_pos, _world_map._end_pos]
+	if _world_map._unit != null and not exclude.has(_world_map._unit.position):
+		exclude.append(_world_map._unit.position)
+	# M2：排除持久 slot 占据的格子，避免一次性资源与城建锚 slot 重叠
+	for ps in _world_map._schema.persistent_slots:
+		if not exclude.has(ps.position):
+			exclude.append(ps.position)
+	# 排除本轮已存在的资源点（M1 重构后无持久分支，本循环仍保留以防多次调用复用）
+	for pos in _world_map._resource_slots:
+		var p: Vector2i = pos as Vector2i
+		if not exclude.has(p):
+			exclude.append(p)
+	# 排除已有关卡位置
+	for pos in _world_map._level_slots:
+		var p: Vector2i = pos as Vector2i
+		if not exclude.has(p):
+			exclude.append(p)
+
+	# 按权重从配置中抽取资源点并放置
+	# 先计算总数量
+	var total_count: int = 0
+	for entry in _world_map._resource_slot_config_rows:
+		var row: Dictionary = entry as Dictionary
+		total_count += int(row.get("count_per_round", "1"))
+
+	# 放置位置（M2 P1#4：注入 _world_rng 保证 seed 复现）
+	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_world_map._schema, total_count, exclude, _world_map._world_rng)
+
+	# 按配置行顺序分配位置
+	var place_idx: int = 0
+	for entry in _world_map._resource_slot_config_rows:
+		var row: Dictionary = entry as Dictionary
+		var count: int = int(row.get("count_per_round", "1"))
+		for i in range(count):
+			if place_idx >= placed.size():
+				break
+			var rs: ResourceSlot = ResourceSlot.new()
+			rs.position = placed[place_idx]
+			rs.resource_type = int(row.get("resource_type", "0")) as ResourceSlot.ResourceType
+			rs.output_amount = int(row.get("output_amount", "1"))
+			# M1 重构：is_persistent / effective_range 移除，CSV 同步删列
+			_world_map._resource_slots[placed[place_idx]] = rs
+			place_idx += 1
+
+
+## 从敌方部队快照中随机抽取 1 支，转为 TROOP 道具加入背包
+## 背包已满时直接丢弃
+## F MVP 重构：返回入库成功的 items，由调用方汇总到战斗胜利事件中合并展示
+##
+## 调用方：BattleCoordinator._on_battle_session_ended VICTORY 分支
+func grant_troop_reward(troop_snapshot: Array[TroopData]) -> Array[ItemData]:
+	if troop_snapshot.is_empty():
+		return [] as Array[ItemData]
+	# 随机抽取 1 支敌方部队
+	var picked: TroopData = troop_snapshot[randi_range(0, troop_snapshot.size() - 1)]
+	# 转为 TROOP 道具
+	var item: ItemData = ItemData.new()
+	item.type = ItemData.ItemType.TROOP
+	item.troop_type = int(picked.troop_type)
+	item.quality = int(picked.quality)
+	item.display_name = picked.get_display_text()
+	item.stack_count = 1
+	# 尝试加入背包（满则丢弃）
+	var added: int = _world_map._inventory.add_items([item])
+	if added > 0:
+		return [item] as Array[ItemData]
+	return [] as Array[ItemData]
+
+
+## 发放指定关卡的胜利奖励
+## F MVP 重构：返回入库成功的 items，由调用方汇总到战斗胜利事件中合并展示
+## MVP 简化：暂不区分 dropped（背包满），与重构前的 _show_notice 行为一致
+##
+## 调用方：BattleCoordinator._on_battle_session_ended VICTORY 分支
+func grant_level_rewards_for(level: LevelSlot) -> Array[ItemData]:
+	if level == null or level.rewards.is_empty():
+		return [] as Array[ItemData]
+	_world_map._inventory.add_items(level.rewards)
+	return level.rewards.duplicate()
