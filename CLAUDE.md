@@ -334,7 +334,7 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 
 ## 活跃（≤10 条硬上限）
 
-- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — **🟢 主线已解除挂起**（2026-05-27）：WorldMap 二次重构完成后接续；L1.1 阶段 1 已落地（commit `661cbb6`），阶段 2-4 + L1.2/1.3/1.4 待启动；chunk/视野系统接入点已统一到 EC 钩子
+- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — L1.1 阶段 2 已落地（2026-05-28，VisionSystem + ChunkManager 包裹叠加挂载，承载点下放 MapBootstrap + ExplorationCoordinator，WorldMap.gd 净增 13 行）；阶段 3 待启动（视野渲染分层 + 取消硬边界）
 
 ## 预启动（方向已认可，等启动时机）
 

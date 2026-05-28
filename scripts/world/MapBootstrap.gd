@@ -790,6 +790,30 @@ func init_world_subsystems() -> void:
 	# 解绑由 RunState.clear_sinks 在 _world_map._exit_tree 处理，与其他 sink 同生命周期
 	RunState.register_recruit_sink(_world_map._on_recruit_triggered)
 
+	# L1.1 阶段 2：视野循环 + chunk 三态系统创建（无限地图实装）
+	# 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md §4.1 / §5
+	# 创建时机：在协调器之前，确保后续 EC.init_vision_runtime 可见 _vision_system / _chunk_manager
+	# 包裹叠加：本阶段仅启动子系统数据流；阶段 3+ 接渲染分层 / 移动钩子 / 回合钩子
+	_world_map._vision_system = VisionSystem.new()
+	_world_map._vision_system.name = "VisionSystem"
+	_world_map.add_child(_world_map._vision_system)
+	_world_map._vision_system.setup(WorldMap.VISION_CFG)
+
+	# world_seed 来源（codex P1 修复 2026-05-28）：
+	#   PCG 路径下复用 _world_rng.seed 保证 chunk noise 与 PCG 同源 + 折返一致
+	#   JSON 路径下 _world_rng 为 null（_load_json_internal 不创建），改用 Time 派生
+	#   （与 _load_pcg_internal random_seed=-1 时的自动 seed 同机制）
+	var world_seed: int = 0
+	if _world_map._world_rng != null:
+		world_seed = int(_world_map._world_rng.seed)
+	else:
+		world_seed = int(Time.get_ticks_usec())
+
+	_world_map._chunk_manager = ChunkManager.new()
+	_world_map._chunk_manager.name = "ChunkManager"
+	_world_map.add_child(_world_map._chunk_manager)
+	_world_map._chunk_manager.setup(WorldMap.VISION_CFG, _world_map._vision_system, world_seed)
+
 	# WorldMap 二次重构 批 2 阶段 a：创建 BattleCoordinator + attach_sinks
 	# 设计：tile-advanture-design/WorldMap二次重构/批2_BattleCoordinator_MVP.md
 	# 必须在所有战斗子模块（_battle_session / _battle_hud / _battle_anim_director /
@@ -836,6 +860,11 @@ func finalize_startup() -> void:
 	# M7：启动首个玩家回合（TickRegistry 跑 M4/M5 tick → emit faction_turn_started(PLAYER)
 	# → _on_faction_turn_started 接管 HUD / reachable 刷新）
 	_world_map._turn_manager.start_faction_turn(Faction.PLAYER)
+
+	# L1.1 阶段 2：注册玩家 VisionSource + 触发首次 chunk aggregate
+	# 时机：所有子系统就绪 + _unit.position 已定 + 初始 pack 部署完毕；视野启动不影响 spawn 判定
+	# 包裹叠加阶段：仅启动数据流，不接移动/回合钩子（阶段 3+ 增量接入）
+	_world_map._exploration_coordinator.init_vision_runtime()
 
 	# 入口 2 MVP 2.1 议题 5（2026-05-10）：游戏首次启动 → 黑屏揭幕过渡
 	# 分流：

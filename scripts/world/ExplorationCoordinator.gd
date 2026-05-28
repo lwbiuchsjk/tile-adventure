@@ -41,6 +41,31 @@ func attach_sinks() -> void:
 	# EnemyMovement / BattleHUD / BattleAnimDirector 等 sink 由 WorldView facade 转发 / BC.attach_sinks 处理
 
 
+## L1.1 阶段 2：注册玩家 VisionSource 到 VisionSystem + 触发首次 chunk aggregate
+##
+## 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md §4.1 / §5
+## 调用方：MapBootstrap.finalize_startup() 末尾（_unit.position 已定 + 子系统已 ready）
+##
+## 包裹叠加阶段：仅启动数据流（VisionSystem.register_source 内部会 _recompute_coverage 触发
+## tile_state_changed signal，ChunkManager 增量监听后自动 aggregate 受影响 chunk → ACTIVE
+## 状态 → 触发 ChunkPCG.generate 生成首屏 chunk schema）。
+## 本阶段不接渲染分层 / 不接移动钩子 / 不接回合钩子（阶段 3+ 增量接入）。
+func init_vision_runtime() -> void:
+	if _world_map._vision_system == null or _world_map._chunk_manager == null:
+		push_warning("EC.init_vision_runtime: _vision_system / _chunk_manager 未就绪，跳过注册")
+		return
+	# 玩家队伍视野源：位置 = _unit.position（_start_pos）、半径 = vision_config.player_vision_radius
+	# owner_node = _world_map（生命周期与 WorldMap 同步；reload 整片清空时自然释放）
+	var radius: int = WorldMap.VISION_CFG.player_vision_radius
+	_world_map._player_vision_source = VisionSource.new(
+		_world_map._unit.position, radius, Faction.PLAYER, _world_map
+	)
+	_world_map._vision_system.register_source(_world_map._player_vision_source)
+	# 首屏 ACTIVE chunk 数（验证 ChunkPCG 已被触发）
+	var active_count: int = _world_map._chunk_manager.get_active_chunks().size()
+	print("[L1.1] VisionSystem + ChunkManager 启动；玩家视野半径 = %d；首屏 ACTIVE chunk = %d" % [radius, active_count])
+
+
 # ─────────────────────────────────────
 # 阶段 a：玩家移动动画链 + 可达性刷新
 # ─────────────────────────────────────

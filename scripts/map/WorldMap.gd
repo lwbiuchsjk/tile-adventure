@@ -306,6 +306,15 @@ var _battle_coordinator: BattleCoordinator = null
 ## 设计：tile-advanture-design/WorldMap二次重构/批3_ExplorationCoordinator_MVP.md
 var _exploration_coordinator: ExplorationCoordinator = null
 
+## L1.1 阶段 2：视野循环 + chunk 三态机制（无限地图实装）
+## 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md
+## 由 MapBootstrap.init_world_subsystems() 创建 + setup（在协调器之前），
+## EC.init_vision_runtime() 在 finalize_startup 末尾注册玩家 VisionSource
+## 包裹叠加：本阶段子系统挂载就位但暂不接渲染/移动钩子（阶段 3+ 增量接入）
+var _vision_system: VisionSystem = null
+var _chunk_manager: ChunkManager = null
+var _player_vision_source: VisionSource = null
+
 ## E 战斗就地展开 MVP：当前活跃战斗会话；null = 探索态，非 null = 战斗态
 ## 战斗态期间所有面板 / 输入需通过 _battle_coordinator.is_in_battle() 守卫拦截
 ## 由 [F] 键主动战斗触发创建（E3）；战斗结束在 _on_battle_session_ended sink 中清空
@@ -457,6 +466,10 @@ const TURN_REWARD_PARAM_CFG: TurnRewardParamResource = preload("res://assets/con
 const SUPPLY_PARAM_CFG: SupplyParamResource = preload("res://assets/config/supply_param_resource.tres")
 const INVENTORY_PARAM_CFG: InventoryParamResource = preload("res://assets/config/inventory_param_resource.tres")
 const DIFFICULTY_PARAM_CFG: DifficultyParamResource = preload("res://assets/config/difficulty_param_resource.tres")
+
+## L1.1 阶段 2：视野循环 + chunk 三态机制（无限地图实装）调参
+## 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md §3.7
+const VISION_CFG: VisionConfig = preload("res://assets/config/vision_config.tres")
 # ─────────────────────────────────────────
 # 生命周期
 # ─────────────────────────────────────────
