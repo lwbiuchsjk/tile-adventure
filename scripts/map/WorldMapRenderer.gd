@@ -66,6 +66,11 @@ var _battle_session: BattleSession = null
 ## 改动2（视觉与操作改进 §2.2）：地格四角呼吸角标相位（_process 推进，正弦驱动内外收缩）
 var _select_bracket_phase: float = 0.0
 
+## L1.1 阶段 3：视野状态本地缓存（_draw 入口一次性 snapshot，避免 _draw_* 热路径多次查 VisionSystem）
+## key: Vector2i 格坐标; value: VisionSystem.TileState（int 0=SHADOW / 1=FOG / 2=NORMAL）
+## 设计：L1.1_视野循环与chunk底座_MVP.md §10 阶段 3 议题 E（E2 入口缓存）
+var _vision_state_cache: Dictionary = {}
+
 
 ## 注入世界视图 + 战斗视图（WorldMap._init_subsystems 调用一次，跨战斗复用）
 func setup(world_view: WorldView, battle_view: BattleViewState) -> void:
@@ -116,6 +121,11 @@ func _draw() -> void:
 	if _schema == null:
 		return
 
+	# L1.1 阶段 3：视野状态本地缓存（_draw 入口一次性 snapshot）
+	# _schema 范围内（32×24=768 格）每帧重建；下游 _draw_vision_overlay 直接读
+	# 不在 _schema 范围内的格不缓存，靠 vision_overlay 默认按 SHADOW 处理（_schema 外不渲染）
+	_refresh_vision_state_cache()
+
 	# 第一层：地形底色 + Slot 标记
 	for y in range(_schema.height):
 		for x in range(_schema.width):
@@ -140,6 +150,15 @@ func _draw() -> void:
 	# 第 1.85 层：敌方关卡（入口 4 MVP 2026-05-09 抽出）
 	# 必须在持久 slot 影响范围 / 本体之后画 —— 否则菱形被半透明红色影响范围吞没
 	_draw_level_slots()
+
+	# 第 1.9 层：L1.1 阶段 3 视野状态机覆盖层
+	# 设计：L1.1_视野循环与chunk底座_MVP.md §4.3 + §10 阶段 3 决议（议题 D：draw_rect 半透明黑）
+	# SHADOW 格画不透明黑（完全遮盖下层地形+静态 slot）
+	# FOG 格画半透明黑（视觉灰化下层地形+静态 slot）
+	# NORMAL 格不画
+	# 时机：所有静态/动态 slot 渲染之后 + 可达高亮/玩家单位/战斗 overlay 之前
+	# 这样 NORMAL 区域的可达高亮 + 玩家单位 + 战斗 overlay 都在视野遮罩之上保持完整可见
+	_draw_vision_overlay()
 
 	# 第二层：可达范围高亮
 	# UI 重构步骤 7：可达范围双通道渲染
@@ -281,6 +300,12 @@ func _draw_level_slots() -> void:
 		# _fog_signal_node（CanvasLayer=6 浮层）画屏幕空间闪烁信号
 		var center_world: Vector2 = _world_view.grid_to_pixel_center(pos)
 		if DayNightState.is_night(_turn_manager) and (not _battle_force_day) and _world_view.is_in_fog(center_world):
+			continue
+
+		# L1.1 阶段 3：视野状态机过滤——动态实体（敌方 pack）仅 NORMAL 可见
+		# FOG/SHADOW 区域直接跳过渲染（议题 A3 极简，不做"已探索记忆"）
+		# 与夜晚视野 is_in_fog 是 OR 关系：任一系统认为不可见就不画
+		if _world_view.is_tile_invisible(pos):
 			continue
 
 		var slot_color: Color = UNIT_ENEMY_CFG.enemy_slot_color
@@ -496,6 +521,10 @@ func _draw_enemy_threat_zones() -> void:
 			continue
 		if not lv.is_interactable():
 			continue
+		# L1.1 阶段 3：视野状态机过滤——敌方关卡格不可见时，威胁圈也不画
+		# 与 _draw_level_slots 守卫同步，避免"看不到敌方但看到威胁圈"的视觉矛盾
+		if _world_view.is_tile_invisible(pos):
+			continue
 		var origin: Vector2i = pos as Vector2i
 		# 曼哈顿圆枚举：|dx| + |dy| ≤ R
 		for dx in range(-_battle_trigger_range, _battle_trigger_range + 1):
@@ -670,6 +699,11 @@ func _draw_enemy_move_marker() -> void:
 	# 入口 4 后段第 1 份（夜晚视野 MVP，codex P0 修复 2026-05-11）：
 	# 浓雾外移动中敌方在世界层完全跳过；屏幕空间信号由 _fog_signal_node 浮层接管
 	if DayNightState.is_night(_turn_manager) and (not _battle_force_day) and _world_view.is_in_fog(enemy_vis_pos):
+		return
+	# L1.1 阶段 3：视野状态机过滤——移动中敌方关卡按当前 visual 像素位置映射到格坐标
+	# FOG/SHADOW 时跳过；与 _draw_level_slots 同步保证视觉一致
+	var enemy_tile: Vector2i = Vector2i(int(enemy_vis_pos.x / TILE_SIZE), int(enemy_vis_pos.y / TILE_SIZE))
+	if _world_view.is_tile_invisible(enemy_tile):
 		return
 	# 外圈光晕菱形（比标记更大，半透明）
 	var glow_margin: int = 2
@@ -1428,3 +1462,55 @@ func _draw_battle_dim_overlay() -> void:
 	draw_rect(Rect2(ox, by, bx - ox, bh), VISUAL_CFG.dim_color, true)
 	# 右侧（仅战场同高）
 	draw_rect(Rect2(bx + bw, by, (ox + ow) - (bx + bw), bh), VISUAL_CFG.dim_color, true)
+
+
+## L1.1 阶段 3：视野状态本地缓存刷新（_draw 入口调一次）
+##
+## 遍历 _schema 范围（width × height = 768 格 @ 32×24）每帧重建 _vision_state_cache。
+## 不在 _schema 范围内的格不入缓存——本阶段 _schema 仍是渲染上限，越界不渲染。
+##
+## 性能考虑：每帧 N² 次 WorldView.get_vision_state 调用，每次走 VisionSystem.get_tile_state
+## 内 Dictionary.get 查 _tile_state 字典——O(1)。768 次合计微秒级，对 60 fps 渲染无压力。
+##
+## 设计：L1.1_视野循环与chunk底座_MVP.md §10 阶段 3 议题 E（E2 入口缓存）
+func _refresh_vision_state_cache() -> void:
+	_vision_state_cache.clear()
+	if _world_view == null or _schema == null:
+		return
+	for y in range(_schema.height):
+		for x in range(_schema.width):
+			var tile: Vector2i = Vector2i(x, y)
+			_vision_state_cache[tile] = _world_view.get_vision_state(tile)
+
+
+## L1.1 阶段 3：视野状态机覆盖层渲染（议题 D2：draw_rect 半透明黑叠加）
+##
+## SHADOW 格画不透明黑（完全遮盖下层）；FOG 格画半透明黑（视觉灰化下层）；NORMAL 不画。
+## 时机：所有静态 / 动态 slot 渲染之后、可达高亮 / 玩家单位 / 战斗 overlay 之前。
+## 让 NORMAL 区域的玩家单位 + 可达高亮 + 战斗信息在视野遮罩之上保持完整可见。
+##
+## 颜色：与 _draw_battle_dim_overlay 同风格（半透明黑），保持视觉语言统一。
+##   FOG: Color(0, 0, 0, 0.45) —— 灰化但下层结构仍可辨
+##   SHADOW: Color(0, 0, 0, 1.0) —— 完全遮盖（玩家从未到过的未知区）
+##
+## 设计：L1.1_视野循环与chunk底座_MVP.md §4.3 + §10 阶段 3 议题 A3（极简）+ D2
+func _draw_vision_overlay() -> void:
+	if _vision_state_cache.is_empty():
+		return
+	const FOG_COLOR: Color = Color(0.0, 0.0, 0.0, 0.45)
+	const SHADOW_COLOR: Color = Color(0.0, 0.0, 0.0, 1.0)
+	for tile_v in _vision_state_cache:
+		var tile: Vector2i = tile_v as Vector2i
+		var state: int = _vision_state_cache[tile]
+		if state == VisionSystem.TileState.NORMAL:
+			continue
+		var rect: Rect2 = Rect2(
+			float(tile.x * TILE_SIZE),
+			float(tile.y * TILE_SIZE),
+			float(TILE_SIZE),
+			float(TILE_SIZE)
+		)
+		if state == VisionSystem.TileState.FOG:
+			draw_rect(rect, FOG_COLOR, true)
+		else:  # SHADOW
+			draw_rect(rect, SHADOW_COLOR, true)

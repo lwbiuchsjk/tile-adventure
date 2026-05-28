@@ -24,6 +24,13 @@ extends RefCounted
 
 var _world_map: WorldMap
 
+## L1.1 阶段 3：视野系统单调递增回合计数器
+## 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md §4.4
+## L1.1 简化：每个 faction 回合开始各推进 1（PLAYER + ENEMY_1 各算 1，完整 round=2）
+## 推进点：_on_faction_turn_started 内（在 faction 分流守卫之前）
+## L1.3 会改为"扎营次数"单位
+var _vision_turn: int = 0
+
 
 func _init(world_map: WorldMap) -> void:
 	_world_map = world_map
@@ -143,6 +150,15 @@ func _on_move_finished() -> void:
 	_world_map._update_hud()
 	# 刷新可达范围（补给为 0 时会显示空集）
 	refresh_reachable()
+
+	# L1.1 阶段 3：同步玩家 VisionSource 位置到 VisionSystem
+	# 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md §4.2
+	# VisionSource 是 RefCounted（运行时短生命周期对象），位置由 EC 主动改写后
+	# 通知 VisionSystem 重算覆盖；VisionSystem 内部走 _recompute_coverage + 退化判定
+	# null 守卫：_player_vision_source 可能在 reload 早期未就绪（实际不会出现，但稳健）
+	if _world_map._player_vision_source != null and _world_map._vision_system != null:
+		_world_map._player_vision_source.position = _world_map._unit.position
+		_world_map._vision_system.notify_source_moved()
 
 
 ## 刷新可达范围并触发重绘
@@ -603,6 +619,14 @@ func _try_enemy_occupy_persistent_slot(pos: Vector2i, faction: int) -> void:
 ##
 ## 敌方侧（ENEMY_1）由 EnemyAI._on_faction_turn_started 独立处理，两个 handler 按 faction 分流互不干扰
 func _on_faction_turn_started(faction: int) -> void:
+	# L1.1 阶段 3：视野系统时钟推进（每个 faction 回合开始各 +1）
+	# 必须在 PLAYER 分流守卫之前，确保 ENEMY_1 回合也推进时钟
+	# 设计：L1.1_视野循环与chunk底座_MVP.md §4.4 "时钟单位是回合（玩家回合 + 敌方回合各算 1）"
+	# null 守卫：_vision_system 早期启动 / _MockWorld 测试时跳过
+	if _world_map._vision_system != null:
+		_vision_turn += 1
+		_world_map._vision_system.advance_turn(_vision_turn)
+
 	if faction != Faction.PLAYER:
 		return
 	# 玩家回合开始：重置单位移动力

@@ -334,7 +334,7 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 
 ## 活跃（≤10 条硬上限）
 
-- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — L1.1 阶段 2 已落地（2026-05-28，VisionSystem + ChunkManager 包裹叠加挂载，承载点下放 MapBootstrap + ExplorationCoordinator，WorldMap.gd 净增 13 行）；阶段 3 待启动（视野渲染分层 + 取消硬边界）
+- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — L1.1 阶段 3 已落地（2026-05-28，视野状态机接入渲染层 + EC 移动/回合钩子 + NORMAL/FOG/SHADOW 分层；camera 边界放开推迟到阶段 4）；阶段 4 待启动（NightVisionLayer 接入 + camera 边界 + 性能验证）
 
 ## 预启动（方向已认可，等启动时机）
 

@@ -203,6 +203,41 @@ func is_in_fog(world_pos: Vector2) -> bool:
 	return nv.is_in_fog(world_pos)
 
 
+## L1.1 阶段 3：格视野状态查询（NORMAL / FOG / SHADOW）
+## 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md §2.1
+## 不同于 is_in_fog（夜晚视野，基于昼夜+光源圆形衰减）——本方法是 L1.1 视野状态机
+## （基于多源覆盖 + 滞回 + 退化时钟），两者并存且渲染层 OR 关系过滤
+##
+## 返回值：VisionSystem.TileState 枚举（0=SHADOW / 1=FOG / 2=NORMAL）
+## null 守卫：_vision_system 未就绪（早期启动 / _MockWorld 测试）时返回 NORMAL
+## （让现有逻辑不被破坏，等价于"无 L1.1 视野约束"）
+func get_vision_state(tile: Vector2i) -> int:
+	var vs: VisionSystem = _wm.get("_vision_system") as VisionSystem
+	if vs == null:
+		return VisionSystem.TileState.NORMAL
+	return vs.get_tile_state(tile)
+
+
+## L1.1 阶段 3：格是否对玩家不可见（FOG 或 SHADOW）
+## 用于动态实体（敌方 pack / 援军 / 威胁圈）的渲染过滤——动态实体仅 NORMAL 可见
+## 静态实体（资源点 / 持久 slot）只在 SHADOW 时不画，FOG 时仍画（靠 vision_overlay 灰化）
+func is_tile_invisible(tile: Vector2i) -> bool:
+	var vs: VisionSystem = _wm.get("_vision_system") as VisionSystem
+	if vs == null:
+		return false
+	var state: int = vs.get_tile_state(tile)
+	return state == VisionSystem.TileState.FOG or state == VisionSystem.TileState.SHADOW
+
+
+## L1.1 阶段 3：格是否在阴影区（SHADOW）
+## 用于静态实体（资源点 / 持久 slot）的渲染过滤——SHADOW 时不画
+func is_tile_shadow(tile: Vector2i) -> bool:
+	var vs: VisionSystem = _wm.get("_vision_system") as VisionSystem
+	if vs == null:
+		return false
+	return vs.get_tile_state(tile) == VisionSystem.TileState.SHADOW
+
+
 ## 玩家单位是否正在移动（用于 NightVisionLayer 计算光源位置 —— 移动中读 unit_visual_pos）
 ## MVP-δ 阶段 2 追加
 func is_player_moving() -> bool:
