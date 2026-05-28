@@ -648,19 +648,21 @@ func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 # ─────────────────────────────────────────
 
 ## 根据地图像素尺寸设置 Camera 边界
+##
+## L1.1 阶段 4（2026-05-28）：取消 limit_right/limit_bottom 硬绑 _schema 的约束
+## 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md §10 阶段 4 议题 2 (2.1)
+## 4 个 limit 全部设为 Godot Camera2D 默认极值（INT_MAX/MIN），camera 不再被 _schema 边界卡死
+## 玩家滚动镜头到 _schema 外时，由 NightVisionLayer shader 兜底渲染黑色（议题 3 决议）
+## 移动判定仍卡 _schema 边界（不在本函数范围内；玩法层包裹叠加原则）
 func _setup_camera_limits() -> void:
-	if _schema == null or _camera == null:
+	if _camera == null:
 		return
-	_camera.limit_left = 0
-	# 入口 4 MVP（2026-05-10 HTML 跑测补丁）：limit_top 反向偏移补偿 camera.offset
-	# Godot 4 Camera2D.limit_* 计算时不计入 offset；offset.y=+OFFSET 让画面下移
-	# 若 limit_top=0，玩家贴顶时顶行只剩 (TILE_SIZE-OFFSET)/TILE_SIZE 比例（实测约 0.58 行）
-	# 设 limit_top=-OFFSET 让 camera 可上越界，使顶行完整呈现
-	_camera.limit_top = -EXPLORE_HUD_OFFSET_PX
-	_camera.limit_right = _schema.width * TILE_SIZE
-	# 入口 4 MVP（2026-05-09 跑测补丁）：limit_bottom 扩 RESERVE 让 camera 能下移到地图外
-	# 配合 _camera.offset.y = +RESERVE/2，玩家贴底时屏幕底部 RESERVE 像素是地图外虚空（被 HUD 遮挡）
-	_camera.limit_bottom = _schema.height * TILE_SIZE + EXPLORE_HUD_BOTTOM_RESERVE_PX
+	# Camera2D limit_* 默认值（Godot 4.6）：left/top = -10000000，right/bottom = 10000000
+	# 显式设为这些值，让 camera 移动不被 _schema 边界约束（玩家移动判定仍卡边界）
+	_camera.limit_left = -10000000
+	_camera.limit_top = -10000000
+	_camera.limit_right = 10000000
+	_camera.limit_bottom = 10000000
 
 
 ## 战斗 Camera/zoom 三函数（start_battle_camera / end_battle_camera /

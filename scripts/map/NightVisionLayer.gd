@@ -73,7 +73,14 @@ class FogSignalNode extends Node2D:
 ## 夜晚遮罩 CanvasLayer 容器（layer=5）+ 全屏 ColorRect（持 night_overlay ShaderMaterial）
 var _night_overlay_layer: CanvasLayer = null
 var _night_overlay_rect: ColorRect = null
-## 当前 shader 的 phase_alpha 因子（0=白天 / 1=夜晚 / 中间值 = Tween 进行中）
+## L1.1 阶段 4：白天 phase_alpha 占位值（让 shader 白天也启用，兜底 _schema 外的视觉）
+## 设计：tile-advanture-design/无限地图实装/L1.1_视野循环与chunk底座_MVP.md §10 阶段 4 议题 3 (3.B)
+## 视觉效果：玩家视野半径内 alpha=0（透明，地图清晰）；视野外 alpha=WHITE_PHASE_ALPHA
+## （半透黑，形成"远处朦胧"边界感）。MVP 占位 0.20，跑测调优。
+## 战斗 force_day 不走此值（仍走 0.0，让战斗白天完全清晰）
+const WHITE_PHASE_ALPHA: float = 0.20
+## 当前 shader 的 phase_alpha 因子（白天=WHITE_PHASE_ALPHA / 夜晚=1.0 / 中间值 = Tween 进行中 / 战斗 force_day=0.0）
+## L1.1 阶段 4 修订（2026-05-28）：原"0=白天"语义改为"WHITE_PHASE_ALPHA=白天"
 var _phase_alpha: float = 0.0
 ## 昼夜 fade Tween 引用（任意时刻只允许一个 Tween）
 var _phase_alpha_tween: Tween = null
@@ -123,6 +130,15 @@ func setup(turn_manager: TurnManager, camera: Camera2D, world_view: WorldView,
 	_enemy_move_color = enemy_move_color
 	_setup_night_overlay()
 	_setup_fog_signal_layer()
+	# L1.1 阶段 4：按当前昼夜 phase 同步初始 _phase_alpha
+	# 启动早期 DayNightState.current 通常返回 DAY，故初始值需是 WHITE_PHASE_ALPHA（非 0.0）
+	# 让 shader 启动后即开始兜底 _schema 外的视觉
+	# 不走 _fade_phase_alpha：避免启动瞬间 0 → WHITE_PHASE_ALPHA 的视觉跳变
+	if DayNightState.current(_turn_manager) == DayNightState.Phase.NIGHT:
+		_phase_alpha = 1.0
+	else:
+		_phase_alpha = WHITE_PHASE_ALPHA
+	_apply_phase_alpha_to_shader()
 
 
 ## 浓雾像素判定（WorldMap / WorldView.is_in_fog 转发；WorldMapRenderer 经 WorldView 间接调）
@@ -154,11 +170,15 @@ func is_battle_force_day() -> bool:
 ## 跑测修复（2026-05-11 第 2 轮）：守卫从 is_night 改为 _phase_alpha > 0.001
 ##   并把信号 alpha 乘以 _phase_alpha，让 fade 过程中浮层信号与背景遮罩同步渐隐
 ##   force-day 期间 _phase_alpha 在 Tween 中 fade 到 0，自然不画 → 与战斗白天语义一致
+##
+## L1.1 阶段 4 修订：白天 _phase_alpha = WHITE_PHASE_ALPHA = 0.20，但白天不该画浓雾外信号
+## （白天玩家直接能看到敌方，无需"看不见但有暗示"机制）。守卫阈值改为 WHITE_PHASE_ALPHA + 0.001
+## —— 仅 fade 进入夜晚（超过白天基线）才画
 func collect_fog_signals() -> Array:
 	var out: Array = []
 	if _battle_force_day:
 		return out
-	if _phase_alpha < 0.001:
+	if _phase_alpha <= WHITE_PHASE_ALPHA + 0.001:
 		return out
 	if _world_view == null:
 		return out
@@ -240,7 +260,8 @@ func resync_to_post_battle_state() -> void:
 	if not _battle_force_day:
 		return
 	_battle_force_day = false
-	var resync_target: float = 1.0 if _pending_post_battle_phase == int(DayNightState.Phase.NIGHT) else 0.0
+	# L1.1 阶段 4：战后回白天 fade 到 WHITE_PHASE_ALPHA（非 0.0），让 shader 白天兜底 _schema 外视觉
+	var resync_target: float = 1.0 if _pending_post_battle_phase == int(DayNightState.Phase.NIGHT) else WHITE_PHASE_ALPHA
 	_fade_phase_alpha(resync_target, CFG.fade_duration, true)
 	if _fog_signal_node != null:
 		_fog_signal_node.queue_redraw()
@@ -264,12 +285,16 @@ func clear() -> void:
 ## 每帧驱动 shader uniform + 闪烁敌人 redraw
 ##
 ## 性能守卫：
-##   - shader uniform 更新仅在 _phase_alpha > 0.001（fade 中或夜晚）时执行，白天空转跳过
+##   - shader uniform 更新仅在 _phase_alpha > 0.001 时执行
+##   - L1.1 阶段 4 修订：白天 _phase_alpha = WHITE_PHASE_ALPHA = 0.20 > 0.001，故白天也跑
+##     uniform 更新（shader 需跟随玩家光源位置移动）；仅战斗 force_day（_phase_alpha=0.0）
+##     + _unit == null 兜底（phase_alpha=0.0）+ 启动早期未 setup 时跳过
 ##   - queue_redraw 仅在 is_night + 非 force-day + 视野外有敌方 slot 时触发
 func _process(_delta: float) -> void:
 	if _night_overlay_rect == null:
 		return
-	# 守卫：白天且非 fade 中 → 全跳过（_phase_alpha 已是 0，shader 输出 alpha=0）
+	# 守卫：_phase_alpha 接近 0 + 非 fade 中 → 全跳过（shader 输出 alpha 接近 0，可视为透明）
+	# L1.1 阶段 4 修订：白天正常态 _phase_alpha = WHITE_PHASE_ALPHA (0.20)，不命中此守卫
 	if _phase_alpha < 0.001 and not _is_phase_alpha_tween_active():
 		return
 	_update_night_shader_uniforms()
@@ -383,6 +408,12 @@ func _update_night_shader_uniforms() -> void:
 ##
 ## codex P1-1 修复：移动中读 _unit_visual_pos（Tween 动画位置），静止时读 _unit.position 的格中心
 ## 防御：_unit == null 时返回 _unit_visual_pos（启动时默认 _start_pos 像素）
+##
+## L1.1 阶段 4 锚点（议题 1.2-轻量）：本函数概念上读 VisionSystem 第 0 槽位的玩家 VisionSource
+## 位置，但实际数据流走 _world_view.get_unit() / get_unit_visual_pos() 以保留移动平滑
+## （VisionSource.position 是 Vector2i 格坐标，无 Tween 中间像素位置）
+## L1.2 引入据点 / 占领点多源时需要升级 shader（vec4[] 数组 uniform 或 texture-based 多源）
+## 详见 [[../待跟踪事项索引]] §十一 P3「玩家方城建 slot 作为额外光源」
 func _player_light_world_center() -> Vector2:
 	if _world_view == null:
 		return Vector2.ZERO
@@ -472,8 +503,12 @@ func _compute_blink_alpha(seed: int) -> float:
 ## 跑测修复（2026-05-11 第 2 轮）：判断条件从 is_night 改为 _phase_alpha > 0.001
 ##   原 is_night 在 phase 切换瞬间立即 false，导致 fade 过程中浮层信号 / 闪烁敌人
 ##   突然消失而不是跟随 0.6s fade 渐隐。改用 phase_alpha 守卫让浮层与背景 shader 同步
+##
+## L1.1 阶段 4 codex P2 修复：守卫阈值从 < 0.001 改为 <= WHITE_PHASE_ALPHA + 0.001
+##   与 collect_fog_signals 守卫语义对齐（白天不画浓雾外敌方信号），避免白天空跑 queue_redraw
+##   fade 过程中（Tween active）仍走 redraw（与原有 fade 渐隐保护一致）
 func _need_blinking_redraw() -> bool:
-	if _phase_alpha < 0.001 and not _is_phase_alpha_tween_active():
+	if _phase_alpha <= WHITE_PHASE_ALPHA + 0.001 and not _is_phase_alpha_tween_active():
 		return false
 	if _battle_force_day:
 		return false
@@ -508,6 +543,7 @@ func on_phase_changed(phase: int) -> void:
 	if _battle_force_day:
 		_pending_post_battle_phase = phase
 		return
-	# 正常昼夜切换：NIGHT → 遮罩 fade in 到 1.0；DAY → fade out 到 0.0
-	var target: float = 1.0 if phase == int(DayNightState.Phase.NIGHT) else 0.0
+	# 正常昼夜切换：NIGHT → 遮罩 fade in 到 1.0；DAY → fade out 到 WHITE_PHASE_ALPHA
+	# L1.1 阶段 4：白天 fade 目标从 0.0 改为 WHITE_PHASE_ALPHA，让 shader 始终启用兜底 _schema 外视觉
+	var target: float = 1.0 if phase == int(DayNightState.Phase.NIGHT) else WHITE_PHASE_ALPHA
 	_fade_phase_alpha(target, CFG.fade_duration, false)
