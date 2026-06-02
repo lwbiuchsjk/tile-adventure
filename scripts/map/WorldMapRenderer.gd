@@ -600,7 +600,12 @@ func _draw_persistent_slots() -> void:
 		# 前两周期 CORE_TOWN 数据层仍是 CORE_TOWN（PCG / VictoryJudge / reinforcement 锚都依赖），
 		# 视觉降级为普通 TOWN：跳过金边 / 徽记，主字改用 TOWN 短标签
 		var is_core_town: bool = slot.type == PersistentSlot.Type.CORE_TOWN
-		var is_core_town_activated: bool = is_core_town and _current_cycle_has_enemy_core
+		# L1.2 Phase 1（§3.8）：伪装态加 owner 守卫 —— 仅敌方核心（owner==ENEMY_1）受
+		# has_enemy_core 周期门控；玩家方据点（CORE_TOWN owner==PLAYER）始终走完整视觉
+		# （金边 + 徽记），不被伪装代码误伤。当前敌方伪装分支是 dead branch（has_enemy_core
+		# 全 cycle=true），本守卫为预防 L1.3 重启早期 cycle 隐藏机制时玩家据点"凭空消失两 cycle"
+		var is_player_core: bool = is_core_town and slot.owner_faction == Faction.PLAYER
+		var is_core_town_activated: bool = is_core_town and (is_player_core or _current_cycle_has_enemy_core)
 		if is_core_town_activated:
 			# 核心目标传达 L1.5（§2.2）：敌方 owned 核心=唯一胜利目标 → 粗金边+外发光强凸显
 			# 其它激活核心（理论罕见，如占领瞬间）走原 2px 金边兜底

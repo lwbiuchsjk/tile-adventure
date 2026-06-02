@@ -30,6 +30,7 @@ func _init() -> void:
 	_test_core_slot_first_two_cycles_advance()
 	_test_occupation_system_integration_player_flip()
 	_test_occupation_system_integration_enemy_flip()
+	_test_stronghold_recapture_no_victory()
 	_test_same_faction_occupy_no_trigger()
 	_test_non_core_occupy_no_trigger()
 	_test_invalid_sink_does_not_lock_finished()
@@ -195,6 +196,30 @@ func _test_occupation_system_integration_enemy_flip() -> void:
 	_assert(_captured.is_empty(),                "sink 不触发（owner != PLAYER 被 X-A 阵营过滤）")
 
 
+## 8.5 L1.2 Phase 1：玩家夺回据点（CORE_TOWN owner 翻回 PLAYER）不触发胜利
+##     据点也是 CORE_TOWN owner=PLAYER，但 position == RunState.stronghold_pos() → 视为夺回失地
+##     对照：同一 _reset 下若不设据点，占 CORE_TOWN owner=PLAYER 会触发（已由用例 2 覆盖）
+func _test_stronghold_recapture_no_victory() -> void:
+	print("-- L1.2 Phase 1：夺回据点不触发胜利")
+	_reset()
+	# 设定据点在 (3, 7)
+	RunState._has_stronghold = true
+	RunState._stronghold_pos = Vector2i(3, 7)
+
+	# 玩家夺回据点：该格 CORE_TOWN owner 翻回 PLAYER
+	var stronghold: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
+	stronghold.position = Vector2i(3, 7)
+	VictoryJudge.check_on_slot_owner_changed(stronghold)
+	_assert(_captured.is_empty(),            "夺回据点 sink 不触发")
+	_assert(not VictoryJudge.is_finished(),  "_finished 保持 false")
+
+	# 对照：同一局占敌方原始核心（position ≠ 据点）仍触发胜利
+	var enemy_core: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
+	enemy_core.position = Vector2i(9, 9)
+	VictoryJudge.check_on_slot_owner_changed(enemy_core)
+	_assert(_captured.size() == 1 and _captured[0] == Faction.PLAYER, "占敌方核心（非据点）仍触发胜利")
+
+
 ## 9. 同阵营"占据"返回 false 且 sink 不触发
 func _test_same_faction_occupy_no_trigger() -> void:
 	print("-- 同阵营占据不翻转 / 不触发 sink")
@@ -251,6 +276,10 @@ func _reset() -> void:
 	VictoryJudge.register_sink(_on_sink)
 	RunState._max_cycles = 3
 	RunState._cycle_index = 2
+	# L1.2 Phase 1：清据点态 —— 不设据点时 has_stronghold=false，VictoryJudge 据点守卫不生效，
+	# 现有占敌方核心胜利用例行为不变；据点专项用例自行设定
+	RunState._has_stronghold = false
+	RunState._stronghold_pos = Vector2i.ZERO
 
 
 ## sink 捕获回调

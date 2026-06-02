@@ -89,6 +89,25 @@ static var _on_cycle_advance_sink: Callable = Callable()
 ## C MVP：WorldMap 注册后由 EventPanelUI 承接弹窗；玩家确认后执行装配
 static var _on_recruit_triggered_sink: Callable = Callable()
 
+## 据点选定回调（L1.2 Phase 1）；签名 func(pos: Vector2i) -> void
+## set_stronghold 命中时触发；Phase 2 由 StrongholdVisionBinding 承接（register 据点 VisionSource）
+## Phase 1 暂无订阅方（仅数据 + UI 流程），sink 为空 noop
+static var _on_stronghold_set_sink: Callable = Callable()
+
+
+# ─────────────────────────────────────
+# 据点（L1.2 Phase 1）
+# ─────────────────────────────────────
+
+## 当前局玩家选定的据点格坐标（Vector2i 世界格）
+## 未选定时 _stronghold_pos 值无意义，须由 _has_stronghold 判定（避免 sentinel 值耦合，
+## 与现有 _initialized / _pending_*_intro 命名风格一致）
+## 命名用 position 语义（与 PersistentSlot.position 字段对齐；设计文档伪代码 s.tile 为笔误）
+static var _stronghold_pos: Vector2i = Vector2i.ZERO
+
+## 据点是否已选定
+static var _has_stronghold: bool = false
+
 
 # ─────────────────────────────────────
 # RNG
@@ -125,6 +144,10 @@ static func ensure_initialized(max_cycles_value: int, hero_pool_rows: Array, rng
 	_pending_cycle_victory_intro = false
 	_victory_leader_snapshot = {}
 	_already_triggered_this_cycle = []
+	# L1.2 Phase 1：据点跨周期 reload 保留靠 _initialized=true 直接 return（上方 line 112-113）；
+	# 此处清零是"首次进入"的初始态，与 _used_hero_ids / _cycle_index 同语义
+	_stronghold_pos = Vector2i.ZERO
+	_has_stronghold = false
 	# rng 缺省时内部建一个并 randomize；显式传入时保留调用方掌控
 	if rng == null:
 		var fallback: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -152,6 +175,9 @@ static func reset() -> void:
 	_pending_cycle_victory_intro = false
 	_victory_leader_snapshot = {}
 	_already_triggered_this_cycle = []
+	# L1.2 Phase 1：整局重开清据点（与 _used_hero_ids 等整局态同语义）
+	_stronghold_pos = Vector2i.ZERO
+	_has_stronghold = false
 	# _max_cycles 不重设；下一次 ensure_initialized 会按新配置覆盖
 
 
@@ -420,11 +446,41 @@ static func register_cycle_advance_sink(sink: Callable) -> void:
 	_on_cycle_advance_sink = sink
 
 
+## 注册据点选定回调（L1.2 Phase 1）；多次调用以最后一次为准
+## 签名 func(pos: Vector2i) -> void；Phase 2 由 StrongholdVisionBinding 承接
+static func register_stronghold_set_sink(sink: Callable) -> void:
+	_on_stronghold_set_sink = sink
+
+
+# ─────────────────────────────────────
+# 据点查询 / 设定（L1.2 Phase 1）
+# ─────────────────────────────────────
+
+## 据点是否已选定
+static func has_stronghold() -> bool:
+	return _has_stronghold
+
+
+## 据点格坐标（调用方需先 has_stronghold 守卫；未选定时返回值无意义）
+static func stronghold_pos() -> Vector2i:
+	return _stronghold_pos
+
+
+## 选定据点；写入位置 + 标记 + 触发 sink 通知订阅方（Phase 2 视野绑定）
+## MVP 一次性选定（不可更换）——调用方（EC._resolve_stronghold_prompt）已用 has_stronghold 守卫
+static func set_stronghold(pos: Vector2i) -> void:
+	_stronghold_pos = pos
+	_has_stronghold = true
+	if _on_stronghold_set_sink.is_valid():
+		_on_stronghold_set_sink.call(pos)
+
+
 ## 清理回调（场景 _exit_tree 时调用）
 ## 注意：仅清回调，不清整局态——重生场景重载时整局态必须保留
 static func clear_sinks() -> void:
 	_on_cycle_advance_sink = Callable()
 	_on_recruit_triggered_sink = Callable()
+	_on_stronghold_set_sink = Callable()
 
 
 # ─────────────────────────────────────

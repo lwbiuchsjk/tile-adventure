@@ -127,6 +127,30 @@ static func generate(schema: MapSchema, config: GenConfig) -> Array[PersistentSl
 
 
 # ─────────────────────────────────────────
+# 据点升级（L1.2 Phase 1）
+# ─────────────────────────────────────────
+
+## 将指定格上的玩家方持久 slot 升级为玩家方 CORE_TOWN（据点）
+##
+## 前置：pos 上必须存在 owner == PLAYER 的持久 slot（调用方 EC._resolve_stronghold_prompt
+## 已用扎营覆盖判定保证）；找不到返回 false（调用方据此决定是否标记 has_stronghold）
+##
+## 升级效果：type → CORE_TOWN、level → 3（与敌方 CORE_TOWN 同级，WorldMapRenderer 视觉取最高级
+## 金边 + 徽记）。display_id 保留原值（村庄/城镇编号）——渲染主字优先 display_id，不强制改"核心"，
+## 避免与敌方核心混淆；玩家据点视觉靠金边 + 徽记区分（owner 守卫见 WorldMapRenderer 改动）。
+##
+## 运行时调用，不触发 _validate（_validate 仅在 generate() 内跑；运行时升级安全，
+## 设计 §3.9 / 现状核对 2026-06-02）
+static func upgrade_slot_to_stronghold(slots: Array[PersistentSlot], pos: Vector2i) -> bool:
+	for s in slots:
+		if s.position == pos and s.owner_faction == Faction.PLAYER:
+			s.type = PersistentSlot.Type.CORE_TOWN
+			s.level = 3
+			return true
+	return false
+
+
+# ─────────────────────────────────────────
 # 单次尝试（八阶段串联）
 # ─────────────────────────────────────────
 

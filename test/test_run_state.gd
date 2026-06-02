@@ -17,6 +17,7 @@ var _failed: int = 0
 ## sink 捕获
 var _cycle_advance_captured: Array[Dictionary] = []
 var _recruit_captured: Array[Dictionary] = []
+var _stronghold_captured: Array[Vector2i] = []
 
 
 func _init() -> void:
@@ -34,6 +35,9 @@ func _init() -> void:
 	_test_record_camp_advance_cycle_milestone()
 	_test_check_recruit_milestone_same_cycle_dedupe()
 	_test_sinks_register_and_clear()
+	_test_stronghold_set_query_reset()
+	_test_stronghold_set_sink()
+	_test_stronghold_cross_init_preserved()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -220,6 +224,48 @@ func _test_sinks_register_and_clear() -> void:
 
 
 # ─────────────────────────────────────
+# 用例：据点（L1.2 Phase 1）
+# ─────────────────────────────────────
+
+## 8. 据点 set / 查询 / reset 清零
+func _test_stronghold_set_query_reset() -> void:
+	_reset()
+	_assert(not RunState.has_stronghold(), "初始无据点")
+	RunState.set_stronghold(Vector2i(7, 3))
+	_assert(RunState.has_stronghold(), "set_stronghold 后 has_stronghold=true")
+	_assert(RunState.stronghold_pos() == Vector2i(7, 3), "stronghold_pos 返回设定值")
+	# reset（整局重开）清零
+	RunState.reset()
+	_assert(not RunState.has_stronghold(), "reset 后据点清零")
+
+
+## 9. 据点 sink 触发：set_stronghold 命中已注册 sink
+func _test_stronghold_set_sink() -> void:
+	_reset()
+	_stronghold_captured = []
+	RunState.register_stronghold_set_sink(_on_stronghold_set)
+	RunState.set_stronghold(Vector2i(2, 9))
+	_assert(_stronghold_captured.size() == 1, "sink 被调一次")
+	_assert(_stronghold_captured[0] == Vector2i(2, 9), "sink 收到正确坐标")
+	# clear_sinks 后不再触发
+	RunState.clear_sinks()
+	RunState.set_stronghold(Vector2i(5, 5))
+	_assert(_stronghold_captured.size() == 1, "clear_sinks 后 sink 不再触发")
+
+
+## 10. 据点跨 ensure_initialized 保留（模拟 cycle reload：_initialized=true 直接 return）
+func _test_stronghold_cross_init_preserved() -> void:
+	_reset()
+	RunState.set_stronghold(Vector2i(4, 4))
+	_assert(RunState.has_stronghold(), "设定据点")
+	# 再次 ensure_initialized（不 reset）—— 模拟 reload 走到 ensure_initialized 但 _initialized=true
+	# 直接 return，据点字段不被清（与 _used_hero_ids / _cycle_index 同语义）
+	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
+	_assert(RunState.has_stronghold(), "跨 ensure_initialized（reload）据点保留")
+	_assert(RunState.stronghold_pos() == Vector2i(4, 4), "据点坐标保留")
+
+
+# ─────────────────────────────────────
 # 辅助
 # ─────────────────────────────────────
 
@@ -253,6 +299,10 @@ func _on_cycle_advance(prev: int, new_cycle: int) -> void:
 
 func _on_recruit(hero_dict: Dictionary, milestone: int) -> void:
 	_recruit_captured.append({"hero": hero_dict, "milestone": milestone})
+
+
+func _on_stronghold_set(pos: Vector2i) -> void:
+	_stronghold_captured.append(pos)
 
 
 func _assert(cond: bool, msg: String) -> void:

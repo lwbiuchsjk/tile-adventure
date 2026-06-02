@@ -295,6 +295,11 @@ func start_camp() -> void:
 	# 入队事件因此排在扎营产出事件之后，由 EventPanelUI FIFO 依次弹出
 	RunState.check_recruit_milestone(_world_map._player_lifecycle.get_team_hero_ids())
 
+	# L1.2 Phase 1：据点选定判定（在里程碑入队后、_update_hud 前）
+	# 命中条件全满足 → push 据点确认 event 到 EventPanelUI 队列（与扎营产出 / 里程碑同走 FIFO）；
+	# 复用现有 _pending_camp_manage_open 守卫自动延迟 ManageUI 打开（下方步骤 7）
+	_resolve_stronghold_prompt()
+
 	_world_map._update_hud()
 
 	# 入口 2 MVP 2.1 议题 1：扎营时事件队列清空后再开 ManageUI
@@ -406,6 +411,84 @@ func _resolve_camp_scenario() -> Dictionary:
 		if nearest != null:
 			result["slot_name"] = nearest.display_id
 	return result
+
+
+## L1.2 Phase 1：据点选定判定 —— 命中条件全满足时 push 据点确认 event 到 EventPanelUI 队列
+##
+## 命中条件（设计 §4.1）：
+##   ① RunState.has_stronghold() == false（MVP 一次性，已有据点不再问）
+##   ② 玩家当前扎营覆盖到玩家方 TOWN / VILLAGE 持久 slot（不在野外设据点）
+##   ③ 该 slot owner == PLAYER（②已隐含；_find_camp_stronghold_candidate 内兜底过滤）
+##
+## 命中 → push 一个带 actions=[是 / 暂不] + result_callback 的 event；选"是"回调执行升级 + set_stronghold
+func _resolve_stronghold_prompt() -> void:
+	# 守卫①：已有据点不再问
+	if RunState.has_stronghold():
+		return
+	# 守卫②③：找当前扎营覆盖的最近玩家方持久 slot（无 → 野外扎营，不弹）
+	var candidate: PersistentSlot = _find_camp_stronghold_candidate()
+	if candidate == null:
+		return
+
+	var slot_name: String = candidate.display_id if candidate.display_id != "" else candidate.get_map_label()
+	var candidate_pos: Vector2i = candidate.position
+	var wm: WorldMap = _world_map
+	# 选"是"回调：升级 slot → 写 RunState（触发 sink，Phase 2 视野绑定）→ 重绘据点徽记
+	# 闭包捕获 candidate_pos（值类型 Vector2i，安全）；用 position 查 schema slots（避免直接持 slot 引用跨帧）
+	var on_result: Callable = func(result: String, _payload: Dictionary) -> void:
+		if result != "set_stronghold":
+			return  # 选"暂不"：noop，下次扎营再问
+		if wm._schema == null:
+			return
+		var ok: bool = PersistentSlotGenerator.upgrade_slot_to_stronghold(wm._schema.persistent_slots, candidate_pos)
+		if not ok:
+			push_warning("EC._resolve_stronghold_prompt: 升级据点失败（pos=%s 无玩家方 slot）" % str(candidate_pos))
+			return
+		RunState.set_stronghold(candidate_pos)
+		# 据点徽记 / 金边即时可见
+		if wm._renderer != null:
+			wm._renderer.queue_redraw()
+
+	var event: Dictionary = {
+		"type": "stronghold_confirm",
+		"title": "设为据点？",
+		"narrative": "「%s」可作为你的据点。\n据点是昏迷后的复活锚点，并持续照亮周围区域。\n设为据点后，本局无法更换。" % slot_name,
+		"actions": [
+			{"label": "设为据点", "result": "set_stronghold"},
+			{"label": "暂不", "result": "skip"},
+		],
+		"payload": {},
+		"result_callback": on_result,
+	}
+	_world_map._event_panel.push_event(event)
+
+
+## L1.2 Phase 1：找当前扎营覆盖的最近玩家方持久 slot 实例（据点候选）
+##
+## 与 _resolve_camp_scenario 同源（slots_covering + 玩家方过滤），但返回 slot 实例本身
+## （_resolve_camp_scenario 只返回 {scenario, slot_name}，不足以拿来 upgrade）。
+## 取曼哈顿距离最近的玩家方 TOWN / VILLAGE；无则返回 null（野外扎营）
+func _find_camp_stronghold_candidate() -> PersistentSlot:
+	if _world_map._schema == null or _world_map._unit == null:
+		return null
+	# slots_covering 返回无类型 Array；用 Array 接收 + 循环 cast（项目类型化规范）
+	var covered: Array = OccupationSystem.slots_covering(
+		_world_map._unit.position, Faction.PLAYER, _world_map._schema.persistent_slots
+	)
+	var best: PersistentSlot = null
+	var best_dist: int = 99999
+	for entry in covered:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null or slot.owner_faction != Faction.PLAYER:
+			continue
+		# 仅 TOWN / VILLAGE 可设据点（CORE_TOWN 已是据点 / 敌方核心；野外无 slot）
+		if slot.type != PersistentSlot.Type.TOWN and slot.type != PersistentSlot.Type.VILLAGE:
+			continue
+		var d: int = absi(_world_map._unit.position.x - slot.position.x) + absi(_world_map._unit.position.y - slot.position.y)
+		if d < best_dist:
+			best_dist = d
+			best = slot
+	return best
 
 
 ## 入口 2 MVP 2.3（2026-05-11）：把 ProductionSystem entry 转为 {item, count} 字典

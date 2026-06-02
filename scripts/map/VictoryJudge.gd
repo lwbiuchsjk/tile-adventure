@@ -92,6 +92,13 @@ static func check_on_slot_owner_changed(slot: PersistentSlot) -> void:
 	# P0 X-A 阵营过滤：仅玩家占据敌方核心触发
 	if slot.owner_faction != Faction.PLAYER:
 		return
+	# L1.2 Phase 1：排除玩家据点 —— 玩家据点也是 CORE_TOWN owner=PLAYER，但它是复活锚不是胜利目标。
+	# 据点可被敌方攻占（设计 §2.1「据点无敌」拍板已修正：MVP 允许攻占），玩家"夺回据点"会让该
+	# slot owner 翻回 PLAYER 再次进到这里——视为夺回失地，不触发胜利/周期推进。
+	# 判据用 position（锚定格子）而非 owner：据点被占后 owner 已变，只有 position 锚得住。
+	# 注：占敌方原始核心（position ≠ 据点）仍触发；L1.3 扎营时钟胜利落地后再整体移除占核心胜利路。
+	if RunState.has_stronghold() and slot.position == RunState.stronghold_pos():
+		return
 	_dispatch_victory()
 
 
