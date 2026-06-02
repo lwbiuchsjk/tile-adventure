@@ -39,6 +39,14 @@ output/
 # MVP-C 预研：imgui-godot 接入测试（不入仓）
 test/imgui_probe/
 
+# L1.2 Phase 0：shader vec4[8] 多光源验证调试场景（一次性工具，不入仓）
+# 设计：tile-advanture-design/无限地图实装/L1.2_多源视野与据点机制_MVP.md §10.1
+test/scenes/test_shader_*
+test/scenes/testbed_multilight.gd
+test/scenes/testbed_multilight.gd.uid
+test/scenes/night_overlay_arrayA.gdshader
+test/scenes/night_overlay_arrayA.gdshader.uid
+
 # imgui-godot Windows 编辑器临时文件（addons/imgui-godot/bin 内 dll 锁定时的备份）
 addons/imgui-godot/bin/~*
 addons/imgui-godot/bin/*.TMP

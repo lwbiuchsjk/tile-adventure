@@ -82,6 +82,14 @@ func notify_source_moved() -> void:
 	_recompute_coverage()
 
 
+## 返回当前所有已注册视野源的快照引用（L1.2 §3.6 新增）
+## 顺序：注册顺序（L1.1 阶段 2 约定 _sources[0] = 玩家队伍源；据点 / 占领 slot 依次 append）
+## NightVisionLayer 每帧调用喂 shader lights[]，需保持轻量——直接返回内部数组引用（不拷贝）；
+## 调用方只读迭代，不得修改返回数组（增删源须经 register/unregister_source 走覆盖重算）
+func get_sources() -> Array[VisionSource]:
+	return _sources
+
+
 # ─────────────────────────────────────
 # 状态查询
 # ─────────────────────────────────────

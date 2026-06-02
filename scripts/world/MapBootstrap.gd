@@ -799,6 +799,12 @@ func init_world_subsystems() -> void:
 	_world_map.add_child(_world_map._vision_system)
 	_world_map._vision_system.setup(WorldMap.VISION_CFG)
 
+	# L1.2 Phase 0：把 _vision_system 注入 NightVisionLayer（多源 shader 光源数据源）
+	# 时序：NightVisionLayer 在上方 §渲染层创建段先 setup（早于此处），此时注入晚于其 setup —— 见
+	# NightVisionLayer.set_vision_system 注释。注入后 shader lights[] 从单玩家源升级为多源数据源
+	if _world_map._night_vision != null:
+		_world_map._night_vision.set_vision_system(_world_map._vision_system)
+
 	# world_seed 来源（codex P1 修复 2026-05-28）：
 	#   PCG 路径下复用 _world_rng.seed 保证 chunk noise 与 PCG 同源 + 折返一致
 	#   JSON 路径下 _world_rng 为 null（_load_json_internal 不创建），改用 Time 派生

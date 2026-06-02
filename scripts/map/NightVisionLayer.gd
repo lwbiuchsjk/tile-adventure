@@ -79,6 +79,10 @@ var _night_overlay_rect: ColorRect = null
 ## （半透黑，形成"远处朦胧"边界感）。MVP 占位 0.20，跑测调优。
 ## 战斗 force_day 不走此值（仍走 0.0，让战斗白天完全清晰）
 const WHITE_PHASE_ALPHA: float = 0.20
+## L1.2 Phase 0：shader 多光源槽位上限（与 night_overlay.gdshader MAX_LIGHTS 常量保持一致）
+## lights[0] 约定为玩家队伍源（保留平滑像素 + 视觉半径路径）；lights[1..] 为据点 / 占领 slot
+## 超过 MAX_LIGHTS 的视野源丢弃（L1.2 设计 §4.4：MVP 早中期玩家持有源数 ≤ 7，8 槽位足够）
+const MAX_LIGHTS: int = 8
 ## 当前 shader 的 phase_alpha 因子（白天=WHITE_PHASE_ALPHA / 夜晚=1.0 / 中间值 = Tween 进行中 / 战斗 force_day=0.0）
 ## L1.1 阶段 4 修订（2026-05-28）：原"0=白天"语义改为"WHITE_PHASE_ALPHA=白天"
 var _phase_alpha: float = 0.0
@@ -105,6 +109,10 @@ var _tile_size: int = 0
 ## 浓雾外信号菱形颜色（WorldMap 渲染常量经 setup 注入；避免 NightVisionLayer 持有 WorldMap 颜色常量副本）
 var _enemy_slot_color: Color = Color.RED
 var _enemy_move_color: Color = Color.RED
+## L1.2 Phase 0：VisionSystem 引用（多源 shader 光源数据源）
+## 注入时机晚于 setup —— MapBootstrap 中 _vision_system 在 NightVisionLayer.setup 之后才创建，
+## 故经独立 set_vision_system() 注入（而非 setup 参数）。null 时退回单玩家光源路径（兼容早期 / 测试）
+var _vision_system: VisionSystem = null
 
 
 # ─────────────────────────────────────────
@@ -139,6 +147,15 @@ func setup(turn_manager: TurnManager, camera: Camera2D, world_view: WorldView,
 	else:
 		_phase_alpha = WHITE_PHASE_ALPHA
 	_apply_phase_alpha_to_shader()
+
+
+## L1.2 Phase 0：注入 VisionSystem 引用（多源 shader 光源数据源）
+##
+## 时序说明：MapBootstrap 中 _vision_system 在本节点 setup() 之后才创建（见 MapBootstrap.gd
+## §视野循环创建段），故不能走 setup 参数注入；由 MapBootstrap 在 _vision_system 就绪后单独调用。
+## 注入前 _vision_system == null，_update_night_shader_uniforms 退回"仅玩家单光源"路径（兼容测试）
+func set_vision_system(vision_system: VisionSystem) -> void:
+	_vision_system = vision_system
 
 
 ## 浓雾像素判定（WorldMap / WorldView.is_in_fog 转发；WorldMapRenderer 经 WorldView 间接调）
@@ -351,10 +368,16 @@ func _setup_fog_signal_layer() -> void:
 	_fog_signal_layer.add_child(_fog_signal_node)
 
 
-## 每帧把玩家队伍像素位置 + 视野半径转 UV 空间，喂给 shader
+## 每帧把所有视野源像素位置 + 视野半径转 UV 空间，打包为 lights[] 喂给 shader
 ##
 ## 2026-05-11 跑测修复：从"viewport pixel + vec4 数组"切换到"UV 空间 + 单光源"
-## 详见原 WorldMap._update_night_shader_uniforms 注释
+## L1.2 Phase 0（2026-06-01）：重新升级为 vec4[8] 多光源 —— 但吸取原跑测教训，约定：
+##   - lights[0] 永远是玩家队伍源，保留原"平滑像素（移动 Tween）+ CFG 视觉半径（3.5 格）"路径
+##     不变（_player_light_world_center + CFG.vision_radius_grids），保证 active_count=1 时
+##     视觉与 L1.1 末态完全一致
+##   - lights[1..] 为据点 / 占领 slot 源，从 _vision_system.get_sources() 跳过第 0 个（玩家源）
+##     取格中心 + src.radius 视觉半径（Phase 2 接入；Phase 0 运行时 sources 仅 1 个 → 不进此循环）
+##   - _vision_system == null（早期 / 测试）时退回纯玩家单光源（active_count=1）
 ##
 ## codex P2-6 修复：_unit == null 时把 phase_alpha 归零，避免启动早期 1 帧整屏全黑
 func _update_night_shader_uniforms() -> void:
@@ -372,36 +395,57 @@ func _update_night_shader_uniforms() -> void:
 	if vp_size.x <= 0.0 or vp_size.y <= 0.0:
 		return
 
-	# 光源在世界空间的坐标（移动中用 unit_visual_pos，静止用格中心）
-	var light_world: Vector2 = _player_light_world_center()
-
-	# world → viewport pixel → UV
 	# canvas_transform 已自动包含 Camera2D position / zoom / rotation / offset 全部变换
 	var canvas_t: Transform2D = _camera.get_canvas_transform()
-	var light_vp: Vector2 = canvas_t * light_world
-	var light_uv: Vector2 = light_vp / vp_size
 
-	# 半径锚点 = 光源右侧 CFG.vision_radius_grids 格的世界位置
-	# 经过同一 canvas_transform 后，距离 = 半径在 viewport pixel 空间的值
-	var radius_anchor_world: Vector2 = light_world + Vector2(CFG.vision_radius_grids * float(_tile_size), 0.0)
-	var radius_anchor_vp: Vector2 = canvas_t * radius_anchor_world
-	var radius_vp_px: float = light_vp.distance_to(radius_anchor_vp)
-	# 用 viewport 高度归一化：与 shader 内 d.x *= aspect_xy 的基准（Y = 高度）对齐
-	var radius_uv: float = radius_vp_px / vp_size.y
+	# 构造 lights[] 数组（vec4[8] 数组 uniform；Phase 0 桌面 AB 对比验证本环境数组传递稳定）
+	# lights[0]：玩家队伍源 —— 保留平滑像素 + CFG 视觉半径路径（移动中用 unit_visual_pos）
+	var lights: Array[Vector4] = []
+	var player_world: Vector2 = _player_light_world_center()
+	lights.append(_pack_light_vec4(player_world, CFG.vision_radius_grids, CFG.fog_falloff_grids, canvas_t, vp_size))
 
-	var falloff_anchor_world: Vector2 = light_world + Vector2(CFG.fog_falloff_grids * float(_tile_size), 0.0)
-	var falloff_anchor_vp: Vector2 = canvas_t * falloff_anchor_world
-	var falloff_vp_px: float = light_vp.distance_to(falloff_anchor_vp)
-	var falloff_uv: float = falloff_vp_px / vp_size.y
+	# lights[1..]：据点 / 占领 slot 源（Phase 2 接入；遍历 get_sources 跳过第 0 个玩家源）
+	# Phase 0：sources 仅玩家 1 个 → for 循环不进入，active_count=1，等价单光源
+	if _vision_system != null:
+		var sources: Array[VisionSource] = _vision_system.get_sources()
+		for i in range(1, sources.size()):
+			if lights.size() >= MAX_LIGHTS:
+				break  # 超 8 槽位丢弃（L1.2 §4.4：玩家优先 lights[0]，其余按注册顺序）
+			var src: VisionSource = sources[i]
+			# 非玩家源用格中心（无 Tween 平滑需求）+ src.radius 作视觉半径
+			# Phase 2 调参点：视觉半径是否需按玩家 visual/state 比例（3.5/5）缩放，跑测时定
+			var src_world: Vector2 = _world_view.grid_to_pixel_center(src.position)
+			lights.append(_pack_light_vec4(src_world, float(src.radius), CFG.fog_falloff_grids, canvas_t, vp_size))
 
 	# 宽高比：让 shader 内距离 X 方向按 aspect 拉伸，圆始终是正圆而非椭圆
 	var aspect_xy: float = vp_size.x / vp_size.y
 
-	mat.set_shader_parameter("light_uv", light_uv)
-	mat.set_shader_parameter("light_radius_uv", radius_uv)
-	mat.set_shader_parameter("fog_falloff_uv", falloff_uv)
+	# 一次推送整个 lights[] 数组 + active_light_count（数组方案）；shader 内用 count 守卫遍历
+	mat.set_shader_parameter("lights", lights)
+	mat.set_shader_parameter("active_light_count", lights.size())
 	mat.set_shader_parameter("aspect_xy", aspect_xy)
 	mat.set_shader_parameter("phase_alpha", _phase_alpha)
+
+
+## 把一个世界坐标光源打包为 shader vec4：(uv.x, uv.y, radius_uv, falloff_uv)
+##
+## 半径 / 衰减锚点法：在光源右侧 N 格处取锚点，经同一 canvas_transform 后量得 viewport
+## 像素距离，再以 viewport 高度归一化（与 shader 内 d.x *= aspect_xy 的 Y 基准对齐）。
+## 与原单光源实现的 radius_uv / falloff_uv 算法逐字一致，保证 lights[0] 视觉不变。
+func _pack_light_vec4(light_world: Vector2, radius_grids: float, falloff_grids: float,
+		canvas_t: Transform2D, vp_size: Vector2) -> Vector4:
+	var light_vp: Vector2 = canvas_t * light_world
+	var light_uv: Vector2 = light_vp / vp_size
+
+	var radius_anchor_world: Vector2 = light_world + Vector2(radius_grids * float(_tile_size), 0.0)
+	var radius_anchor_vp: Vector2 = canvas_t * radius_anchor_world
+	var radius_uv: float = light_vp.distance_to(radius_anchor_vp) / vp_size.y
+
+	var falloff_anchor_world: Vector2 = light_world + Vector2(falloff_grids * float(_tile_size), 0.0)
+	var falloff_anchor_vp: Vector2 = canvas_t * falloff_anchor_world
+	var falloff_uv: float = light_vp.distance_to(falloff_anchor_vp) / vp_size.y
+
+	return Vector4(light_uv.x, light_uv.y, radius_uv, falloff_uv)
 
 
 ## 玩家队伍火把光源世界坐标（格中心像素）
