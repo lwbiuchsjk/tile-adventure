@@ -314,6 +314,8 @@ var _exploration_coordinator: ExplorationCoordinator = null
 var _vision_system: VisionSystem = null
 var _chunk_manager: ChunkManager = null
 var _player_vision_source: VisionSource = null
+## L1.2 Phase 2：据点 + 占领 slot 视野绑定（纯事件驱动；随 reload 释放）
+var _stronghold_vision_binding: StrongholdVisionBinding = null
 
 ## E 战斗就地展开 MVP：当前活跃战斗会话；null = 探索态，非 null = 战斗态
 ## 战斗态期间所有面板 / 输入需通过 _battle_coordinator.is_in_battle() 守卫拦截
@@ -521,6 +523,8 @@ func _exit_tree() -> void:
 		TickRegistry.unregister(_exploration_coordinator._on_faction_tick)
 	TickRegistry.unregister(_on_build_tick)
 	VictoryJudge.clear_sink()
+	# L1.2 Phase 2：清 OccupationSystem owner 翻转 sink（静态类，reload 后旧 binding Callable 残留会悬空）
+	OccupationSystem.clear_sink()
 	# MVP-δ 阶段 2：NightVisionLayer.clear 内部清 DayNightState sinks + 杀 _phase_alpha_tween
 	# WorldMap 自己注册的 phase_changed sink（_on_day_night_phase_changed）也一并被
 	# DayNightState.clear_sinks() 清掉（静态全局清理）

@@ -5,6 +5,8 @@
 [resource]
 script = ExtResource("1_vision")
 player_vision_radius = 5
+stronghold_vision_radius = 7
+occupied_slot_vision_radius = 4
 fog_delay_turns = 1
 shadow_decay_turns = 5
 chunk_size = 16

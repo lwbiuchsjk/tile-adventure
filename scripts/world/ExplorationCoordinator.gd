@@ -72,6 +72,15 @@ func init_vision_runtime() -> void:
 	var active_count: int = _world_map._chunk_manager.get_active_chunks().size()
 	print("[L1.1] VisionSystem + ChunkManager 启动；玩家视野半径 = %d；首屏 ACTIVE chunk = %d" % [radius, active_count])
 
+	# L1.2 Phase 2：据点 + 占领 slot 视野绑定（纯事件驱动，不做 init 扫描补登——
+	# MVP 目标体验首周期玩家无占领，实现不依赖开局占领状态）
+	# 据点靠 RunState.set_stronghold sink、占领靠 OccupationSystem.try_occupy 翻转 sink 增量接入
+	var binding: StrongholdVisionBinding = StrongholdVisionBinding.new()
+	binding.setup(_world_map._vision_system, WorldMap.VISION_CFG)
+	_world_map._stronghold_vision_binding = binding
+	RunState.register_stronghold_set_sink(binding.on_stronghold_set)
+	OccupationSystem.register_slot_owner_changed_sink(binding.on_slot_owner_changed)
+
 
 # ─────────────────────────────────────
 # 阶段 a：玩家移动动画链 + 可达性刷新

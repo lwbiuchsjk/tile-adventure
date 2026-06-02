@@ -24,6 +24,27 @@ extends RefCounted
 
 
 # ─────────────────────────────────────────
+# owner 翻转 sink（L1.2 Phase 2）
+# ─────────────────────────────────────────
+
+## 归属翻转回调；签名 func(slot: PersistentSlot) -> void
+## try_occupy 翻转成功后调一次（与 VictoryJudge.check_on_slot_owner_changed 同模式：
+## OccupationSystem 是 static 类无法 emit signal，复用"翻转后直接调静态 sink"模式）
+## Phase 2 由 StrongholdVisionBinding 订阅：占领翻转 → 更新占领 slot 视野源
+static var _on_slot_owner_changed_sink: Callable = Callable()
+
+
+## 注册归属翻转回调；多次调用以最后一次为准
+static func register_slot_owner_changed_sink(sink: Callable) -> void:
+	_on_slot_owner_changed_sink = sink
+
+
+## 清理回调（场景 _exit_tree 时调用，与 VictoryJudge.clear_sink 同生命周期）
+static func clear_sink() -> void:
+	_on_slot_owner_changed_sink = Callable()
+
+
+# ─────────────────────────────────────────
 # 占据判定
 # ─────────────────────────────────────────
 
@@ -66,6 +87,11 @@ static func try_occupy(slot: PersistentSlot, unit_faction: int) -> bool:
 	# VictoryJudge 内部会过滤非 CORE_TOWN；此处无需再判断类型，保持 try_occupy 职责单一
 	# MVP 无缓冲：占据即判定（《持久slot基础功能设计》§七）
 	VictoryJudge.check_on_slot_owner_changed(slot)
+
+	# L1.2 Phase 2：归属翻转钩子 → StrongholdVisionBinding 更新占领 slot 视野源
+	# 覆盖玩家占领（EC.try_player_occupy_at）+ 敌方占领（EC 敌方占领链）两条入口
+	if _on_slot_owner_changed_sink.is_valid():
+		_on_slot_owner_changed_sink.call(slot)
 	return true
 
 

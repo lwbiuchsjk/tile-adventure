@@ -20,6 +20,13 @@ extends Resource
 ## L1.1 单源；L1.2 扩展据点 + 占领点视野半径
 @export_range(1, 16, 1) var player_vision_radius: int = 5
 
+## 据点视野半径（L1.2 Phase 2）——据点 = 安全基地，视野最远
+## 默认梯度：据点(7) > 玩家(5) > 占领 slot(4)，强化"据点 = 锚"印象
+@export_range(1, 16, 1) var stronghold_vision_radius: int = 7
+
+## 玩家占领的持久 slot 视野半径（L1.2 Phase 2）——分布式触手，比玩家略小
+@export_range(1, 16, 1) var occupied_slot_vision_radius: int = 4
+
 
 @export_group("视野状态机时钟")
 
