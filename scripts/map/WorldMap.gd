@@ -1639,6 +1639,7 @@ func _on_explore_camp_pressed() -> void:
 #   Ctrl+L 耗尽命数到 0（场景 8：再 Ctrl+K → 末周期真失败）
 #   Ctrl+H 敌方夺取据点（场景 10：据点失守 → 再 Ctrl+K → 自动降级）
 #   Ctrl+P 强制周期胜利推进（场景 7：reload + 据点/占领跨周期 re-light）
+#   Ctrl+U 传送到最近敌方关卡格（场景 9：验证"队伍与敌方同格"良性 —— 战斗仅 [F] 触发不自动）
 # ─────────────────────────────────────────
 
 ## 调试键调度：命中返回 true（消费事件）。仅在干净探索态执行，避免在战斗/移动/面板态构造脏前置
@@ -1663,6 +1664,9 @@ func _handle_debug_key(keycode: int) -> bool:
 		KEY_P:
 			_show_notice("[调试] 强制周期胜利推进")
 			_on_cycle_victory_triggered()
+			return true
+		KEY_U:
+			_debug_teleport_onto_enemy()
 			return true
 	return false
 
@@ -1711,6 +1715,31 @@ func _debug_enemy_capture_stronghold() -> void:
 		_show_notice("[调试] 据点被敌方夺取（owner→ENEMY，视野撤除）；下次昏迷将自动降级走 fallback")
 	else:
 		_show_notice("[调试] try_occupy 拒绝（据点已非玩家方？）")
+
+
+## 调试：传送队伍到最近敌方关卡格（场景 9 前置——构造"队伍与敌方同格"态）
+##
+## 验证目的：战斗仅 [F] 触发、从不自动，故此态应为良性——玩家可 [F] 应战或走开，
+## 无设计场景 9 担忧的"瞬间触发战斗 → 连环 COMA"（该担忧基于"碰撞即战斗"的错误假设）。
+func _debug_teleport_onto_enemy() -> void:
+	var nearest: Vector2i = _unit.position
+	var best_dist: int = 0x7FFFFFFF
+	var found: bool = false
+	for pos in _level_slots:
+		var p: Vector2i = pos as Vector2i
+		var lv: LevelSlot = _level_slots[p] as LevelSlot
+		if lv == null or not lv.is_interactable():
+			continue
+		var d: int = absi(_unit.position.x - p.x) + absi(_unit.position.y - p.y)
+		if d < best_dist:
+			best_dist = d
+			nearest = p
+			found = true
+	if not found:
+		_show_notice("[调试] 地图上无可交互敌方关卡")
+		return
+	_exploration_coordinator.teleport_party_to(nearest)
+	_show_notice("[调试] 传送到最近敌方关卡 %s；按 [F] 应战可验证无卡死/连环" % str(nearest))
 
 
 ## 入口 4 MVP（2026-05-09 BUG 修复）：事件面板关闭后刷新探索态行动按钮
