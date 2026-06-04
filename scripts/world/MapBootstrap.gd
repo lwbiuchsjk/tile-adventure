@@ -484,8 +484,10 @@ func create_world_state() -> void:
 	_world_map._player_lifecycle = PlayerLifecycle.new()
 	_world_map._player_lifecycle.name = "PlayerLifecycle"
 	_world_map.add_child(_world_map._player_lifecycle)
-	# Sink 接线：3 个信号让 PlayerLifecycle 不直接依赖 OverlayTransitionUI / VictoryJudge
-	_world_map._player_lifecycle.coma_triggered.connect(_world_map._on_player_coma_triggered)
+	# Sink 接线：信号让 PlayerLifecycle 不直接依赖 OverlayTransitionUI / VictoryJudge / 持久 slot 表
+	# L1.2 Phase 3：coma_triggered（reload 范式）退役 → coma_respawn_triggered（传送范式）+ 注入复活目标解析器
+	_world_map._player_lifecycle.coma_respawn_triggered.connect(_world_map._on_player_coma_respawn_triggered)
+	_world_map._player_lifecycle.register_coma_respawn_resolver(_world_map._resolve_coma_respawn)
 	_world_map._player_lifecycle.defeat_triggered.connect(_world_map._on_player_defeat_triggered)
 	_world_map._player_lifecycle.respawn_intro_ready.connect(_world_map._on_player_respawn_intro_ready)
 	_world_map._player_lifecycle.cycle_victory_intro_ready.connect(_world_map._on_player_cycle_victory_intro_ready)

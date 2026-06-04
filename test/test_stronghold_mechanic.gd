@@ -23,6 +23,9 @@ func _init() -> void:
 	_test_stronghold_pos_skips_occupy_source()
 	_test_occupy_then_stronghold_same_pos_upgrades()
 	_test_multi_source_coverage_union()
+	_test_init_scan_registers_preoccupied()
+	_test_init_scan_with_stronghold()
+	_test_stronghold_capture_unregisters_source()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -147,9 +150,98 @@ func _test_multi_source_coverage_union() -> void:
 	_assert(vs.get_tile_state(Vector2i(50, 50)) == VisionSystem.TileState.SHADOW, "圆外格 SHADOW")
 
 
+## 7. init_scan 补登开局已占领 slot（Phase 3 修复：地图预染玩家 slot 视野漏激活）
+func _test_init_scan_registers_preoccupied() -> void:
+	print("-- init_scan 补登开局占领（无据点）")
+	var ctx: Dictionary = _make_binding()
+	var binding: StrongholdVisionBinding = ctx["binding"]
+	var vs: VisionSystem = ctx["vs"]
+	# 无据点场景
+	RunState.reset()
+	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(1))
+	# 2 个玩家占领 + 1 敌方 + 1 中立
+	var slots: Array[PersistentSlot] = [
+		_make_slot(Vector2i(2, 2), Faction.PLAYER),
+		_make_slot(Vector2i(4, 7), Faction.PLAYER),
+		_make_slot(Vector2i(9, 9), Faction.ENEMY_1),
+		_make_slot(Vector2i(1, 8), Faction.NONE),
+	]
+	binding.init_scan(slots)
+	_assert(binding.occupied_source_count() == 2, "仅 2 个玩家 slot 补登占领源")
+	_assert(not binding.has_stronghold_source(), "无据点 → 无据点源")
+	_assert(vs.get_sources().size() == 2, "VisionSystem 2 源（敌方/中立不登）")
+
+
+## 8. init_scan 据点优先 + 据点格不重复登占领源
+func _test_init_scan_with_stronghold() -> void:
+	print("-- init_scan 据点优先")
+	var ctx: Dictionary = _make_binding()
+	var binding: StrongholdVisionBinding = ctx["binding"]
+	var vs: VisionSystem = ctx["vs"]
+	RunState.reset()
+	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(1))
+	# 据点格 (5,5) 必须是 CORE_TOWN/PLAYER 才被据点分支命中
+	var stronghold_slot: PersistentSlot = _make_slot(Vector2i(5, 5), Faction.PLAYER)
+	stronghold_slot.type = PersistentSlot.Type.CORE_TOWN
+	var slots: Array[PersistentSlot] = [
+		stronghold_slot,
+		_make_slot(Vector2i(2, 2), Faction.PLAYER),
+	]
+	RunState.set_stronghold(Vector2i(5, 5))
+	binding.init_scan(slots)
+	_assert(binding.has_stronghold_source(), "据点源已补登")
+	_assert(binding.occupied_source_count() == 1, "据点格不重复登占领源，仅另 1 个玩家 slot")
+	_assert(vs.get_sources().size() == 2, "共 2 源（据点 + 1 占领）")
+	# 据点源半径 7
+	var has_r7: bool = false
+	for src in vs.get_sources():
+		if src.radius == 7:
+			has_r7 = true
+	_assert(has_r7, "存在半径 7 的据点源")
+	RunState.reset()
+
+
+## 9. 据点失守撤视野 + 夺回重注册（codex P1-3 修复）
+func _test_stronghold_capture_unregisters_source() -> void:
+	print("-- 据点失守撤视野 / 夺回重注册")
+	var ctx: Dictionary = _make_binding()
+	var binding: StrongholdVisionBinding = ctx["binding"]
+	var vs: VisionSystem = ctx["vs"]
+	# 设据点
+	binding.on_stronghold_set(Vector2i(3, 3))
+	_assert(binding.has_stronghold_source(), "据点源已注册")
+	_assert(vs.get_sources().size() == 1, "1 源")
+	# 据点被敌方攻占（owner→ENEMY）→ 据点源注销
+	var captured: PersistentSlot = _make_slot(Vector2i(3, 3), Faction.ENEMY_1)
+	captured.type = PersistentSlot.Type.CORE_TOWN
+	binding.on_slot_owner_changed(captured)
+	_assert(not binding.has_stronghold_source(), "失守后据点源已注销")
+	_assert(vs.get_sources().is_empty(), "失守后 0 源")
+	# 玩家夺回（owner→PLAYER）→ 据点源重注册
+	var retaken: PersistentSlot = _make_slot(Vector2i(3, 3), Faction.PLAYER)
+	retaken.type = PersistentSlot.Type.CORE_TOWN
+	binding.on_slot_owner_changed(retaken)
+	_assert(binding.has_stronghold_source(), "夺回后据点源重注册")
+	_assert(vs.get_sources().size() == 1, "夺回后 1 源")
+	_assert(vs.get_sources()[0].radius == 7, "重注册仍为据点半径 7")
+
+
 # ─────────────────────────────────────
 # 辅助
 # ─────────────────────────────────────
+
+## 4 个英雄 mock 池（ensure_initialized 需要）
+func _mock_hero_pool() -> Array:
+	return [
+		{"id": 0, "name": "A", "troop_type": "SWORD", "troop_quality": "T1"},
+		{"id": 1, "name": "B", "troop_type": "BOW", "troop_quality": "T1"},
+	]
+
+
+func _make_rng(seed_value: int) -> RandomNumberGenerator:
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = seed_value
+	return rng
 
 ## 构造 VisionSystem + VisionConfig + StrongholdVisionBinding（默认半径 7/4）
 func _make_binding() -> Dictionary:

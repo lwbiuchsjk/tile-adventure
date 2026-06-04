@@ -80,6 +80,9 @@ func init_vision_runtime() -> void:
 	_world_map._stronghold_vision_binding = binding
 	RunState.register_stronghold_set_sink(binding.on_stronghold_set)
 	OccupationSystem.register_slot_owner_changed_sink(binding.on_slot_owner_changed)
+	# L1.2 Phase 3 修复：补登开局/reload 已占领 slot + 据点视野——
+	# 地图生成会预染玩家归属 slot，纯事件驱动漏激活其视野；init_scan 增量补登（详见 init_scan 注释）
+	binding.init_scan(_world_map._schema.persistent_slots)
 
 
 # ─────────────────────────────────────
@@ -168,6 +171,36 @@ func _on_move_finished() -> void:
 	if _world_map._player_vision_source != null and _world_map._vision_system != null:
 		_world_map._player_vision_source.position = _world_map._unit.position
 		_world_map._vision_system.notify_source_moved()
+
+
+## L1.2 Phase 3：昏迷复活——把队伍传送到 target_pos 并复位视图态（不 reload）
+##
+## 设计：L1.2_多源视野与据点机制_MVP §2.3 / §4.3
+## 与 _on_move_finished 的"位置收尾"子集对齐，但**剔除正常移动语义**：
+##   - 不消耗补给（复活非移动）、不触发资源采集 / 占领判定（避免在复活落点误占领 / 误采集）
+## 执行：逻辑+视觉位置 + 相机对齐 + 队伍满血 + 重置移动力 + 刷 HUD + 刷可达 + 同步玩家视野源
+## 调用方：WorldMap._on_player_coma_respawn_triggered 的 midpoint 闭包（phase B 全黑期）
+func teleport_party_to(target_pos: Vector2i) -> void:
+	var wm: WorldMap = _world_map
+	if wm._unit == null:
+		return
+	# 1. 逻辑位置 + 视觉位置 + 相机对齐（与 _on_move_finished 同步逻辑一致）
+	wm._unit.position = target_pos
+	wm._unit_visual_pos = wm._grid_to_pixel_center(target_pos)
+	wm._camera.position = wm._unit_visual_pos
+	# 2. 队伍满血（队长 + 全队员 troop）——HP 权威源在 PlayerLifecycle.characters() 的 troop
+	for ch in wm._player_lifecycle.characters():
+		if ch != null and ch.has_troop():
+			ch.troop.current_hp = ch.troop.max_hp
+	# 3. 重置移动力（与正常移动收尾一致，复活后可立即行动）
+	wm._unit.current_movement = wm._unit.max_movement
+	# 4. HUD + 可达范围刷新
+	wm._update_hud()
+	refresh_reachable()
+	# 5. 同步玩家视野源到新位置（与 _on_move_finished L1.1 阶段 3 同逻辑）
+	if wm._player_vision_source != null and wm._vision_system != null:
+		wm._player_vision_source.position = target_pos
+		wm._vision_system.notify_source_moved()
 
 
 ## 刷新可达范围并触发重绘

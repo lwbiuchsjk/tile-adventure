@@ -411,7 +411,7 @@ var _label_font: Font = null
 
 ## MVP-δ 阶段 2：玩家 lifecycle 子系统（_characters / 队长 / coma 状态）
 ## 由 _ready 在 _init_player 调用前创建 + setup（runtime_cfg 内含 coma 阈值与时长）
-## 信号接线：coma_triggered / defeat_triggered / respawn_intro_ready 三个 sink
+## 信号接线：coma_respawn_triggered（L1.2 Phase 3 取代 coma_triggered）/ defeat_triggered / respawn_intro_ready
 var _player_lifecycle: PlayerLifecycle = null
 
 # ─────────────────────────────────────────
@@ -1404,31 +1404,87 @@ func _get_active_troops() -> Array[TroopData]:
 	return troops
 
 # ─────────────────────────────────────────
-# MVP-δ 阶段 2：PlayerLifecycle 信号 sink（_player_lifecycle.coma_triggered /
-# defeat_triggered / respawn_intro_ready 三个信号让 PlayerLifecycle 不直接依赖 UI 系统）
+# MVP-δ 阶段 2 / L1.2 Phase 3：PlayerLifecycle 信号 sink（coma_respawn_triggered /
+# defeat_triggered / respawn_intro_ready 让 PlayerLifecycle 不直接依赖 UI 系统 / 持久 slot 表）
 # ─────────────────────────────────────────
 
-## 队长昏迷过渡触发（PlayerLifecycle.coma_triggered sink）
+## 队长昏迷复活触发（PlayerLifecycle.coma_respawn_triggered sink）—— L1.2 Phase 3
 ##
-## 原 _trigger_coma_or_lose 内 OverlayTransitionUI.play 直调迁过来；
-## 状态副作用（_reachable_tiles = {} / _pending_camp_manage_open = false / _renderer.queue_redraw）
-## 仍在 WorldMap 内执行——这些是 WorldMap 自己的视图态
+## 设计：L1.2_多源视野与据点机制_MVP §2.3 / §5 改动 4·6
+## 取代原 _on_player_coma_triggered 的 reload 范式：昏迷不重置地图，改为 OverlayTransitionUI 黑屏下原地传送。
 ##
-## MVP-δ codex review P1 修复：midpoint 闭包整体迁到本处构造（原在 PlayerLifecycle.trigger_coma_or_lose 内）
-## 闭包负责：advance_cycle（RunState 周期推进）+ reload_current_scene（场景重启）+ 返回 world_ready
-##   让 OverlayTransitionUI 在 phase B 内调用 + await，等新场景 _ready 触发 notify_world_ready 后继续 phase C
-## 由 WorldMap 持有这段时序逻辑：PlayerLifecycle 彻底独立于 OverlayTransitionUI / SceneTree
-func _on_player_coma_triggered(lines: PackedStringArray, icon_data: Dictionary) -> void:
+## 三路（由 PlayerLifecycle.trigger_coma_or_lose 决策，本处只执行过渡 + 传送）：
+##   - is_stronghold：简版黑屏（无火苗）+ 传送据点，midpoint 不扣命数
+##   - 非 stronghold ：火苗黑屏（count = 当前命数）+ 传送 fallback，midpoint 调 consume_respawn_life 扣命数
+##
+## 关键时序：midpoint 在 phase B 全黑期执行传送（玩家看不到瞬移），返回 void（非 Signal）→ play 直接进字幕；
+## 过渡播完后显式 clear_coma 解锁（传送路径不 reload，同一 PlayerLifecycle 实例不会自动清 _is_in_coma）
+##
+## 视图态副作用（_reachable_tiles / _pending_camp_manage_open / queue_redraw）与原 coma 一致清理
+func _on_player_coma_respawn_triggered(target_pos: Vector2i, deduct_life: bool, is_stronghold: bool) -> void:
 	_reachable_tiles = {}
 	# codex review P1-5 修复（2026-05-10）：coma 触发即重置 flag
 	# 防 EventPanel 在战斗中被 hide 而非 close → flag 永久 true → 下次 EventPanel close 误开 ManageUI
 	_pending_camp_manage_open = false
 	_renderer.queue_redraw()
-	var midpoint: Callable = func() -> Signal:
-		RunState.advance_cycle()
-		get_tree().reload_current_scene()
-		return OverlayTransitionUI.world_ready
-	OverlayTransitionUI.play(lines, icon_data, midpoint)
+
+	var coma_line: String = _player_lifecycle.format_coma_line(_player_lifecycle.current_leader_name())
+	var lines: PackedStringArray
+	var icon_data: Dictionary
+	if is_stronghold:
+		# 简版黑屏：无火苗（count=0），据点回归双句
+		lines = PackedStringArray([coma_line, "回到了据点"])
+		icon_data = {"icon": "🏰", "count": 0}
+	else:
+		# 无据点：火苗 count = 当前剩余命数（midpoint 扣减前读取，语义 = 复活后玩家总命数）
+		lines = PackedStringArray([coma_line])
+		icon_data = {"icon": "🔥", "count": RunState.respawns_left()}
+
+	var midpoint: Callable = func() -> void:
+		if deduct_life:
+			RunState.consume_respawn_life()
+		_exploration_coordinator.teleport_party_to(target_pos)
+	# play 内含 await（fade in → midpoint → 字幕 → fade out）；await 等整段过渡播完
+	# codex P1-1 修复：play 被并发拒绝（已有过渡进行中）时不执行 midpoint → 复活逻辑被吞 → soft-lock。
+	# 此时直接兜底执行 midpoint（无 fade；拒绝意味着已有别的过渡在覆盖屏幕，瞬移不可见），保证传送/扣命数落地。
+	var accepted: bool = await OverlayTransitionUI.play(lines, icon_data, midpoint)
+	if not accepted:
+		midpoint.call()
+	# 传送路径不 reload → 须显式解除昏迷锁
+	_player_lifecycle.clear_coma()
+
+
+## L1.2 Phase 3：昏迷复活目标解析（注入 PlayerLifecycle.register_coma_respawn_resolver）
+##
+## 返回 {has_stronghold, stronghold_pos, fallback_pos}：
+##   - has_stronghold：RunState 已标记据点 + 据点 tile 上 slot 仍为 CORE_TOWN/PLAYER
+##     （Phase 1 codex 修复：据点可被敌方攻占 → owner 翻 ENEMY，此时校验失败自动降级走 fallback）
+##   - fallback_pos：最近的玩家占领持久 slot；一个都没有则 _start_pos（spawn 起点）
+func _resolve_coma_respawn() -> Dictionary:
+	var has_valid_stronghold: bool = false
+	var stronghold_pos: Vector2i = Vector2i.ZERO
+	if RunState.has_stronghold():
+		stronghold_pos = RunState.stronghold_pos()
+		var slot: PersistentSlot = _exploration_coordinator._find_persistent_slot_at(stronghold_pos)
+		if slot != null and slot.type == PersistentSlot.Type.CORE_TOWN and slot.owner_faction == Faction.PLAYER:
+			has_valid_stronghold = true
+	return {
+		"has_stronghold": has_valid_stronghold,
+		"stronghold_pos": stronghold_pos,
+		"fallback_pos": _resolve_nearest_occupied_or_spawn(),
+	}
+
+
+## L1.2 Phase 3：无据点 fallback 位置——最近的玩家占领持久 slot（曼哈顿距离），无则 spawn 起点
+func _resolve_nearest_occupied_or_spawn() -> Vector2i:
+	var best: Vector2i = _start_pos
+	var best_dist: int = 0x7FFFFFFF
+	for slot in _exploration_coordinator.get_player_persistent_slots():
+		var d: int = absi(_unit.position.x - slot.position.x) + absi(_unit.position.y - slot.position.y)
+		if d < best_dist:
+			best_dist = d
+			best = slot.position
+	return best
 
 
 ## 末周期失败触发（PlayerLifecycle.defeat_triggered sink）
@@ -1525,6 +1581,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
 		if key.pressed and not key.echo:
+			# ── L1.2 Phase 3 跑测便利：调试快捷键（仅 OS.is_debug_build()；release 编译不进入）──
+			# Ctrl + 组合键构造昏迷/命数/占领/据点前置态，免去真实战斗。详见 _handle_debug_key
+			if OS.is_debug_build() and key.ctrl_pressed:
+				if _handle_debug_key(key.keycode):
+					return
 			# E MVP [F] 键独立处理：探索态触发主动战斗 / 战斗态尝试手动退出
 			# 放在战斗态守卫之前，[F] 在两态语义不同
 			if key.keycode == KEY_F:
@@ -1567,6 +1628,89 @@ func _on_explore_attack_pressed() -> void:
 ## 守卫由 _start_camp 内部处理（与空格键路径共用单一入口）
 func _on_explore_camp_pressed() -> void:
 	_exploration_coordinator.start_camp()
+
+
+# ─────────────────────────────────────────
+# L1.2 Phase 3 调试快捷键（仅 OS.is_debug_build()；release 不编入）
+#
+# 用途：构造昏迷复活各场景前置态，免去打输真实战斗。键位均用 Ctrl + 字母避免与 M/B/Q/F 冲突。
+#   Ctrl+K 强制昏迷（场景 3/4/5/8/10 触发入口）
+#   Ctrl+J 清空玩家占领 + 据点（场景 5：零占领 → spawn fallback）
+#   Ctrl+L 耗尽命数到 0（场景 8：再 Ctrl+K → 末周期真失败）
+#   Ctrl+H 敌方夺取据点（场景 10：据点失守 → 再 Ctrl+K → 自动降级）
+#   Ctrl+P 强制周期胜利推进（场景 7：reload + 据点/占领跨周期 re-light）
+# ─────────────────────────────────────────
+
+## 调试键调度：命中返回 true（消费事件）。仅在干净探索态执行，避免在战斗/移动/面板态构造脏前置
+func _handle_debug_key(keycode: int) -> bool:
+	if _battle_coordinator.is_in_battle() or _is_moving or _is_camping or _manage_ui.is_open or _build_panel_ui.is_open:
+		_show_notice("[调试] 请在干净探索态使用调试键")
+		return true
+	match keycode:
+		KEY_K:
+			_show_notice("[调试] 强制昏迷")
+			_player_lifecycle.trigger_coma_or_lose()
+			return true
+		KEY_J:
+			_debug_clear_occupation_and_stronghold()
+			return true
+		KEY_L:
+			_debug_exhaust_lives()
+			return true
+		KEY_H:
+			_debug_enemy_capture_stronghold()
+			return true
+		KEY_P:
+			_show_notice("[调试] 强制周期胜利推进")
+			_on_cycle_victory_triggered()
+			return true
+	return false
+
+
+## 调试：清空所有玩家占领 + 据点格归属（构造场景 5 零占领态）
+## 翻 owner→NONE 并经 binding 卸载视野源；据点格 owner→NONE 经 P1-3 修复后的 on_slot_owner_changed 注销据点源（无残留）
+func _debug_clear_occupation_and_stronghold() -> void:
+	var count: int = 0
+	for slot in _exploration_coordinator.get_player_persistent_slots():
+		slot.owner_faction = Faction.NONE
+		if _stronghold_vision_binding != null:
+			_stronghold_vision_binding.on_slot_owner_changed(slot)
+		count += 1
+	_exploration_coordinator.refresh_reachable()
+	_renderer.queue_redraw()
+	_show_notice("[调试] 清空 %d 个玩家占领（含据点格 owner）" % count)
+
+
+## 调试：把命数推到 0（场景 8 前置）
+func _debug_exhaust_lives() -> void:
+	var n: int = 0
+	while RunState.respawns_left() > 0:
+		RunState.consume_respawn_life()
+		n += 1
+	_update_hud()
+	_show_notice("[调试] 命数耗尽（推进 %d 周期，respawns_left=0）" % n)
+
+
+## 调试：敌方夺取据点（场景 10 前置——据点 owner 翻 ENEMY，昏迷复活校验将失效自动降级）
+##
+## 必须走 OccupationSystem.try_occupy（与敌方真实占领同一路径），而非直接改 owner——
+## try_occupy 内部触发 slot_owner_changed sink → StrongholdVisionBinding 注销据点视野源（P1-3）。
+## 直接赋 owner 会绕过 sink 导致视野圈残留（codex P1-3 桌面验证暴露的调试键缺陷）。
+## VictoryJudge.check_on_slot_owner_changed 对 owner→ENEMY 安全返回（仅玩家夺回 CORE_TOWN 才判定）。
+func _debug_enemy_capture_stronghold() -> void:
+	if not RunState.has_stronghold():
+		_show_notice("[调试] 当前无据点，无法模拟失守")
+		return
+	var spos: Vector2i = RunState.stronghold_pos()
+	var slot: PersistentSlot = _exploration_coordinator._find_persistent_slot_at(spos)
+	if slot == null:
+		_show_notice("[调试] 据点格无 slot（已遗失）")
+		return
+	if OccupationSystem.try_occupy(slot, Faction.ENEMY_1):
+		_renderer.queue_redraw()
+		_show_notice("[调试] 据点被敌方夺取（owner→ENEMY，视野撤除）；下次昏迷将自动降级走 fallback")
+	else:
+		_show_notice("[调试] try_occupy 拒绝（据点已非玩家方？）")
 
 
 ## 入口 4 MVP（2026-05-09 BUG 修复）：事件面板关闭后刷新探索态行动按钮

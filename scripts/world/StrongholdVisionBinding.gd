@@ -38,6 +38,36 @@ func setup(vision_system: VisionSystem, vision_config: VisionConfig) -> void:
 	_vision_config = vision_config
 
 
+## L1.2 Phase 3 修复：开局 / cycle reload 后扫描既有占领状态，补登视野源
+##
+## 背景：原设计假设"首周期玩家无占领"故只做纯事件驱动（运行时 try_occupy 翻转 + set_stronghold）。
+## 但实际地图生成（PersistentSlotGenerator 势力场涌现 _emerge）会**预染**玩家归属 slot——
+## 开局即存在已占领 slot，事件驱动从未为它们 emit 翻转事件 → 视野漏激活。
+## 同时承接设计 §4.5：cycle reload 后据点 VisionSource 的 re-register（新 seed 下据点 slot 仍在则重注册）。
+##
+## 本方法在 setup + sink 注册之后调一次（EC.init_vision_runtime 末尾），纯增量补登：
+##   1. 据点优先：RunState 有据点 + 该 slot 仍为 CORE_TOWN/PLAYER → 注册据点源（半径更大）
+##      （据点已失守 / slot 遗失 → 跳过，符合 §场景 10 自动降级，不注册据点源）
+##   2. 其余玩家占领 slot → 占领源（据点格在 on_slot_owner_changed 内部被跳过，不重复）
+## 与事件驱动 sink 幂等共存：运行时翻转走 sink，已 register 的 pos 再进 on_slot_owner_changed 会被守卫跳过。
+func init_scan(slots: Array[PersistentSlot]) -> void:
+	if _vision_system == null or _vision_config == null:
+		return
+	# 1. 据点源（先注册，置 _stronghold_pos，让步骤 2 跳过据点格）
+	if RunState.has_stronghold():
+		var spos: Vector2i = RunState.stronghold_pos()
+		for s in slots:
+			if s == null:
+				continue
+			if s.position == spos and s.type == PersistentSlot.Type.CORE_TOWN and s.owner_faction == Faction.PLAYER:
+				on_stronghold_set(spos)
+				break
+	# 2. 其余玩家占领 slot 占领源（复用 on_slot_owner_changed 的注册分支 + 据点格跳过 + 幂等守卫）
+	for s in slots:
+		if s != null and s.owner_faction == Faction.PLAYER:
+			on_slot_owner_changed(s)
+
+
 ## 据点选定回调（订阅 RunState.register_stronghold_set_sink）
 ##
 ## 创建据点 VisionSource（radius = stronghold_vision_radius）register 到 VisionSystem。
@@ -75,8 +105,23 @@ func on_slot_owner_changed(slot: PersistentSlot) -> void:
 	if _vision_system == null or _vision_config == null or slot == null:
 		return
 	var pos: Vector2i = slot.position
-	# 据点格不走占领源路径（避免与据点源重叠 / 误删据点源）
+	# 据点格不走占领源路径（避免与据点源重叠 / 误删据点源）；据点源随 owner 起落由本分支单独管理
+	# codex P1-3 修复：原先此处无条件 return，据点被攻占（owner→ENEMY/NONE）时据点视野源永不注销 →
+	# 失守后玩家仍能透过敌占据点看到周围。改为据点源随 owner 起落：失守撤视野 / 夺回重注册。
 	if _has_stronghold and pos == _stronghold_pos:
+		if slot.owner_faction == Faction.PLAYER:
+			# 夺回（或幂等）→ 据点源缺失则重注册
+			if _stronghold_source == null:
+				_stronghold_source = VisionSource.new(
+					pos, _vision_config.stronghold_vision_radius, Faction.PLAYER, null
+				)
+				_vision_system.register_source(_stronghold_source)
+		else:
+			# 失守（敌占 / 中立化）→ 注销据点源（_has_stronghold / _stronghold_pos 不清，
+			# 与 RunState.has_stronghold 跨周期保留语义一致；昏迷复活校验失效自动降级见 Phase 3）
+			if _stronghold_source != null:
+				_vision_system.unregister_source(_stronghold_source)
+				_stronghold_source = null
 		return
 
 	if slot.owner_faction == Faction.PLAYER:

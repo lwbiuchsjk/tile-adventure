@@ -119,11 +119,14 @@ func is_initial_play_done() -> bool:
 ## on_midpoint：phase B 内调用的 Callable；可返回 Signal 让本方法 await
 ##              用于 coma → respawn：内部做 RunState.advance_cycle + reload_current_scene + 返回 world_ready
 ##
-## 不并发：已在过渡中再次调用会被拒绝（push_warning + return）
-func play(lines: PackedStringArray, icon_data: Dictionary, on_midpoint: Callable) -> void:
+## 不并发：已在过渡中再次调用会被拒绝（push_warning + return false）
+##
+## 返回值（L1.2 Phase 3 codex P1-1 修复）：true = 已受理并播完整段过渡；false = 被并发拒绝（midpoint 未执行）。
+## 昏迷复活 sink 据此兜底：被拒时直接执行 midpoint（无 fade），避免传送/扣命数被静默吞掉导致 soft-lock。
+func play(lines: PackedStringArray, icon_data: Dictionary, on_midpoint: Callable) -> bool:
 	if _phase != PHASE_IDLE:
 		push_warning("OverlayTransitionUI.play: 已有过渡进行中，忽略本次调用")
-		return
+		return false
 	_setup_content(lines, icon_data)
 	_root.visible = true
 
@@ -146,6 +149,7 @@ func play(lines: PackedStringArray, icon_data: Dictionary, on_midpoint: Callable
 
 	# Phase C + D
 	await _run_lines_and_fade_out()
+	return true
 
 
 ## 从全黑起手 → 文字逐句 → fade out（phase A、B 跳过）

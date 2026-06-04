@@ -228,6 +228,19 @@ static func advance_cycle() -> void:
 		_on_cycle_advance_sink.call(prev, _cycle_index)
 
 
+## L1.2 Phase 3：无据点昏迷复活——扣 1 命数（不 reload、不重抽队长）
+##
+## 现有模型命数 == cycle（respawns_left = max_cycles-1-cycle_index），而扣命数的唯一途径
+## advance_cycle 与 reload 强绑定（重抽队长 + 新 seed 重生整图）。L1.2 设计 §2.3 关键不变量要求
+## "任何昏迷路径都不 reload"，无据点路径只需"扣命数 + 原地传送"——故抽出本轻量方法仅推 _cycle_index：
+##   - 不置 _pending_respawn_intro：无新场景消费（不 reload）
+##   - 不推扎营 milestone / 不清 _already_triggered：周期推进语义留 advance_cycle / L1.3 扎营时钟接管
+##   - 不触发 _on_cycle_advance_sink：本路径非"周期推进"，仅消耗命数
+## 命数系统 L1.3 移除时本方法一并清理（设计 §L1.2 拍板表 row 11）
+static func consume_respawn_life() -> void:
+	_cycle_index += 1
+
+
 ## 周期胜利推进（占据敌方核心）—— B 重生周期第 3 条路径（L1.3 周期胜利目标 MVP）
 ## 区别于 advance_cycle（昏迷重生抽新队长）：保留当前队长本人 + 部队（满血 + quality+1 封顶 SSR）
 ##

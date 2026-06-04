@@ -30,14 +30,17 @@ extends Node
 # 信号（与 UI / VictoryJudge 解耦）
 # ─────────────────────────────────────────
 
-## 队长昏迷过渡触发（_trigger_coma_or_lose 内 respawns_left > 0 分支）
-## 参数：黑屏文案双句 + 火苗团数据
-## WorldMap 接 sink → 自行构造 midpoint 闭包（含 RunState.advance_cycle + reload_current_scene +
-## 返回 OverlayTransitionUI.world_ready），再调 OverlayTransitionUI.play
+## 队长昏迷复活触发（L1.2 Phase 3：取代原 coma_triggered 的 reload 范式）
 ##
-## MVP-δ codex review P1 修复：原 signal 含 midpoint 参数 + PlayerLifecycle 内构造闭包引用
-## OverlayTransitionUI；现 payload 减为 2 参，midpoint 全部迁到 WorldMap.sink handler 构造
-signal coma_triggered(lines: PackedStringArray, icon_data: Dictionary)
+## 设计：tile-advanture-design/无限地图实装/L1.2_多源视野与据点机制_MVP.md §2.3 / §5 改动 4
+## 三条复活路径统一走本信号（target_pos = 传送目标）：
+##   - is_stronghold == true ：有效据点 → 零代价原地传送（不扣命数、不 reload、简版黑屏无火苗）
+##   - is_stronghold == false：无据点 fallback → 扣命数（deduct_life）+ 原地传送（不 reload、火苗显示）
+## WorldMap 接 sink → 构造"传送 midpoint"闭包（不 reload）+ 播 OverlayTransitionUI.play
+##
+## 与原 coma_triggered（MVP-δ）的区别：原范式 midpoint 内 advance_cycle + reload_current_scene 重生整图；
+## L1.2 据点机制要求"昏迷不重置地图"，故 reload 范式整体退役，分流决策前移到 trigger_coma_or_lose 内
+signal coma_respawn_triggered(target_pos: Vector2i, deduct_life: bool, is_stronghold: bool)
 
 ## 末周期失败触发（_trigger_coma_or_lose 内 respawns_left == 0 分支）
 ## WorldMap 接 sink → 调 _on_victory_decided(faction) 走 VictoryUI 失败遮罩
@@ -69,6 +72,10 @@ var _is_in_coma: bool = false
 var _coma_hp_threshold_ratio: float = 0.2
 ## 昏迷过渡持续秒数（OverlayTransitionUI phase A → midpoint 间隔参考值）；setup 时由 run_cfg 注入
 var _coma_duration_sec: float = 1.5
+## L1.2 Phase 3：昏迷复活目标解析器（由 WorldMap 注入；PlayerLifecycle 不持 _world_map / 持久 slot 引用）
+## 返回 Dictionary {has_stronghold: bool, stronghold_pos: Vector2i, fallback_pos: Vector2i}
+## 据点校验（slot 仍为 CORE_TOWN/PLAYER）+ fallback 最近占领 slot 解析都在 WorldMap 侧（数据在手边）
+var _coma_respawn_resolver: Callable = Callable()
 
 
 # ─────────────────────────────────────────
@@ -150,6 +157,20 @@ func setup(player_cfg: PlayerParamResource, run_cfg: RunParamResource) -> void:
 ## 当前是否处于昏迷过渡态
 func is_in_coma() -> bool:
 	return _is_in_coma
+
+
+## L1.2 Phase 3：注册昏迷复活目标解析器（MapBootstrap 在 setup 前接线）
+func register_coma_respawn_resolver(resolver: Callable) -> void:
+	_coma_respawn_resolver = resolver
+
+
+## L1.2 Phase 3：解除昏迷锁
+##
+## 原 coma 路径靠 reload_current_scene 重建 PlayerLifecycle 实例（新实例 _is_in_coma 默认 false）来解锁；
+## L1.2 传送路径不 reload → 同一实例，须在 OverlayTransitionUI 过渡播完后由 WorldMap sink 显式调用，
+## 否则 _is_in_coma 永久 true 锁死所有输入（_unhandled_key_input / _on_abandon 等守卫）
+func clear_coma() -> void:
+	_is_in_coma = false
 
 
 ## 当前队长显示名
@@ -266,40 +287,46 @@ func evaluate_party_state(skip_if_finished: bool = false) -> bool:
 	return false
 
 
-## B 重生周期 MVP：队长昏迷或末周期失败分支
+## B 重生周期 MVP / L1.2 Phase 3：队长昏迷复活分流或末周期失败
 ##
-## 路径：
-##   - RunState.respawns_left() > 0 → 进入昏迷态 + emit coma_triggered(lines, icon_data)
-##                                    WorldMap.sink → 构造 midpoint 闭包 + OverlayTransitionUI.play
-##                                    midpoint 内 advance_cycle + reload；新场景 setup 调
-##                                    respawn_intro_ready 让 phase B 通过
-##   - 否则                          → 末周期失败 → emit defeat_triggered(ENEMY_1)
-##                                    WorldMap 接 → _on_victory_decided(ENEMY_1) 走 VictoryUI
+## 设计：L1.2_多源视野与据点机制_MVP §2.3 昏迷复活分流（PlayerLifecycle 改造）
 ##
-## MVP-δ 阶段 2 + codex review P1 修复：
-##   PlayerLifecycle 完全不引用 OverlayTransitionUI / get_tree().reload；
-##   原 midpoint 闭包整体迁到 WorldMap._on_player_coma_triggered 内构造（含 advance_cycle +
-##   reload_current_scene + 返回 world_ready）—— 职责切分清晰：
-##     PlayerLifecycle = 队伍/coma 状态判定 + 发信号
-##     WorldMap        = UI 过渡 + 场景 reload + 时序协调
+## 三路分流（目标解析交注入的 _coma_respawn_resolver，PlayerLifecycle 不持 _world_map / slot 引用）：
+##   ① 有有效据点          → emit coma_respawn_triggered(据点位, deduct=false, stronghold=true)
+##                            零代价：无视 respawns_left（据点 = 无限复活锚）、不扣命数、不 reload
+##   ② 无据点 + 命数 > 0    → emit coma_respawn_triggered(fallback位, deduct=true, stronghold=false)
+##                            扣命数兜底 + 原地传送（不 reload）；fallback = 最近占领 slot / spawn 起点
+##   ③ 无据点 + 命数耗尽    → emit defeat_triggered(ENEMY_1) 整局失败
+##
+## 与原范式（MVP-δ）的区别：原"respawns_left>0 → advance_cycle + reload 重生整图"退役——
+## L1.2 据点机制要求"昏迷不重置地图"，reload 范式被原地传送取代（reload 仅保留给 cycle 胜利推进，
+## L1.3 统一移除）。WorldMap 仍承担 UI 过渡 + 传送时序；PlayerLifecycle 仍不引用 OverlayTransitionUI/SceneTree。
+##
+## 解锁约定：传送路径不 reload → 同一实例，WorldMap sink 须在过渡播完后调 clear_coma()（见 clear_coma 注释）
 ##
 ## 幂等：_is_in_coma 守卫，重复调用不重复触发；_game_finished 守卫由 WorldMap 调用方负责
 func trigger_coma_or_lose() -> void:
 	if _is_in_coma:
 		return
+	# 目标解析（resolver 未注册时退化为"无据点 + fallback=ZERO"，仅测试构造或异常路径出现）
+	var resolution: Dictionary = {}
+	if _coma_respawn_resolver.is_valid():
+		var raw: Variant = _coma_respawn_resolver.call()
+		if raw is Dictionary:
+			resolution = raw
+	# ① 有效据点：零代价原地传送（无视命数）
+	if bool(resolution.get("has_stronghold", false)):
+		_is_in_coma = true
+		var stronghold_pos: Vector2i = resolution.get("stronghold_pos", Vector2i.ZERO)
+		coma_respawn_triggered.emit(stronghold_pos, false, true)
+		return
+	# ②/③ 无据点：扣命数兜底
 	if RunState.respawns_left() > 0:
 		_is_in_coma = true
-		# 双句：第 1 句"X 失去了意识"立即可定；
-		# 第 2 句留空占位，reload 后 setup 内 emit respawn_intro_ready 替换为"队长 Y 开启了旅程"
-		var coma_line: String = format_coma_line(_leader_display_name)
-		var lines: PackedStringArray = PackedStringArray([coma_line, ""])
-		# 火苗团数 = 过渡完成后的玩家总命数
-		# coma 触发会消耗 1 命（advance_cycle 把 _cycle_index +1），advance 后 respawns_left + 1 = 调用时的 respawns_left
-		# 例：max_cycles=3, _cycle_index=0 时触发：调用时 respawns_left=2 → 显示 2 团（advance 后剩 1 + 当前新队长）
-		var icon_data: Dictionary = {"icon": "🔥", "count": RunState.respawns_left()}
-		coma_triggered.emit(lines, icon_data)
+		var fallback_pos: Vector2i = resolution.get("fallback_pos", Vector2i.ZERO)
+		coma_respawn_triggered.emit(fallback_pos, true, false)
 	else:
-		# 末周期无保护 → 整局失败（沿用现有 VictoryUI 失败遮罩，由 WorldMap 接 sink 处理）
+		# 命数耗尽 → 整局失败（沿用现有 VictoryUI 失败遮罩，由 WorldMap 接 sink 处理）
 		defeat_triggered.emit(Faction.ENEMY_1)
 
 

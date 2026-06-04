@@ -38,6 +38,8 @@ func _init() -> void:
 	_test_stronghold_set_query_reset()
 	_test_stronghold_set_sink()
 	_test_stronghold_cross_init_preserved()
+	_test_consume_respawn_life()
+	_test_consume_respawn_life_preserves_stronghold()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -263,6 +265,45 @@ func _test_stronghold_cross_init_preserved() -> void:
 	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
 	_assert(RunState.has_stronghold(), "跨 ensure_initialized（reload）据点保留")
 	_assert(RunState.stronghold_pos() == Vector2i(4, 4), "据点坐标保留")
+
+
+# ─────────────────────────────────────
+# 用例：无据点昏迷扣命数（L1.2 Phase 3）
+# ─────────────────────────────────────
+
+## 11. consume_respawn_life 扣 1 命数（推 cycle）但不触发 reload 范式副作用
+##
+## 与 advance_cycle 对比：consume_respawn_life 只推 _cycle_index（命数递减），
+## 不置 _pending_respawn_intro（无新场景消费）、不 push 扎营 milestone、不触发 cycle_advance_sink
+func _test_consume_respawn_life() -> void:
+	print("-- consume_respawn_life 扣命数不触发 reload 副作用")
+	_reset()
+	_cycle_advance_captured = []
+	RunState.register_cycle_advance_sink(_on_cycle_advance)
+	# 先扎营 2 次（验证不被 push 进 milestone）
+	RunState.record_camp()
+	RunState.record_camp()
+	_assert(RunState.respawns_left() == 2, "初始命数 2")
+	RunState.consume_respawn_life()
+	_assert(RunState.cycle_index() == 1, "consume 后 cycle 推进到 1（命数递减）")
+	_assert(RunState.respawns_left() == 1, "命数 2 → 1")
+	_assert(not RunState.is_pending_respawn_intro(), "不置 _pending_respawn_intro（无 reload）")
+	_assert(RunState.get_current_cycle_camp_count() == 2, "扎营计数不被归零（非周期推进）")
+	_assert(RunState.get_milestones_snapshot().is_empty(), "不 push 扎营 milestone")
+	_assert(_cycle_advance_captured.is_empty(), "不触发 cycle_advance_sink")
+	# 再扣一次到末周期
+	RunState.consume_respawn_life()
+	_assert(RunState.respawns_left() == 0, "再扣 → 命数 0（末周期，下次走 defeat）")
+
+
+## 12. consume_respawn_life 不影响据点（据点是 reset 才清，扣命数不动）
+func _test_consume_respawn_life_preserves_stronghold() -> void:
+	print("-- consume_respawn_life 保留据点")
+	_reset()
+	RunState.set_stronghold(Vector2i(6, 6))
+	RunState.consume_respawn_life()
+	_assert(RunState.has_stronghold(), "扣命数后据点保留")
+	_assert(RunState.stronghold_pos() == Vector2i(6, 6), "据点坐标不变")
 
 
 # ─────────────────────────────────────
