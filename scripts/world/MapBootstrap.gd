@@ -131,11 +131,13 @@ func load_configs() -> void:
 	narrative_rows = ConfigLoader.load_csv(WorldMap.CONFIG_NARRATIVE_POOL)
 	NarrativeProvider.ensure_loaded(narrative_rows)
 	var max_cycles_v: int = WorldMap.RUN_PARAM_CFG.max_cycles
+	# L1.3a 阶段 A：命数独立计数 K 从 run_cfg 注入（脱钩 cycle，收口待跟踪 P1-2）
+	var no_stronghold_respawns_v: int = WorldMap.RUN_PARAM_CFG.no_stronghold_respawns
 	# MVP-δ 阶段 2：coma_duration_sec / coma_hp_threshold_ratio 从 run_cfg 注入移到
 	# PlayerLifecycle.setup 内（_player_lifecycle 在 _init_player 调用点创建）
 	# rng 传 null：RunState 内部 randomize 一个独立 RNG，不被地图 PCG seed 干扰
 	# （重生抽队长应与地图 PCG 解耦，否则同 seed 重开会抽到同一队长序列）
-	RunState.ensure_initialized(max_cycles_v, hero_pool_rows, null)
+	RunState.ensure_initialized(max_cycles_v, hero_pool_rows, null, no_stronghold_respawns_v)
 
 	# 加载资源点配置
 	_world_map._resource_slot_config_rows = ConfigLoader.load_csv(WorldMap.CONFIG_RESOURCE_SLOT)

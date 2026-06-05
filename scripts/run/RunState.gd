@@ -110,6 +110,28 @@ static var _has_stronghold: bool = false
 
 
 # ─────────────────────────────────────
+# L1.3a 扎营主时钟 / 命数独立 / climax（子 MVP ① 阶段 A 数据层）
+# ─────────────────────────────────────
+##
+## 阶段 A（本批）仅"立起数据层"——新增字段 + 查询 + 注入/清零生命周期，
+## 不切换消费方（respawns_left / consume_respawn_life 仍走 cycle 旧逻辑）。
+## 消费方源切换 + cycle 方法退役由阶段 B/D 完成（设计 §10）。
+## 设计原文：tile-advanture-design/无限地图实装/L1.3a_扎营时钟与胜负模型_MVP.md §3.1
+
+## 整局累计扎营次数（lifetime，不随任何"周期"清零；取代 _cycle_index 作主时钟）
+## record_camp 时 +1；advance_cycle / consume_respawn_life 均不动此值
+static var _total_camp_count: int = 0
+
+## 命数独立计数（脱钩 cycle，收口待跟踪 §十六 P1-2）：无据点昏迷复活容错预算
+## ensure_initialized 注入 run_cfg.no_stronghold_respawns（默认 K=3）；
+## 消费（无据点复活 -1）的源切换在阶段 B，本阶段仅就位 + 查询
+static var _respawns_remaining: int = 3
+
+## climax 已触发标志（一局一次，防重复 spawn boss）；阶段 C 接 EC 扎营触发后写入
+static var _climax_triggered: bool = false
+
+
+# ─────────────────────────────────────
 # RNG
 # ─────────────────────────────────────
 
@@ -127,7 +149,10 @@ static var _rng: RandomNumberGenerator = null
 ## - _initialized=true：原样返回（重生 reload 走到这里，保持 _used_hero_ids / _cycle_index 等）
 ##
 ## hero_pool_rows 期望来自 ConfigLoader.load_csv("hero_pool.csv")；浅拷贝以避免外部修改穿透
-static func ensure_initialized(max_cycles_value: int, hero_pool_rows: Array, rng: RandomNumberGenerator) -> void:
+##
+## L1.3a 阶段 A：新增可选参 no_stronghold_respawns_value 注入命数独立计数（默认 3 保持向后兼容，
+## 老调用方 / 测试不传时退回默认；MapBootstrap 显式传 run_cfg.no_stronghold_respawns）
+static func ensure_initialized(max_cycles_value: int, hero_pool_rows: Array, rng: RandomNumberGenerator, no_stronghold_respawns_value: int = 3) -> void:
 	if _initialized:
 		return
 	_max_cycles = maxi(1, max_cycles_value)
@@ -148,6 +173,10 @@ static func ensure_initialized(max_cycles_value: int, hero_pool_rows: Array, rng
 	# 此处清零是"首次进入"的初始态，与 _used_hero_ids / _cycle_index 同语义
 	_stronghold_pos = Vector2i.ZERO
 	_has_stronghold = false
+	# L1.3a 阶段 A：扎营主时钟 / 命数独立 / climax 标志的"首次进入"初始态
+	_total_camp_count = 0
+	_respawns_remaining = maxi(0, no_stronghold_respawns_value)
+	_climax_triggered = false
 	# rng 缺省时内部建一个并 randomize；显式传入时保留调用方掌控
 	if rng == null:
 		var fallback: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -178,6 +207,10 @@ static func reset() -> void:
 	# L1.2 Phase 1：整局重开清据点（与 _used_hero_ids 等整局态同语义）
 	_stronghold_pos = Vector2i.ZERO
 	_has_stronghold = false
+	# L1.3a 阶段 A：清零扎营主时钟 / 命数 / climax；命数由下一次 ensure_initialized 按 run_cfg 重新注入
+	_total_camp_count = 0
+	_respawns_remaining = 0
+	_climax_triggered = false
 	# _max_cycles 不重设；下一次 ensure_initialized 会按新配置覆盖
 
 
@@ -201,8 +234,35 @@ static func is_last_cycle() -> bool:
 
 
 ## 剩余重生保护次数（末周期返回 0）
+##
+## L1.3a 阶段 A 备注：本方法仍走 cycle 派生（max-1-cycle）；阶段 B「命数源切换」
+## 改为 `return _respawns_remaining`。届时 cycle 派生退役，活调用方（WorldMap 火苗 / PlayerLifecycle 门槛）透明切换。
 static func respawns_left() -> int:
 	return maxi(0, _max_cycles - 1 - _cycle_index)
+
+
+# ─────────────────────────────────────
+# L1.3a 扎营主时钟 / 命数独立 / climax 查询（阶段 A）
+# ─────────────────────────────────────
+
+## 整局累计扎营次数（lifetime 主时钟）；阶段 C climax 触发判定 / 阶段 D recruit 适配读此值
+static func total_camp_count() -> int:
+	return _total_camp_count
+
+
+## 命数独立计数当前值（脱钩 cycle）；阶段 B respawns_left 切到此源后供 UI / 门槛读取
+static func respawns_remaining() -> int:
+	return _respawns_remaining
+
+
+## climax 是否已触发（一局一次）
+static func is_climax_triggered() -> bool:
+	return _climax_triggered
+
+
+## 标记 climax 已触发；阶段 C 由 EC 扎营计数命中 climax_camp_threshold 时调用（幂等）
+static func mark_climax_triggered() -> void:
+	_climax_triggered = true
 
 
 # ─────────────────────────────────────
@@ -363,8 +423,12 @@ static func get_victory_leader_snapshot() -> Dictionary:
 
 ## 累加当前周期扎营次数；由 WorldMap._start_camp 调用
 ## advance_cycle 时该值 push 入 milestones 后归零
+##
+## L1.3a 阶段 A：同步累加 lifetime 主时钟 _total_camp_count（不随 advance_cycle 归零）。
+## 阶段 D recruit 适配改读 _total_camp_count 后，_current_cycle_camp_count 仅留 B 期 milestone 兼容
 static func record_camp() -> void:
 	_current_cycle_camp_count += 1
+	_total_camp_count += 1
 
 
 ## 累积里程碑列表浅拷贝（C MVP 入队判定用）

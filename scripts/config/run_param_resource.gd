@@ -9,8 +9,17 @@ extends Resource
 ##   WorldMap → PlayerLifecycle.setup(run_cfg: RunParamResource)（读 coma 两字段）
 
 ## 整局最大周期数（0 = 首发；max_cycles - 1 = 末周期无保护）
+## L1.3a 备注：cycle 范式退役后本字段冻结（地图固定单图配置），保留以兼容老路径
 @export_range(1, 20, 1) var max_cycles: int = 3
 ## 昏迷过渡时长（秒）
 @export_range(0.0, 10.0, 0.1) var coma_duration_sec: float = 1.5
 ## 昏迷判定的 HP 比例阈值（current_hp / max_hp ≤ 此值 → 昏迷）
 @export_range(0.0, 1.0, 0.01) var coma_hp_threshold_ratio: float = 0.5
+
+## L1.3a 扎营时钟 / 胜负模型（子 MVP ①）
+## climax 触发扎营次数 N：累计扎营到此值 → 强敌来袭决战（阶段 C 接 EC 触发）
+@export_range(1, 30, 1) var climax_camp_threshold: int = 8
+## 无据点命数 K：脱钩 cycle 的独立容错预算（阶段 A 注入 RunState._respawns_remaining）
+@export_range(0, 10, 1) var no_stronghold_respawns: int = 3
+## 招募扎营间隔：每 N 次扎营触发一次入队事件（阶段 D recruit 适配读 _total_camp_count）
+@export_range(1, 20, 1) var recruit_camp_interval: int = 3
