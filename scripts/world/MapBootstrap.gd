@@ -300,7 +300,9 @@ func load_map() -> void:
 ## 设计意图：把"按 cycle 切配置"对调用方透明——后续 _load_pcg_internal 读 map_cfg 时拿到的是本周期值
 func _apply_cycle_config_internal() -> void:
 	_world_map._cycle_config_rows = ConfigLoader.load_csv(WorldMap.CONFIG_CYCLE)
-	var current_cycle: int = RunState.cycle_index()
+	# L1.3a 阶段 D：固定单图——一局一张连续世界，恒读 cycle 0 行（不再按 RunState.cycle_index() 取行）。
+	# 周期递增=地图尺寸递减的挂载点退役；敌方威胁递增改扎营时钟驱动留子 MVP ②。
+	var current_cycle: int = 0
 	var cycle_row: Dictionary = {}
 	for entry in _world_map._cycle_config_rows:
 		var row: Dictionary = entry as Dictionary
@@ -492,7 +494,6 @@ func create_world_state() -> void:
 	_world_map._player_lifecycle.register_coma_respawn_resolver(_world_map._resolve_coma_respawn)
 	_world_map._player_lifecycle.defeat_triggered.connect(_world_map._on_player_defeat_triggered)
 	_world_map._player_lifecycle.respawn_intro_ready.connect(_world_map._on_player_respawn_intro_ready)
-	_world_map._player_lifecycle.cycle_victory_intro_ready.connect(_world_map._on_player_cycle_victory_intro_ready)
 	_world_map._player_lifecycle.setup(WorldMap.PLAYER_PARAM_CFG, WorldMap.RUN_PARAM_CFG)
 
 	# 视觉位置初始化到起点像素中心
@@ -524,7 +525,7 @@ func create_world_state() -> void:
 ##      _renderer.setup(world_view, battle_view) / _night_vision / _core_objective_overlay /
 ##      _explore_action_bar + _explore_attack_btn + _explore_camp_btn / _victory_ui
 ##   7. 静态系统 sink 注册：
-##      VictoryJudge.register_sink / register_cycle_victory_sink /
+##      VictoryJudge.register_sink /
 ##      DayNightState.attach_to_turn_manager / register_phase_changed_sink /
 ##      RunState.register_recruit_sink
 ##
@@ -778,9 +779,9 @@ func init_world_subsystems() -> void:
 
 	# M8：注册胜负回调；OccupationSystem.try_occupy 翻转核心城镇时触发
 	# reload_current_scene 后新的 _world_map._ready 会重新注册，_world_map._exit_tree 会 clear_sink 避免悬空
+	# L1.3a 阶段 D：cycle 退役——周期推进出口（register_cycle_victory_sink）已移除；
+	# 唯一胜利出口 = VictoryJudge.dispatch_climax_victory（climax 决战，BattleCoordinator 调用）
 	VictoryJudge.register_sink(_world_map._on_victory_decided)
-	# L1.3：周期推进出口（非末周期占据敌方核心 / 清场）→ 黑屏过渡 + reload + 保留队长
-	VictoryJudge.register_cycle_victory_sink(_world_map._on_cycle_victory_triggered)
 
 	# D MVP：把 TurnManager.faction_turn_started 包装为 phase_changed
 	# attach 内部对同一 turn_manager 重复挂接是幂等的；reload 后旧 turn_manager

@@ -18,11 +18,10 @@ extends RefCounted
 ##   - WorldMap._exit_tree 调 clear_sinks 清回调，不清整局态（重生场景重载需要保持 _used_hero_ids / _cycle_index）
 ##   - 玩家主动重开走 reset()，把整局态 + _initialized 一并清掉
 ##
-## 生命周期对照：
-##   首次进入：_initialized=false → ensure_initialized 写入 max_cycles / hero_pool / 计数清零
-##   重生 reload：advance_cycle 后 reload_current_scene；新 _ready 调 ensure_initialized 时
-##                _initialized=true 直接 return，整局态保持
-##   主动重开：_on_restart_pressed 先调 reset() 再 reload_current_scene
+## 生命周期对照（L1.3a 阶段 D：cycle 范式退役，run 内已无 reload——一局一张连续世界）：
+##   首次进入：_initialized=false → ensure_initialized 写入 hero_pool / 命数 K / 计数清零
+##   run 内昏迷复活：原地传送不 reload（L1.2 Phase 3），整局态原样保持，不经 ensure_initialized
+##   主动重开（唯一 reload）：_on_restart_pressed 先调 reset() 再 reload_current_scene = 新 run
 
 
 # ─────────────────────────────────────
@@ -45,42 +44,22 @@ static var _cycle_index: int = 0
 ## 整局最多周期数（含末周期）；ensure_initialized 写入
 static var _max_cycles: int = 3
 
-## 累积扎营里程碑列表（每个周期结束时 push 当前周期扎营计数）
-## 结构定义在 B 期，填写 / 触发由 [[C_扎营里程碑入队_MVP]] 实装
-static var _camp_milestones: Array[int] = []
-
-## 当前周期内累计扎营次数（advance_cycle 时归零）
+## 当前累计扎营次数；record_camp 时 +1（L1.3a 阶段 D：cycle 范式退役后 == _total_camp_count，
+## 冗余保留供 HUD / 调试读取当前扎营计数；不再被任何"周期归零"清零）
 static var _current_cycle_camp_count: int = 0
 
-## 重生事件占位标志：advance_cycle 时置 true，新场景 _ready 消费后清零
-## 用 consume_pending_respawn_intro 取值并清零，避免读写两步
+## 重生事件占位标志（昏迷 reload 范式遗留）；L1.3a 阶段 D 后 advance_cycle 退役、已无人置位（冻结保留，
+## 不级联清理 WorldMap respawn_intro 信号线）。用 consume_pending_respawn_intro 取值并清零
 static var _pending_respawn_intro: bool = false
 
-## 周期胜利推进占位标志（L1.3 周期胜利目标 MVP）：advance_cycle_on_victory 时置 true
-## 区别于 _pending_respawn_intro（昏迷重生抽新队长）——本标志命中时新场景从快照重建队长（保留本人）
-## 用 consume_pending_cycle_victory_intro 取值并清零
-static var _pending_cycle_victory_intro: bool = false
-
-## 周期胜利队长快照（L1.3）：advance_cycle_on_victory 时存，新场景 setup 从此重建队长
-## 结构：{hero_id: int, troop_type: int, quality: int}（quality 已 +1 封顶；HP 重建时满血）
-## reset / ensure_initialized 清空
-static var _victory_leader_snapshot: Dictionary = {}
-
-## 本周期已触发过入队事件的里程碑值；advance_cycle / reset 时清空
-## 用途：去重保护——同周期内即使 _camp_milestones 含重复值（如 [5, 3, 5]），
-## 当前周期到达扎营第 5 次时只触发 1 次入队事件
-##
-## 设计文档：[[C_扎营里程碑入队_MVP]] §2「同周期同数值不重复触发」
-static var _already_triggered_this_cycle: Array[int] = []
+## L1.3a 阶段 D recruit 适配：已触发过入队的扎营计数集（lifetime 去重）。
+## 单图无 cycle，取代原 per-cycle _already_triggered_this_cycle；同一扎营计数命中只触发 1 次入队
+static var _already_recruited_camps: Array[int] = []
 
 
 # ─────────────────────────────────────
 # 信号沉降（Callable-sink）
 # ─────────────────────────────────────
-
-## 周期推进回调；签名 func(previous_cycle: int, new_cycle: int) -> void
-## C MVP 入队事件 / D MVP 阶段切换都可挂在这里；当前 B MVP 不强依赖
-static var _on_cycle_advance_sink: Callable = Callable()
 
 ## 入队事件回调；签名 func(hero_dict: Dictionary, milestone: int) -> void
 ## hero_dict 来自 hero_pool 行（含 id / name / troop_type / troop_quality 等）
@@ -163,12 +142,9 @@ static func ensure_initialized(max_cycles_value: int, hero_pool_rows: Array, rng
 		_hero_pool.append(entry as Dictionary)
 	_used_hero_ids = []
 	_cycle_index = 0
-	_camp_milestones = []
 	_current_cycle_camp_count = 0
 	_pending_respawn_intro = false
-	_pending_cycle_victory_intro = false
-	_victory_leader_snapshot = {}
-	_already_triggered_this_cycle = []
+	_already_recruited_camps = []
 	# L1.2 Phase 1：据点跨周期 reload 保留靠 _initialized=true 直接 return（上方 line 112-113）；
 	# 此处清零是"首次进入"的初始态，与 _used_hero_ids / _cycle_index 同语义
 	_stronghold_pos = Vector2i.ZERO
@@ -192,18 +168,14 @@ static func ensure_initialized(max_cycles_value: int, hero_pool_rows: Array, rng
 ## - _used_hero_ids / _camp_milestones 等整局态清掉
 ## - rng 保留：重开后随机仍延续——不强行 reseed 避免"重开恰好抽到同一队长"看起来像 bug
 ##
-## 注意：本函数不清 _on_cycle_advance_sink；那是场景生命周期范畴，由 clear_sinks 处理
 static func reset() -> void:
 	_initialized = false
 	_hero_pool = []
 	_used_hero_ids = []
 	_cycle_index = 0
-	_camp_milestones = []
 	_current_cycle_camp_count = 0
 	_pending_respawn_intro = false
-	_pending_cycle_victory_intro = false
-	_victory_leader_snapshot = {}
-	_already_triggered_this_cycle = []
+	_already_recruited_camps = []
 	# L1.2 Phase 1：整局重开清据点（与 _used_hero_ids 等整局态同语义）
 	_stronghold_pos = Vector2i.ZERO
 	_has_stronghold = false
@@ -218,19 +190,16 @@ static func reset() -> void:
 # 周期 / 重生保护查询
 # ─────────────────────────────────────
 
-## 当前周期编号
+## 当前周期编号（L1.3a 阶段 D：cycle 范式退役，_cycle_index 冻结在 0——无人推进；
+## 保留访问器供 EnemyReinforcement 抽 tier / MapBootstrap / ReinforcementRoster 读固定单图配置；
+## tier 随周期递增的逻辑退役，敌方威胁改扎营时钟驱动留子 MVP ②）
 static func cycle_index() -> int:
 	return _cycle_index
 
 
-## 整局最多周期数
+## 整局最多周期数（L1.3a 阶段 D：cycle 退役后冻结，仅 ensure_initialized 签名兼容保留）
 static func max_cycles() -> int:
 	return _max_cycles
-
-
-## 是否处于末周期（无重生保护）
-static func is_last_cycle() -> bool:
-	return _cycle_index >= _max_cycles - 1
 
 
 ## 剩余重生保护次数
@@ -267,27 +236,11 @@ static func mark_climax_triggered() -> void:
 
 
 # ─────────────────────────────────────
-# 周期推进
+# 命数消耗（L1.2 Phase 3 / L1.3a 阶段 B）
 # ─────────────────────────────────────
-
-## 推进到下一周期
-## - 当前周期扎营计数 push 入 milestones（C MVP 后续读取）
-## - cycle_index += 1
-## - 置 _pending_respawn_intro = true，给新场景 _ready 看
-## - 触发 _on_cycle_advance_sink 通知订阅方（若有）
-##
-## 调用方约定：本函数只动数据；reload_current_scene 等场景操作由调用方负责
-static func advance_cycle() -> void:
-	_camp_milestones.append(_current_cycle_camp_count)
-	_current_cycle_camp_count = 0
-	var prev: int = _cycle_index
-	_cycle_index += 1
-	_pending_respawn_intro = true
-	# C MVP：新周期重新累计入队触发；不清 _camp_milestones（跨周期累积是设计意图）
-	_already_triggered_this_cycle = []
-	if _on_cycle_advance_sink.is_valid():
-		_on_cycle_advance_sink.call(prev, _cycle_index)
-
+#
+# L1.3a 阶段 D：cycle 范式退役——advance_cycle / advance_cycle_on_victory 已移除
+# （周期推进 + run 内 reload 整体退役，一局一张连续世界；唯一 reload = 玩家"重开"= 新 run）。
 
 ## L1.2 Phase 3 / L1.3a 阶段 B：无据点昏迷复活——扣 1 命数（不 reload、不重抽队长）
 ##
@@ -298,38 +251,6 @@ static func advance_cycle() -> void:
 ##   - maxi(0, …) 兜底：归零后不为负；归零时下一次昏迷由 PlayerLifecycle 走失败①（respawns_left == 0 分支）
 static func consume_respawn_life() -> void:
 	_respawns_remaining = maxi(0, _respawns_remaining - 1)
-
-
-## 周期胜利推进（占据敌方核心）—— B 重生周期第 3 条路径（L1.3 周期胜利目标 MVP）
-## 区别于 advance_cycle（昏迷重生抽新队长）：保留当前队长本人 + 部队（满血 + quality+1 封顶 SSR）
-##
-## leader：当前队长 CharacterData；内部快照其 troop 关键字段供新场景重建
-## 与 advance_cycle 共享周期推进通用部分（push 扎营计数 / cycle+1 / 清 already_triggered / 触发 sink）
-## 调用方约定：本函数只动数据；reload_current_scene 由调用方负责
-static func advance_cycle_on_victory(leader: CharacterData) -> void:
-	# 1. 快照队长 + 部队；在 troop 上做 quality+1 封顶后再读快照值
-	_victory_leader_snapshot = {}
-	if leader != null and leader.troop != null:
-		var troop: TroopData = leader.troop
-		troop.raise_quality_one_step()  # quality+1 封顶 SSR + exp 归零
-		_victory_leader_snapshot = {
-			"hero_id": leader.hero_id,
-			"troop_type": int(troop.troop_type),
-			"quality": int(troop.quality),
-		}
-	else:
-		push_error("RunState.advance_cycle_on_victory: leader 或 troop 为空，队长快照失败")
-	# 2. 与 advance_cycle 一致的周期推进通用部分
-	_camp_milestones.append(_current_cycle_camp_count)
-	_current_cycle_camp_count = 0
-	var prev: int = _cycle_index
-	_cycle_index += 1
-	_already_triggered_this_cycle = []
-	# 3. 区别于昏迷：置周期胜利推进标志（不置 _pending_respawn_intro）
-	_pending_cycle_victory_intro = true
-	# 4. 通知订阅方周期推进（与 advance_cycle 一致）
-	if _on_cycle_advance_sink.is_valid():
-		_on_cycle_advance_sink.call(prev, _cycle_index)
 
 
 # ─────────────────────────────────────
@@ -403,39 +324,19 @@ static func is_pending_respawn_intro() -> bool:
 	return _pending_respawn_intro
 
 
-## 取值并清零（同一帧内幂等）；新场景 setup 调一次决定是否走"周期胜利重建队长"分支
-## 优先于 consume_pending_respawn_intro 检查——一次只有一种推进（L1.3）
-static func consume_pending_cycle_victory_intro() -> bool:
-	var v: bool = _pending_cycle_victory_intro
-	_pending_cycle_victory_intro = false
-	return v
-
-
-## 周期胜利队长快照浅拷贝（供 PlayerLifecycle.setup 重建队长，防外部修改穿透）
-static func get_victory_leader_snapshot() -> Dictionary:
-	return _victory_leader_snapshot.duplicate()
-
-
 # ─────────────────────────────────────
 # 扎营计数（C MVP 实装填写）
 # ─────────────────────────────────────
 
-## 累加当前周期扎营次数；由 WorldMap._start_camp 调用
-## advance_cycle 时该值 push 入 milestones 后归零
-##
-## L1.3a 阶段 A：同步累加 lifetime 主时钟 _total_camp_count（不随 advance_cycle 归零）。
-## 阶段 D recruit 适配改读 _total_camp_count 后，_current_cycle_camp_count 仅留 B 期 milestone 兼容
+## 累加扎营次数；由 EC.start_camp 调用
+## L1.3a：同步累加 lifetime 主时钟 _total_camp_count（climax 触发 + recruit 适配读它）；
+## _current_cycle_camp_count 冗余跟随（cycle 退役后无归零方，== _total_camp_count）
 static func record_camp() -> void:
 	_current_cycle_camp_count += 1
 	_total_camp_count += 1
 
 
-## 累积里程碑列表浅拷贝（C MVP 入队判定用）
-static func get_milestones_snapshot() -> Array[int]:
-	return _camp_milestones.duplicate()
-
-
-## 当前周期内已累计的扎营次数
+## 当前累计扎营次数（HUD / 调试用；== total_camp_count）
 static func get_current_cycle_camp_count() -> int:
 	return _current_cycle_camp_count
 
@@ -444,38 +345,38 @@ static func get_current_cycle_camp_count() -> int:
 # 扎营里程碑入队（C MVP）
 # ─────────────────────────────────────
 
-## 检查当前 _current_cycle_camp_count 是否命中累积里程碑
+## 检查 lifetime 扎营主时钟是否命中招募里程碑（L1.3a 阶段 D recruit 适配）
+##
+## 取代原 per-cycle _camp_milestones 判定（cycle 退役后 milestone 数组已移除）：
+## 改为对全局扎营计数 _total_camp_count 按 interval 取模——每累计 interval 次扎营触发一次入队。
+## interval 由调用方（EC）从 run_cfg.recruit_camp_interval 注入（RunState 静态类不直接持配置）。
 ##
 ## 命中条件：
-##   - _current_cycle_camp_count 出现在 _camp_milestones 中
-##   - 且 _current_cycle_camp_count 不在 _already_triggered_this_cycle 中
+##   - interval > 0 且 _total_camp_count > 0 且 _total_camp_count % interval == 0
+##   - 且该扎营计数不在 _already_recruited_camps（lifetime 去重，幂等防同次重复）
 ##
-## 命中时：
-##   1. 把当前值标入 _already_triggered_this_cycle（即使后续抽人为空，也不重试，避免无限触发）
-##   2. 调 draw_recruit 抽一个不在队伍中的英雄；teammates_ids 由调用方提供
-##   3. 抽到 → 调 _on_recruit_triggered_sink(hero_dict, milestone)
-##   4. 抽不到（英雄池耗尽）→ 静默跳过 + push_warning（设计文档 §7 场景 5）
+## 命中处置同原逻辑：先标去重 → draw_recruit → 抽到则 sink，抽不到静默跳过（设计文档 §7 场景 5）。
 ##
-## 设计文档：[[C_扎营里程碑入队_MVP]] §3 / §7
-static func check_recruit_milestone(teammates_ids: Array[int]) -> void:
-	var milestone: int = _current_cycle_camp_count
-	# 1. 命中检查
-	if not _camp_milestones.has(milestone):
+## 设计文档：L1.3a_扎营时钟与胜负模型_MVP §3.2 / [[C_扎营里程碑入队_MVP]] §3 / §7
+static func check_recruit_milestone(teammates_ids: Array[int], interval: int) -> void:
+	# 1. 命中检查：lifetime 扎营计数命中 interval 倍数
+	if interval <= 0 or _total_camp_count <= 0 or _total_camp_count % interval != 0:
 		return
-	if _already_triggered_this_cycle.has(milestone):
+	var milestone: int = _total_camp_count
+	if _already_recruited_camps.has(milestone):
 		return
-	# 2. 标记本周期已触发；放在抽取之前，保证英雄池耗尽时也不会无限重试
-	_already_triggered_this_cycle.append(milestone)
+	# 2. 标记已触发；放在抽取之前，保证英雄池耗尽时也不会无限重试
+	_already_recruited_camps.append(milestone)
 	# 3. 抽人
 	var hero_dict: Dictionary = draw_recruit(teammates_ids)
 	if hero_dict.is_empty():
-		push_warning("RunState.check_recruit_milestone: 命中 milestone=%d 但英雄池已耗尽，静默跳过" % milestone)
+		push_warning("RunState.check_recruit_milestone: 命中扎营 %d 但英雄池已耗尽，静默跳过" % milestone)
 		return
 	# 4. 触发回调
 	if _on_recruit_triggered_sink.is_valid():
 		_on_recruit_triggered_sink.call(hero_dict, milestone)
 	else:
-		push_warning("RunState.check_recruit_milestone: sink 未注册，入队事件未分发（milestone=%d）" % milestone)
+		push_warning("RunState.check_recruit_milestone: sink 未注册，入队事件未分发（扎营 %d）" % milestone)
 
 
 ## 抽取一个不在队伍中的随机英雄
@@ -516,12 +417,6 @@ static func register_recruit_sink(sink: Callable) -> void:
 # 信号回调
 # ─────────────────────────────────────
 
-## 注册周期推进回调；多次调用以最后一次为准
-## 签名 func(previous_cycle: int, new_cycle: int) -> void
-static func register_cycle_advance_sink(sink: Callable) -> void:
-	_on_cycle_advance_sink = sink
-
-
 ## 注册据点选定回调（L1.2 Phase 1）；多次调用以最后一次为准
 ## 签名 func(pos: Vector2i) -> void；Phase 2 由 StrongholdVisionBinding 承接
 static func register_stronghold_set_sink(sink: Callable) -> void:
@@ -554,7 +449,6 @@ static func set_stronghold(pos: Vector2i) -> void:
 ## 清理回调（场景 _exit_tree 时调用）
 ## 注意：仅清回调，不清整局态——重生场景重载时整局态必须保留
 static func clear_sinks() -> void:
-	_on_cycle_advance_sink = Callable()
 	_on_recruit_triggered_sink = Callable()
 	_on_stronghold_set_sink = Callable()
 

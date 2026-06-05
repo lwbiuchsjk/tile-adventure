@@ -21,10 +21,10 @@ func _init() -> void:
 
 	_test_respawns_remaining_inject()
 	_test_total_camp_count_accumulate()
-	_test_total_camp_count_survives_cycle()
+	_test_total_camp_count_lifetime()
 	_test_climax_flag()
 	_test_reset_clears_new_fields()
-	_test_respawns_remaining_decoupled_from_cycle()
+	_test_respawns_remaining_consume()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -68,21 +68,18 @@ func _test_total_camp_count_accumulate() -> void:
 	_assert(RunState.get_current_cycle_camp_count() == 3, "per-cycle 计数同步 = 3")
 
 
-## 3. _total_camp_count 不随 advance_cycle 归零（lifetime 语义）
-func _test_total_camp_count_survives_cycle() -> void:
-	print("-- _total_camp_count 跨 advance_cycle 不归零")
+## 3. _total_camp_count lifetime 累加，且不被命数路径污染（L1.3a 阶段 D：cycle 退役后无归零方）
+func _test_total_camp_count_lifetime() -> void:
+	print("-- _total_camp_count lifetime 累加（命数路径不污染）")
 	_reset()
 	RunState.record_camp()
 	RunState.record_camp()
-	RunState.advance_cycle()  # per-cycle 归零，但 lifetime 主时钟保留
-	_assert(RunState.get_current_cycle_camp_count() == 0, "advance 后 per-cycle 归零")
-	_assert(RunState.total_camp_count() == 2, "advance 后 lifetime 主时钟保留=2")
-	RunState.record_camp()
-	_assert(RunState.total_camp_count() == 3, "跨周期继续累加=3")
-	# codex P2：consume_respawn_life（命数路径）同样不应污染 lifetime 主时钟。
-	# 阶段 B/D 改写 consume_respawn_life 时，本断言可抓住"误清零/误改 total"的回归
+	_assert(RunState.total_camp_count() == 2, "扎营 2 次 lifetime=2")
+	# codex P2：consume_respawn_life（命数路径）不应污染 lifetime 主时钟（抓"误清零/误改 total"回归）
 	RunState.consume_respawn_life()
-	_assert(RunState.total_camp_count() == 3, "consume_respawn_life 不影响 lifetime 主时钟（仍 3）")
+	_assert(RunState.total_camp_count() == 2, "consume_respawn_life 不影响 lifetime 主时钟（仍 2）")
+	RunState.record_camp()
+	_assert(RunState.total_camp_count() == 3, "继续累加=3")
 
 
 ## 4. climax 标志：初始 false / mark 后 true / 幂等
@@ -109,16 +106,11 @@ func _test_reset_clears_new_fields() -> void:
 	_assert(not RunState.is_climax_triggered(), "reset 后 climax=false")
 
 
-## 6. 命数独立计数与 cycle 解耦（阶段 B 后：consume_respawn_life 扣独立计数、不再推 cycle）
-##
-## 阶段 B「命数源切换」后：advance_cycle 不影响 respawns_remaining；
-## consume_respawn_life 改扣 _respawns_remaining（不再推 _cycle_index），且 maxi(0,…) 兜底不为负
-func _test_respawns_remaining_decoupled_from_cycle() -> void:
-	print("-- respawns_remaining 与 cycle 解耦（consume 扣独立计数）")
+## 6. 命数独立计数：consume_respawn_life 扣独立计数（脱钩 cycle）+ maxi 兜底
+func _test_respawns_remaining_consume() -> void:
+	print("-- respawns_remaining：consume 扣独立计数 + maxi 兜底")
 	_reset()
 	_assert(RunState.respawns_remaining() == 3, "初始 respawns_remaining=3")
-	RunState.advance_cycle()
-	_assert(RunState.respawns_remaining() == 3, "advance_cycle 不影响独立命数计数（仍 3）")
 	RunState.consume_respawn_life()
 	_assert(RunState.respawns_remaining() == 2, "consume_respawn_life 扣独立命数 3→2")
 	# maxi(0,…) 兜底：扣到 0 后再扣不为负

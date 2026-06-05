@@ -12,7 +12,7 @@ extends RefCounted
 ##   唯一胜利路径 = climax 决战胜（boss pack 清空）→ dispatch_climax_victory → _sink →
 ##     WorldMap._on_victory_decided(PLAYER) → VictoryUI，_finished 一局一次。
 ##   占敌方核心 / 消灭所有敌包 的胜负语义已移除（check_on_slot_owner_changed 退化为 no-op）；
-##   周期推进出口（_cycle_victory_sink / _cycle_advancing）休眠待阶段 D 整体清理。
+##   周期推进出口（_cycle_victory_sink / _cycle_advancing）已于阶段 D 整体移除（cycle 范式退役）。
 ##   失败侧不由 VictoryJudge 触发——失败①「无据点命数耗尽」/ 失败②「climax 战败 sudden-death」
 ##   均由 PlayerLifecycle 走 defeat_triggered(ENEMY_1)。
 ##
@@ -36,24 +36,10 @@ static var _sink: Callable = Callable()
 ## MVP 约定：一局游戏只允许触发一次胜负
 static var _finished: bool = false
 
-## 周期推进出口回调（L1.3 周期胜利目标 MVP）：非末周期占据核心 / 清场时调
-## 签名 func() -> void；WorldMap._on_cycle_victory_triggered 接，构造黑屏过渡 + reload
-static var _cycle_victory_sink: Callable = Callable()
-
-## 周期推进防同帧重入守卫（L1.3）：触发推进到 reload 完成之间拦截重复触发
-## 不复用 _finished——周期推进非"胜负判定"，reload 后 clear_sink 自然清
-static var _cycle_advancing: bool = false
-
-
 ## 注册胜负回调
 ## 多次调用以最后一次为准；sink 签名 func(winner_faction: int) -> void
 static func register_sink(sink: Callable) -> void:
 	_sink = sink
-
-
-## 注册周期推进回调（L1.3）；多次调用以最后一次为准；sink 签名 func() -> void
-static func register_cycle_victory_sink(sink: Callable) -> void:
-	_cycle_victory_sink = sink
 
 
 ## 清理全部状态（回调 + 已判定标记）
@@ -61,16 +47,12 @@ static func register_cycle_victory_sink(sink: Callable) -> void:
 static func clear_sink() -> void:
 	_sink = Callable()
 	_finished = false
-	# L1.3：周期推进出口 + 守卫一并清理，保证 reload 后干净重注册
-	_cycle_victory_sink = Callable()
-	_cycle_advancing = false
 
 
 ## 仅重置"已判定"标记，保留 sink
 ## 调试 / 热重载场景使用；MVP 重开走 reload_current_scene 不需要这个
 static func reset_state() -> void:
 	_finished = false
-	_cycle_advancing = false
 
 
 ## 查询本局是否已判定（供 WorldMap 防御查询）
@@ -83,8 +65,7 @@ static func is_finished() -> bool:
 ## L1.3a 设计 §4.4：扎营时钟接管胜负后，占敌方核心不再触发胜利 / 周期推进。
 ## 本方法保留为无害 hook（OccupationSystem.try_occupy 翻转后仍调用），不做任何分发；
 ## 占敌方核心的新玩法意义（资源 / 据点扩张等）留子 MVP ② / 后续重新定义。
-## 同时移除：原 is_last_cycle 分流 + _dispatch_victory + 周期推进出口（_cycle_victory_sink 基础设施
-## 暂留休眠，连同 WorldMap._on_cycle_victory_triggered 在阶段 D 整体清理）。
+## 原 is_last_cycle 分流 + _dispatch_victory + 周期推进出口（_cycle_victory_sink）已于阶段 B/D 整体移除。
 static func check_on_slot_owner_changed(_slot: PersistentSlot) -> void:
 	return
 

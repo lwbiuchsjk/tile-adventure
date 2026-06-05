@@ -293,7 +293,7 @@ func _get_persistent_slots_by_faction(faction: int) -> Array[PersistentSlot]:
 ## 调用方：WorldMap 输入路由（空格键 / 探索按钮）
 func start_camp() -> void:
 	# E MVP：战斗态守卫——is_in_battle 期间不允许扎营（设计 §2.10）
-	if _world_map._game_finished or _world_map._is_cycle_advancing or _world_map._is_moving or _world_map._is_camping or _world_map._manage_ui.is_open or _world_map._build_panel_ui.is_open or _world_map._event_panel.is_open or _world_map._player_lifecycle.is_in_coma() or _world_map._battle_coordinator.is_in_battle():
+	if _world_map._game_finished or _world_map._is_moving or _world_map._is_camping or _world_map._manage_ui.is_open or _world_map._build_panel_ui.is_open or _world_map._event_panel.is_open or _world_map._player_lifecycle.is_in_coma() or _world_map._battle_coordinator.is_in_battle():
 		return
 	_world_map._is_camping = true
 	_world_map._camp_count += 1
@@ -339,7 +339,11 @@ func start_camp() -> void:
 	# 顺序意图：玩家心智上"扎营整顿 → 物资产出 → 新人加入"，叙事节奏自然
 	# RunState.check_recruit_milestone 内部命中时调 _on_recruit_triggered → push_event
 	# 入队事件因此排在扎营产出事件之后，由 EventPanelUI FIFO 依次弹出
-	RunState.check_recruit_milestone(_world_map._player_lifecycle.get_team_hero_ids())
+	# L1.3a 阶段 D recruit 适配：传 recruit_camp_interval——按全局扎营计数取模触发（取代 per-cycle milestone）
+	RunState.check_recruit_milestone(
+		_world_map._player_lifecycle.get_team_hero_ids(),
+		WorldMap.RUN_PARAM_CFG.recruit_camp_interval
+	)
 
 	# L1.2 Phase 1：据点选定判定（在里程碑入队后、_update_hud 前）
 	# 命中条件全满足 → push 据点确认 event 到 EventPanelUI 队列（与扎营产出 / 里程碑同走 FIFO）；
