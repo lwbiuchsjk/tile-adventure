@@ -339,10 +339,12 @@ func start_camp() -> void:
 	# 顺序意图：玩家心智上"扎营整顿 → 物资产出 → 新人加入"，叙事节奏自然
 	# RunState.check_recruit_milestone 内部命中时调 _on_recruit_triggered → push_event
 	# 入队事件因此排在扎营产出事件之后，由 EventPanelUI FIFO 依次弹出
-	# L1.3a 阶段 D recruit 适配：传 recruit_camp_interval——按全局扎营计数取模触发（取代 per-cycle milestone）
+	# L1.3a 阶段 D recruit 适配：按全局扎营计数每 interval 次触发，受 max_count 硬上限约束
+	# （有界 stopgap，避免无限扎营抽干英雄池；入口 6 事件系统落地后整体迁入）
 	RunState.check_recruit_milestone(
 		_world_map._player_lifecycle.get_team_hero_ids(),
-		WorldMap.RUN_PARAM_CFG.recruit_camp_interval
+		WorldMap.RUN_PARAM_CFG.recruit_camp_interval,
+		WorldMap.RUN_PARAM_CFG.recruit_max_count
 	)
 
 	# L1.2 Phase 1：据点选定判定（在里程碑入队后、_update_hud 前）

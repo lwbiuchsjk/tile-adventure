@@ -23,3 +23,6 @@ extends Resource
 @export_range(0, 10, 1) var no_stronghold_respawns: int = 3
 ## 招募扎营间隔：每 N 次扎营触发一次入队事件（阶段 D recruit 适配读 _total_camp_count）
 @export_range(1, 20, 1) var recruit_camp_interval: int = 3
+## 招募次数硬上限：整局最多招募几次（避免无限扎营抽干英雄池）。默认 2 → 队伍最多 队长+2=3 支。
+## 入口 6 事件系统落地后，此控制完整迁入（由事件表条数自然给出），本字段退役
+@export_range(0, 20, 1) var recruit_max_count: int = 2

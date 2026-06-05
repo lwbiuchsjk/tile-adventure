@@ -9,7 +9,7 @@ extends SceneTree
 ##   3. 英雄池抽取 draw_new_leader / draw_recruit / used_hero_ids 跟踪
 ##   4. 重生事件占位 consume_pending_respawn_intro 幂等清零（冻结保留）
 ##   5. 扎营计数 record_camp / get_current_cycle_camp_count / total_camp_count
-##   6. recruit 适配 check_recruit_milestone（按 interval 命中 + lifetime 去重）
+##   6. recruit 适配 check_recruit_milestone（按 interval 命中 + lifetime 去重 + 招募次数硬上限）
 ##   7. sink 注册 / 清理（recruit / stronghold）
 
 var _failed: int = 0
@@ -31,6 +31,7 @@ func _init() -> void:
 	_test_pending_respawn_intro_consume()
 	_test_record_camp()
 	_test_check_recruit_milestone_interval_dedupe()
+	_test_recruit_max_count_cap()
 	_test_recruit_sink_clear()
 	_test_stronghold_set_query_reset()
 	_test_stronghold_set_sink()
@@ -162,28 +163,53 @@ func _test_check_recruit_milestone_interval_dedupe() -> void:
 	_recruit_captured = []
 	RunState.register_recruit_sink(_on_recruit)
 	# 守卫：interval<=0 不触发
-	RunState.check_recruit_milestone([0], 0)
+	RunState.check_recruit_milestone([0], 0, 10)
 	_assert(_recruit_captured.is_empty(), "interval<=0 不触发")
 	# 守卫：扎营 0 次不触发（_total_camp_count==0）
-	RunState.check_recruit_milestone([0], 2)
+	RunState.check_recruit_milestone([0], 2, 10)
 	_assert(_recruit_captured.is_empty(), "扎营 0 次不触发")
 	# interval=2：扎营到第 2 次命中
 	RunState.record_camp()  # total=1
-	RunState.check_recruit_milestone([0], 2)
+	RunState.check_recruit_milestone([0], 2, 10)
 	_assert(_recruit_captured.is_empty(), "扎营 1 次未命中 interval=2")
 	RunState.record_camp()  # total=2
-	RunState.check_recruit_milestone([0], 2)
+	RunState.check_recruit_milestone([0], 2, 10)
 	_assert(_recruit_captured.size() == 1, "扎营 2 次命中 interval=2")
 	_assert(int(_recruit_captured[0]["milestone"]) == 2, "milestone=2（全局扎营计数）")
 	# 同一扎营计数再 check 不重复（lifetime 去重）
-	RunState.check_recruit_milestone([0], 2)
+	RunState.check_recruit_milestone([0], 2, 10)
 	_assert(_recruit_captured.size() == 1, "同扎营计数再 check 不触发（去重）")
 	# 扎营到第 4 次再命中
 	RunState.record_camp()  # 3
 	RunState.record_camp()  # 4
-	RunState.check_recruit_milestone([0], 2)
+	RunState.check_recruit_milestone([0], 2, 10)
 	_assert(_recruit_captured.size() == 2, "扎营 4 次再命中")
 	_assert(int(_recruit_captured[1]["milestone"]) == 4, "milestone=4")
+
+
+## 9b. 招募次数硬上限 max_count（到上限即停，避免无限扎营抽干池）
+func _test_recruit_max_count_cap() -> void:
+	print("-- check_recruit_milestone 招募次数硬上限")
+	_reset()
+	_recruit_captured = []
+	RunState.register_recruit_sink(_on_recruit)
+	# max_count=1：interval=2 扎营 2 次招 1 次，第 4 次到上限不再招
+	RunState.record_camp()
+	RunState.record_camp()  # total=2
+	RunState.check_recruit_milestone([0], 2, 1)
+	_assert(_recruit_captured.size() == 1, "扎营 2 次招 1 次")
+	RunState.record_camp()
+	RunState.record_camp()  # total=4
+	RunState.check_recruit_milestone([0], 2, 1)
+	_assert(_recruit_captured.size() == 1, "已达上限 1，扎营 4 次不再招")
+	# max_count=0：从不招
+	_reset()
+	_recruit_captured = []
+	RunState.register_recruit_sink(_on_recruit)
+	RunState.record_camp()
+	RunState.record_camp()
+	RunState.check_recruit_milestone([0], 2, 0)
+	_assert(_recruit_captured.is_empty(), "max_count=0 从不招")
 
 
 ## 10. clear_sinks 清 recruit sink
@@ -196,7 +222,7 @@ func _test_recruit_sink_clear() -> void:
 	# clear 后命中 interval 也不 emit（sink 已清；仍会标去重 + push_warning）
 	RunState.record_camp()
 	RunState.record_camp()
-	RunState.check_recruit_milestone([0], 2)
+	RunState.check_recruit_milestone([0], 2, 10)
 	_assert(_recruit_captured.is_empty(), "clear_sinks 后命中不触发（sink 已清）")
 
 

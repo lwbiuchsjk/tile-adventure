@@ -345,20 +345,23 @@ static func get_current_cycle_camp_count() -> int:
 # 扎营里程碑入队（C MVP）
 # ─────────────────────────────────────
 
-## 检查 lifetime 扎营主时钟是否命中招募里程碑（L1.3a 阶段 D recruit 适配）
+## 检查 lifetime 扎营主时钟是否命中招募里程碑（L1.3a 阶段 D recruit 适配 · 有界 stopgap）
 ##
-## 取代原 per-cycle _camp_milestones 判定（cycle 退役后 milestone 数组已移除）：
-## 改为对全局扎营计数 _total_camp_count 按 interval 取模——每累计 interval 次扎营触发一次入队。
-## interval 由调用方（EC）从 run_cfg.recruit_camp_interval 注入（RunState 静态类不直接持配置）。
+## 设计背景（2026-06-05 上一会话原意 + 本会话桌面修正）：招募本质是"通用事件系统的一个实例"
+## （事件 = 触发条件 → 效果 → 呈现），真正归宿是入口 6 事件系统；本份只做**有界**最小适配：
+##   - 每累计 interval 次扎营触发一次入队（_total_camp_count % interval == 0）
+##   - **招募次数硬上限 max_count**：整局最多招 max_count 次（等价"有限事件表 ≤ max_count 条招募事件"），
+##     到上限即停——堵死无限地图下"避战狂扎营抽干英雄池"。入口 6 后此控制完整迁入事件系统（由事件表条数自然给出）。
+##   - lifetime 去重 _already_recruited_camps：同一扎营计数只触发 1 次；其 size 即已招次数
 ##
-## 命中条件：
-##   - interval > 0 且 _total_camp_count > 0 且 _total_camp_count % interval == 0
-##   - 且该扎营计数不在 _already_recruited_camps（lifetime 去重，幂等防同次重复）
+## interval / max_count 由调用方（EC）从 run_cfg 注入（RunState 静态类不直接持配置）。
+## 命中处置：先标去重 → draw_recruit → 抽到则 sink，抽不到静默跳过（设计文档 §7 场景 5）。
 ##
-## 命中处置同原逻辑：先标去重 → draw_recruit → 抽到则 sink，抽不到静默跳过（设计文档 §7 场景 5）。
-##
-## 设计文档：L1.3a_扎营时钟与胜负模型_MVP §3.2 / [[C_扎营里程碑入队_MVP]] §3 / §7
-static func check_recruit_milestone(teammates_ids: Array[int], interval: int) -> void:
+## 设计文档：L1.3a_扎营时钟与胜负模型_MVP §3.2 / [[开发路线图]] 入口 6 事件系统
+static func check_recruit_milestone(teammates_ids: Array[int], interval: int, max_count: int) -> void:
+	# 0. 招募次数硬上限：已达 max_count 次即停（避免无限扎营抽干英雄池；size = 已招次数）
+	if _already_recruited_camps.size() >= max_count:
+		return
 	# 1. 命中检查：lifetime 扎营计数命中 interval 倍数
 	if interval <= 0 or _total_camp_count <= 0 or _total_camp_count % interval != 0:
 		return
