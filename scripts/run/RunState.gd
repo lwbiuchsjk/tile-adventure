@@ -113,9 +113,9 @@ static var _has_stronghold: bool = false
 # L1.3a 扎营主时钟 / 命数独立 / climax（子 MVP ① 阶段 A 数据层）
 # ─────────────────────────────────────
 ##
-## 阶段 A（本批）仅"立起数据层"——新增字段 + 查询 + 注入/清零生命周期，
-## 不切换消费方（respawns_left / consume_respawn_life 仍走 cycle 旧逻辑）。
-## 消费方源切换 + cycle 方法退役由阶段 B/D 完成（设计 §10）。
+## 阶段 A 立数据层（字段 + 查询 + 注入/清零）；阶段 B 已切换命数消费方
+## （respawns_left / consume_respawn_life 走 _respawns_remaining，脱钩 cycle）。
+## 剩余 cycle 方法退役 + climax 实际触发由阶段 C/D 完成（设计 §10）。
 ## 设计原文：tile-advanture-design/无限地图实装/L1.3a_扎营时钟与胜负模型_MVP.md §3.1
 
 ## 整局累计扎营次数（lifetime，不随任何"周期"清零；取代 _cycle_index 作主时钟）
@@ -124,7 +124,7 @@ static var _total_camp_count: int = 0
 
 ## 命数独立计数（脱钩 cycle，收口待跟踪 §十六 P1-2）：无据点昏迷复活容错预算
 ## ensure_initialized 注入 run_cfg.no_stronghold_respawns（默认 K=3）；
-## 消费（无据点复活 -1）的源切换在阶段 B，本阶段仅就位 + 查询
+## 阶段 B 已接通消费方：respawns_left 读它、consume_respawn_life 扣它（无据点复活 -1）
 static var _respawns_remaining: int = 3
 
 ## climax 已触发标志（一局一次，防重复 spawn boss）；阶段 C 接 EC 扎营触发后写入
@@ -233,12 +233,13 @@ static func is_last_cycle() -> bool:
 	return _cycle_index >= _max_cycles - 1
 
 
-## 剩余重生保护次数（末周期返回 0）
+## 剩余重生保护次数
 ##
-## L1.3a 阶段 A 备注：本方法仍走 cycle 派生（max-1-cycle）；阶段 B「命数源切换」
-## 改为 `return _respawns_remaining`。届时 cycle 派生退役，活调用方（WorldMap 火苗 / PlayerLifecycle 门槛）透明切换。
+## L1.3a 阶段 B「命数源切换」：从 cycle 派生（max-1-cycle）切到独立计数 _respawns_remaining，
+## 脱钩 cycle（收口待跟踪 §十六 P1-2）。活调用方（WorldMap 火苗 / PlayerLifecycle 复活门槛）透明跟随，
+## 调用点无需改动；语义不变（"还剩几条命"），仅起始值由 cycle 派生改为 run_cfg 注入的 K。
 static func respawns_left() -> int:
-	return maxi(0, _max_cycles - 1 - _cycle_index)
+	return _respawns_remaining
 
 
 # ─────────────────────────────────────
@@ -288,17 +289,15 @@ static func advance_cycle() -> void:
 		_on_cycle_advance_sink.call(prev, _cycle_index)
 
 
-## L1.2 Phase 3：无据点昏迷复活——扣 1 命数（不 reload、不重抽队长）
+## L1.2 Phase 3 / L1.3a 阶段 B：无据点昏迷复活——扣 1 命数（不 reload、不重抽队长）
 ##
-## 现有模型命数 == cycle（respawns_left = max_cycles-1-cycle_index），而扣命数的唯一途径
-## advance_cycle 与 reload 强绑定（重抽队长 + 新 seed 重生整图）。L1.2 设计 §2.3 关键不变量要求
-## "任何昏迷路径都不 reload"，无据点路径只需"扣命数 + 原地传送"——故抽出本轻量方法仅推 _cycle_index：
+## L1.3a 阶段 B「命数源切换」：从"推 _cycle_index"改为"独立计数 _respawns_remaining -= 1"，
+## 彻底脱钩 cycle（收口待跟踪 §十六 P1-2，修订 L1.2 拍板表 row 11——命数不移除，改作无据点容错预算）。
+##   - 不再推 _cycle_index：扣命数不再污染敌方强度（EnemyReinforcement 读 cycle_index）/ 地图配置行
 ##   - 不置 _pending_respawn_intro：无新场景消费（不 reload）
-##   - 不推扎营 milestone / 不清 _already_triggered：周期推进语义留 advance_cycle / L1.3 扎营时钟接管
-##   - 不触发 _on_cycle_advance_sink：本路径非"周期推进"，仅消耗命数
-## 命数系统 L1.3 移除时本方法一并清理（设计 §L1.2 拍板表 row 11）
+##   - maxi(0, …) 兜底：归零后不为负；归零时下一次昏迷由 PlayerLifecycle 走失败①（respawns_left == 0 分支）
 static func consume_respawn_life() -> void:
-	_cycle_index += 1
+	_respawns_remaining = maxi(0, _respawns_remaining - 1)
 
 
 ## 周期胜利推进（占据敌方核心）—— B 重生周期第 3 条路径（L1.3 周期胜利目标 MVP）

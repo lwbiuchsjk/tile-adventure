@@ -5,20 +5,18 @@ extends SceneTree
 ##
 ## 设计原文：tile-advanture-design/周期胜利目标_MVP.md §8.1
 ##
-## 验证范围（headless 可测的三层）：
+## 验证范围（headless 可测）：
 ##   A. TroopData.raise_quality_one_step —— 升一级 + SSR 硬封顶 + exp 归零
 ##   B. RunState.advance_cycle_on_victory —— cycle+1 / 保留队长快照 / pending 标志 / quality+1 / 不动 used_hero_ids
-##   C. VictoryJudge 分流 —— 非末周期占据核心/清场走周期推进 sink；末周期走通关 sink；slot 过滤
+##
+## L1.3a 阶段 B：原 C 段「VictoryJudge 占核心分流」已随占核心胜负语义移除而删除（见 test_m8_victory_judge
+## 新口径）；本文件 A/B 段测的 advance_cycle_on_victory 在阶段 D cycle 范式退役时整体清理。
 ##
 ## 不在本测覆盖（依赖 SceneTree / WorldMap / OverlayTransitionUI 时序，留桌面跑测）：
 ##   - PlayerLifecycle.setup 快照重建队长（满血恢复 / draw_new_leader 分流）
 ##   - 黑屏过渡 phase 时序 / 末周期 VictoryUI 表现
 
 var _failed: int = 0
-
-## VictoryJudge sink 捕获
-var _victory_sink_calls: Array[int] = []
-var _cycle_victory_calls: int = 0
 
 
 func _init() -> void:
@@ -34,11 +32,6 @@ func _init() -> void:
 	_test_advance_victory_keeps_leader()
 	_test_advance_victory_quality_plus_one_capped()
 	_test_advance_victory_vs_coma_used_ids()
-
-	# C. VictoryJudge 分流
-	_test_dispatch_non_last_cycle_advances()
-	_test_dispatch_last_cycle_wins()
-	_test_slot_filter_rejects_non_core_and_non_player()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -150,54 +143,6 @@ func _test_advance_victory_vs_coma_used_ids() -> void:
 
 
 # ─────────────────────────────────────
-# C. VictoryJudge 分流
-# ─────────────────────────────────────
-
-## 非末周期占据核心 → 周期推进 sink（不触发通关、不置 _finished）
-func _test_dispatch_non_last_cycle_advances() -> void:
-	print("-- VictoryJudge 非末周期占据核心 → 周期推进")
-	_reset_run_state()  # cycle 0 / max 3 → 非末周期
-	_setup_victory_judge()
-	VictoryJudge.check_on_slot_owner_changed(_make_core_player_slot())
-	_assert(_cycle_victory_calls == 1, "非末周期 → cycle_victory_sink 触发 1 次")
-	_assert(_victory_sink_calls.is_empty(), "非末周期不触发通关 _sink")
-	_assert(not VictoryJudge.is_finished(), "非末周期不置 _finished")
-
-
-## 末周期占据核心 → 通关 sink(PLAYER)（不触发周期推进、置 _finished）
-func _test_dispatch_last_cycle_wins() -> void:
-	print("-- VictoryJudge 末周期占据核心 → 真正通关")
-	_reset_run_state()
-	RunState.advance_cycle()
-	RunState.advance_cycle()  # cycle 2 = 末周期（max 3）
-	_assert(RunState.is_last_cycle(), "前置：已到末周期")
-	_setup_victory_judge()
-	VictoryJudge.check_on_slot_owner_changed(_make_core_player_slot())
-	_assert(_victory_sink_calls.size() == 1 and _victory_sink_calls[0] == Faction.PLAYER, "末周期 → _sink(PLAYER)")
-	_assert(_cycle_victory_calls == 0, "末周期不触发周期推进")
-	_assert(VictoryJudge.is_finished(), "末周期置 _finished")
-
-
-## slot 过滤：非 CORE_TOWN / 非 PLAYER owner 不触发任何分流
-func _test_slot_filter_rejects_non_core_and_non_player() -> void:
-	print("-- VictoryJudge slot 过滤")
-	_reset_run_state()
-	_setup_victory_judge()
-	# 非核心 slot（TOWN）
-	var town: PersistentSlot = PersistentSlot.new()
-	town.type = PersistentSlot.Type.TOWN
-	town.owner_faction = Faction.PLAYER
-	VictoryJudge.check_on_slot_owner_changed(town)
-	_assert(_cycle_victory_calls == 0 and _victory_sink_calls.is_empty(), "非 CORE_TOWN 不触发")
-	# 核心 slot 但 owner 非 PLAYER
-	var enemy_core: PersistentSlot = PersistentSlot.new()
-	enemy_core.type = PersistentSlot.Type.CORE_TOWN
-	enemy_core.owner_faction = Faction.ENEMY_1
-	VictoryJudge.check_on_slot_owner_changed(enemy_core)
-	_assert(_cycle_victory_calls == 0 and _victory_sink_calls.is_empty(), "owner 非 PLAYER 不触发")
-
-
-# ─────────────────────────────────────
 # 辅助
 # ─────────────────────────────────────
 
@@ -206,15 +151,6 @@ func _reset_run_state() -> void:
 	RunState.clear_sinks()
 	RunState.reset()
 	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
-
-
-## 重置 VictoryJudge：clear + 注册捕获 sink
-func _setup_victory_judge() -> void:
-	_victory_sink_calls = []
-	_cycle_victory_calls = 0
-	VictoryJudge.clear_sink()
-	VictoryJudge.register_sink(_on_victory)
-	VictoryJudge.register_cycle_victory_sink(_on_cycle_victory)
 
 
 ## 构造一个队长 CharacterData（带 troop）
@@ -227,14 +163,6 @@ func _make_leader(hero_id: int, quality: TroopData.Quality, troop_type: TroopDat
 	troop.troop_type = troop_type
 	ch.troop = troop
 	return ch
-
-
-## 构造玩家归属的敌方核心 slot
-func _make_core_player_slot() -> PersistentSlot:
-	var s: PersistentSlot = PersistentSlot.new()
-	s.type = PersistentSlot.Type.CORE_TOWN
-	s.owner_faction = Faction.PLAYER
-	return s
 
 
 ## 4 个英雄的 mock 池
@@ -252,14 +180,6 @@ func _make_rng(seed_value: int) -> RandomNumberGenerator:
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = seed_value
 	return rng
-
-
-func _on_victory(faction: int) -> void:
-	_victory_sink_calls.append(faction)
-
-
-func _on_cycle_victory() -> void:
-	_cycle_victory_calls += 1
 
 
 func _assert(cond: bool, msg: String) -> void:

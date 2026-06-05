@@ -31,6 +31,7 @@ func _init() -> void:
 	_test_no_stronghold_exhausted_defeat()
 	_test_coma_idempotent()
 	_test_resolver_unregistered_degrades_to_fallback()
+	_test_climax_battle_sudden_death()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -70,9 +71,8 @@ func _test_stronghold_ignores_exhausted_lives() -> void:
 		"stronghold_pos": Vector2i(4, 4),
 		"fallback_pos": Vector2i(0, 0),
 	})
-	# 构造后推到末周期（_make_lifecycle 内 reset 已把 cycle 清零）
-	RunState.advance_cycle()
-	RunState.advance_cycle()
+	# 命数耗尽（L1.3a 阶段 B：命数已脱钩 cycle，直接置独立计数 _respawns_remaining=0）
+	RunState._respawns_remaining = 0
 	_assert(RunState.respawns_left() == 0, "前置：命数耗尽")
 	lc.trigger_coma_or_lose()
 	_assert(_respawn_captured.size() == 1, "据点路径仍 emit coma_respawn")
@@ -89,7 +89,7 @@ func _test_no_stronghold_deduct_life() -> void:
 		"stronghold_pos": Vector2i(0, 0),
 		"fallback_pos": Vector2i(9, 1),
 	})
-	_assert(RunState.respawns_left() == 2, "前置：命数 2")
+	_assert(RunState.respawns_left() == 3, "前置：命数 3（独立计数 K 默认）")
 	lc.trigger_coma_or_lose()
 	_assert(_respawn_captured.size() == 1, "emit coma_respawn 一次")
 	_assert(_defeat_captured.is_empty(), "不 emit defeat")
@@ -108,9 +108,8 @@ func _test_no_stronghold_exhausted_defeat() -> void:
 		"stronghold_pos": Vector2i(0, 0),
 		"fallback_pos": Vector2i(9, 1),
 	})
-	# 构造后推到末周期（_make_lifecycle 内 reset 已把 cycle 清零）
-	RunState.advance_cycle()
-	RunState.advance_cycle()
+	# 命数耗尽（L1.3a 阶段 B：直接置独立计数 _respawns_remaining=0）
+	RunState._respawns_remaining = 0
 	_assert(RunState.respawns_left() == 0, "前置：命数耗尽")
 	lc.trigger_coma_or_lose()
 	_assert(_respawn_captured.is_empty(), "不 emit coma_respawn")
@@ -154,6 +153,26 @@ func _test_resolver_unregistered_degrades_to_fallback() -> void:
 	_assert(not bool(_respawn_captured[0]["is_stronghold"]), "退化为非据点")
 	_assert(bool(_respawn_captured[0]["deduct_life"]), "退化为扣命数")
 	_assert(_respawn_captured[0]["target_pos"] == Vector2i.ZERO, "退化 fallback=ZERO")
+	lc.free()
+
+
+## ⑦ L1.3a 阶段 B：climax 决战中昏迷 → sudden-death 失败②（不复活，即使有据点）
+##    set_climax_battle(true) 后，trigger_coma_or_lose 优先走 climax 特例分支：
+##    据点"无限复活"豁免在决战中不生效；不 emit coma_respawn、不进昏迷态，直接 defeat②
+func _test_climax_battle_sudden_death() -> void:
+	print("-- climax 决战：昏迷直接失败②（不复活，无视据点）")
+	var lc: PlayerLifecycle = _make_lifecycle({
+		"has_stronghold": true,
+		"stronghold_pos": Vector2i(7, 3),
+		"fallback_pos": Vector2i(0, 0),
+	})
+	lc.set_climax_battle(true)
+	_assert(lc.is_climax_battle(), "前置：climax 决战态已置位")
+	lc.trigger_coma_or_lose()
+	_assert(_respawn_captured.is_empty(), "climax 战不 emit coma_respawn（不复活，无视据点）")
+	_assert(_defeat_captured.size() == 1, "emit defeat 一次")
+	_assert(_defeat_captured[0] == Faction.ENEMY_1, "defeat faction = ENEMY_1")
+	_assert(not lc.is_in_coma(), "失败②不进昏迷态")
 	lc.free()
 
 

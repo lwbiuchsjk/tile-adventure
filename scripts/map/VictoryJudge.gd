@@ -8,12 +8,13 @@ extends RefCounted
 ##   tile-advanture-design/城建锚实装/M8_胜负与最小验证.md（旧）
 ##   tile-advanture-design/持久slot基础功能设计.md §七（旧）
 ##
-## 规则（L1.3 周期胜利目标 MVP 后）：
-##   两条胜利路径（占据敌方核心 / 消灭所有敌包）统一交 _dispatch_victory，按 is_last_cycle 分两个出口：
-##     末周期   → 真正通关（_sink → WorldMap._on_victory_decided → VictoryUI），_finished 一局一次
-##     非末周期 → 周期推进（_cycle_victory_sink → 黑屏过渡 + reload + 保留队长），_cycle_advancing 防重入
-##   （L1.3 后全周期开放敌方核心 has_enemy_core；is_last_cycle 由原「硬拦截非末周期」改为「分流开关」）
-##   失败侧不由 VictoryJudge 触发——失败仅由「队长命数耗尽」走 _trigger_coma_or_lose 末周期分支
+## 规则（L1.3a 扎营时钟与胜负模型 MVP 后）：
+##   唯一胜利路径 = climax 决战胜（boss pack 清空）→ dispatch_climax_victory → _sink →
+##     WorldMap._on_victory_decided(PLAYER) → VictoryUI，_finished 一局一次。
+##   占敌方核心 / 消灭所有敌包 的胜负语义已移除（check_on_slot_owner_changed 退化为 no-op）；
+##   周期推进出口（_cycle_victory_sink / _cycle_advancing）休眠待阶段 D 整体清理。
+##   失败侧不由 VictoryJudge 触发——失败①「无据点命数耗尽」/ 失败②「climax 战败 sudden-death」
+##   均由 PlayerLifecycle 走 defeat_triggered(ENEMY_1)。
 ##
 ## 架构选择：
 ##   静态类 + Callable 沉降回调（对齐 TickRegistry 模式）
@@ -77,57 +78,27 @@ static func is_finished() -> bool:
 	return _finished
 
 
-## 核心城镇归属变更时调用
-## 参数 slot.owner_faction 必须为翻转后的新归属（由 OccupationSystem.try_occupy 保证）
+## 核心城镇归属变更时调用（L1.3a 阶段 B：占核心胜负语义已移除 → no-op）
 ##
-## P0 X-A 阵营过滤：仅玩家占据敌方核心触发
-## L1.3 周期胜利目标 MVP：is_last_cycle 从「硬拦截」改为「分流开关」——
-##   仅保留 slot 过滤（CORE_TOWN + owner=PLAYER），分流逻辑统一交给 _dispatch_victory
-##   非末周期 → 周期推进（黑屏过渡）；末周期 → 真正通关（VictoryUI）
-static func check_on_slot_owner_changed(slot: PersistentSlot) -> void:
-	if slot == null:
-		return
-	if slot.type != PersistentSlot.Type.CORE_TOWN:
-		return
-	# P0 X-A 阵营过滤：仅玩家占据敌方核心触发
-	if slot.owner_faction != Faction.PLAYER:
-		return
-	# L1.2 Phase 1：排除玩家据点 —— 玩家据点也是 CORE_TOWN owner=PLAYER，但它是复活锚不是胜利目标。
-	# 据点可被敌方攻占（设计 §2.1「据点无敌」拍板已修正：MVP 允许攻占），玩家"夺回据点"会让该
-	# slot owner 翻回 PLAYER 再次进到这里——视为夺回失地，不触发胜利/周期推进。
-	# 判据用 position（锚定格子）而非 owner：据点被占后 owner 已变，只有 position 锚得住。
-	# 注：占敌方原始核心（position ≠ 据点）仍触发；L1.3 扎营时钟胜利落地后再整体移除占核心胜利路。
-	if RunState.has_stronghold() and slot.position == RunState.stronghold_pos():
-		return
-	_dispatch_victory()
+## L1.3a 设计 §4.4：扎营时钟接管胜负后，占敌方核心不再触发胜利 / 周期推进。
+## 本方法保留为无害 hook（OccupationSystem.try_occupy 翻转后仍调用），不做任何分发；
+## 占敌方核心的新玩法意义（资源 / 据点扩张等）留子 MVP ② / 后续重新定义。
+## 同时移除：原 is_last_cycle 分流 + _dispatch_victory + 周期推进出口（_cycle_victory_sink 基础设施
+## 暂留休眠，连同 WorldMap._on_cycle_victory_triggered 在阶段 D 整体清理）。
+static func check_on_slot_owner_changed(_slot: PersistentSlot) -> void:
+	return
 
 
-## 统一胜利分流（L1.3 周期胜利目标 MVP）：占据敌方核心 / 消灭所有敌包 两条路径都调它
-## 按 is_last_cycle 决定出口：
-##   末周期   → 真正通关（_sink → WorldMap._on_victory_decided → VictoryUI），置 _finished 一局一次
-##   非末周期 → 周期推进（_cycle_victory_sink → 黑屏过渡 + reload），置 _cycle_advancing 防同帧重入
+## L1.3a 阶段 B：climax 决战胜利分发（唯一通关出口）
+## 阶段 C 由战斗结算路径在"boss pack 清空"时调用 → WorldMap._on_victory_decided(PLAYER) → VictoryUI。
 ##
-## Sink 有效性检查在标记置位之前（对齐原 P1 修复语义）：sink 无效时不封盘，留恢复机会 + push_error 排障
-static func _dispatch_victory() -> void:
-	if RunState.is_last_cycle():
-		if _finished:
-			return
-		if not _sink.is_valid():
-			push_error("VictoryJudge._dispatch_victory: 通关 sink 未注册或已失效，胜利事件未分发")
-			return
-		_finished = true
-		_sink.call(Faction.PLAYER)
-	else:
-		if _cycle_advancing:
-			return
-		if not _cycle_victory_sink.is_valid():
-			push_error("VictoryJudge._dispatch_victory: 周期推进 sink 未注册或已失效，周期推进未分发")
-			return
-		_cycle_advancing = true
-		_cycle_victory_sink.call()
-
-
-## 核心目标传达 L1.5（H1）：兜底清场胜利已移除——占领敌方核心（check_on_slot_owner_changed）
-## 为唯一胜利/周期推进触发。理由：能清场必能占核心（核心也在地图上、清场后占它更易），
-## 结果分叉无意义；周期推进收敛为「昏迷（惩罚）/ 占核心（奖励）」两条。
-## 原 check_enemy_packs_clear（遍历 _level_slots 统计 ENEMY_1 pack 数=0 → _dispatch_victory）已删。
+## Sink 有效性检查在 _finished 置位之前（沿用原 P1 修复语义）：sink 无效时不封盘，留恢复机会 + push_error 排障。
+## _finished 一局一次守卫，防重复分发。
+static func dispatch_climax_victory() -> void:
+	if _finished:
+		return
+	if not _sink.is_valid():
+		push_error("VictoryJudge.dispatch_climax_victory: 通关 sink 未注册或已失效，胜利事件未分发")
+		return
+	_finished = true
+	_sink.call(Faction.PLAYER)

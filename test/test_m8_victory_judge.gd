@@ -1,39 +1,37 @@
 extends SceneTree
-## M8 胜负判定冒烟测试
+## 胜负判定冒烟测试（L1.3a 阶段 B 口径改写）
 ## 运行：tools/run_godot.ps1 --headless -s test/test_m8_victory_judge.gd
 ##
-## 验证范围（M8 核心逻辑层）：
-##   1. VictoryJudge gating：非核心 slot 不触发 / 核心 slot 触发 / _finished 一次性
-##   2. sink 注册 + 清理（clear_sink / 重复注册以最后一次为准）
-##   3. OccupationSystem.try_occupy 翻转核心城镇 → sink 收到 winner_faction
-##   4. 同阵营"占据"（无翻转）不触发 sink
-##   5. 非核心持久 slot 翻转不触发 sink
+## L1.3a 设计 §4.4：扎营时钟接管胜负后——
+##   - 占敌方核心 / 消灭所有敌包 的胜负语义已移除（check_on_slot_owner_changed → no-op）
+##   - 唯一胜利出口 = dispatch_climax_victory（climax 决战胜，阶段 C 由 boss 战清空触发）
+##   - 周期推进出口（_cycle_victory_sink）休眠待阶段 D 清理，本套件不再覆盖
+##
+## 验证范围：
+##   1. check_on_slot_owner_changed 退化为 no-op（核心 / 非核心翻转均不触发胜负）
+##   2. dispatch_climax_victory：sink PLAYER + _finished 一局一次 gate
+##   3. sink 注册 / 清理（clear_sink / 重复注册以最后一次为准 / 无效 sink 不封盘）
+##   4. OccupationSystem.try_occupy 仍翻转归属，但不再触发任何胜负 sink（占领与胜负解耦）
 
 var _failed: int = 0
 
 ## sink 捕获：被调时记录 winner 列表
 var _captured: Array[int] = []
 
-## L1.3：周期推进出口捕获计数
-var _cycle_advance_captured: int = 0
-
 
 func _init() -> void:
-	print("=== M8 胜负判定冒烟测试 ===")
+	print("=== 胜负判定冒烟测试（L1.3a 阶段 B 口径）===")
 
-	_test_non_core_slot_not_triggered()
-	_test_core_slot_triggers_player_win()
-	_test_core_slot_triggers_enemy_win()
-	_test_finished_gate_once_per_game()
+	_test_occupy_core_no_longer_triggers()
+	_test_occupy_non_core_no_trigger()
+	_test_climax_victory_dispatch()
+	_test_climax_victory_finished_gate()
 	_test_clear_sink()
 	_test_sink_last_write_wins()
-	_test_core_slot_first_two_cycles_advance()
-	_test_occupation_system_integration_player_flip()
-	_test_occupation_system_integration_enemy_flip()
-	_test_stronghold_recapture_no_victory()
-	_test_same_faction_occupy_no_trigger()
-	_test_non_core_occupy_no_trigger()
 	_test_invalid_sink_does_not_lock_finished()
+	_test_occupation_integration_flip_no_victory()
+	_test_occupation_same_faction_no_flip()
+	_test_occupation_village_flip_no_victory()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -44,77 +42,66 @@ func _init() -> void:
 
 
 # ─────────────────────────────────────────
-# 用例
+# 用例：check_on_slot_owner_changed 退化为 no-op
 # ─────────────────────────────────────────
 
-## 1. 非核心 slot 翻转不触发 sink
-func _test_non_core_slot_not_triggered() -> void:
-	print("-- 非核心 slot 不触发")
-	_reset()
-	var slot: PersistentSlot = _make_slot(PersistentSlot.Type.VILLAGE, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(slot)
-	_assert(_captured.is_empty(), "村庄归属变更不触发 sink")
-	_assert(not VictoryJudge.is_finished(), "_finished 仍为 false")
-
-	var town: PersistentSlot = _make_slot(PersistentSlot.Type.TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(town)
-	_assert(_captured.is_empty(), "城镇归属变更不触发 sink")
-
-
-## 2. 核心城镇翻转到 PLAYER → sink 收到 PLAYER
-func _test_core_slot_triggers_player_win() -> void:
-	print("-- 核心城镇翻转 PLAYER 胜")
+## 1. 占敌方核心不再触发胜负（占核心胜负语义已移除）
+func _test_occupy_core_no_longer_triggers() -> void:
+	print("-- 占敌方核心不再触发胜负（no-op）")
 	_reset()
 	var core: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
 	VictoryJudge.check_on_slot_owner_changed(core)
-	_assert(_captured.size() == 1,           "sink 被调用一次")
-	_assert(_captured[0] == Faction.PLAYER,  "winner 为 PLAYER")
-	_assert(VictoryJudge.is_finished(),      "_finished 置 true")
+	_assert(_captured.is_empty(), "占核心不触发 sink（语义已移除）")
+	_assert(not VictoryJudge.is_finished(), "_finished 保持 false")
 
 
-## 3. P0 X-A 阵营过滤：核心翻转给 ENEMY_1 时 sink 不触发
-##    旧逻辑（X-A 前）：sink 收到 ENEMY_1（玩家失败）
-##    新逻辑（X-A 后）：失败侧由命数耗尽接管；VictoryJudge 仅监听玩家占据敌方核心
-func _test_core_slot_triggers_enemy_win() -> void:
-	print("-- P0 X-A 核心翻转 ENEMY_1 不触发（阵营过滤）")
+## 2. 非核心 slot 翻转同样不触发（no-op 对一切 slot）
+func _test_occupy_non_core_no_trigger() -> void:
+	print("-- 非核心 slot 翻转不触发")
 	_reset()
-	var core: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.ENEMY_1)
-	VictoryJudge.check_on_slot_owner_changed(core)
-	_assert(_captured.is_empty(),            "sink 不触发（owner != PLAYER 被过滤）")
-	_assert(not VictoryJudge.is_finished(),  "_finished 保持 false")
+	VictoryJudge.check_on_slot_owner_changed(_make_slot(PersistentSlot.Type.VILLAGE, Faction.PLAYER))
+	VictoryJudge.check_on_slot_owner_changed(_make_slot(PersistentSlot.Type.TOWN, Faction.PLAYER))
+	_assert(_captured.is_empty(), "村庄 / 城镇翻转均不触发 sink")
 
 
-## 4. _finished gate：同一局内第二次调用不触发
-##    P0 X-A 后 sink 仅由 owner=PLAYER 触发；用两次 PLAYER 翻转验证 gate
-func _test_finished_gate_once_per_game() -> void:
+# ─────────────────────────────────────────
+# 用例：dispatch_climax_victory（唯一胜利出口）
+# ─────────────────────────────────────────
+
+## 3. dispatch_climax_victory → sink 收到 PLAYER + _finished 置 true
+func _test_climax_victory_dispatch() -> void:
+	print("-- dispatch_climax_victory 通关")
+	_reset()
+	VictoryJudge.dispatch_climax_victory()
+	_assert(_captured.size() == 1, "sink 被调用一次")
+	_assert(_captured[0] == Faction.PLAYER, "winner 为 PLAYER")
+	_assert(VictoryJudge.is_finished(), "_finished 置 true")
+
+
+## 4. _finished gate：同一局内第二次 dispatch 不重复触发
+func _test_climax_victory_finished_gate() -> void:
 	print("-- _finished gate 一局一次")
 	_reset()
-	var core1: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(core1)
+	VictoryJudge.dispatch_climax_victory()
 	_assert(_captured.size() == 1, "第一次触发")
-
-	var core2: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(core2)
+	VictoryJudge.dispatch_climax_victory()
 	_assert(_captured.size() == 1, "第二次被 gate 拦截，sink 仍只 1 次")
 
 
-## 5. clear_sink 后 sink 与 _finished 都被清理
+## 5. clear_sink 后 sink 与 _finished 都被清理，重注册可再次触发
 func _test_clear_sink() -> void:
 	print("-- clear_sink 清理")
 	_reset()
-	var core: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(core)
+	VictoryJudge.dispatch_climax_victory()
 	_assert(VictoryJudge.is_finished(), "触发后 _finished = true")
 
 	VictoryJudge.clear_sink()
 	_assert(not VictoryJudge.is_finished(), "clear_sink 后 _finished = false")
 
 	# 重新注册后应能再次触发（模拟重开场景）
-	# P0 X-A 后 sink 仅由 owner=PLAYER 触发；用 PLAYER 核心翻转验证
 	_captured = []
 	VictoryJudge.register_sink(_on_sink)
-	var core2: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(core2)
+	VictoryJudge.dispatch_climax_victory()
 	_assert(_captured.size() == 1 and _captured[0] == Faction.PLAYER, "重注册后可再次触发")
 
 
@@ -127,41 +114,30 @@ func _test_sink_last_write_wins() -> void:
 	VictoryJudge.register_sink(first_sink)
 	VictoryJudge.register_sink(_on_sink)  # 覆盖第一个
 
-	var core: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(core)
-	_assert(first_captured.is_empty(),  "旧 sink 不再收到")
-	_assert(_captured.size() == 1,       "新 sink 收到")
+	VictoryJudge.dispatch_climax_victory()
+	_assert(first_captured.is_empty(), "旧 sink 不再收到")
+	_assert(_captured.size() == 1, "新 sink 收到")
 
 
-## 7. 前两周期占领核心触发周期推进出口（L1.3：非末周期=周期推进，不触发通关 / 不封盘）
-func _test_core_slot_first_two_cycles_advance() -> void:
-	print("-- 前两周期核心翻转 → 周期推进出口（非通关）")
-	_reset()
-	# L1.3：注册周期推进 sink 捕获（_reset 仅注册通关 _sink）
-	_cycle_advance_captured = 0
-	VictoryJudge.register_cycle_victory_sink(_on_cycle_advance)
+## 7. sink 未注册 / 无效时，_finished 不应被置位（审查 P1 修复回归）
+## 理由：旧实现"先置 _finished=true 再 call sink"，sink 失效会导致本局永远不再触发胜负
+func _test_invalid_sink_does_not_lock_finished() -> void:
+	print("-- sink 无效不封盘（P1 修复回归）")
+	VictoryJudge.clear_sink()  # 清空 sink，_finished 同时置 false
+	_assert(not VictoryJudge.is_finished(), "起点 _finished = false")
 
-	RunState._cycle_index = 0
-	VictoryJudge.check_on_slot_owner_changed(_make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER))
-	_assert(_cycle_advance_captured == 1, "周期 0 占据核心 → 周期推进出口触发")
-	_assert(_captured.is_empty(), "周期 0 不触发通关 _sink")
-	_assert(not VictoryJudge.is_finished(), "周期 0 不封盘")
-
-	# 模拟 reload：_exit_tree clear_sink（清 _cycle_advancing + sink）→ 新 _ready 重新 register
-	# （生产路径：周期推进后 reload_current_scene 触发 clear_sink，非 reset_state）
-	VictoryJudge.clear_sink()
-	VictoryJudge.register_sink(_on_sink)
-	VictoryJudge.register_cycle_victory_sink(_on_cycle_advance)
-	RunState._cycle_index = 1
-	VictoryJudge.check_on_slot_owner_changed(_make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER))
-	_assert(_cycle_advance_captured == 2, "周期 1 占据核心 → 周期推进出口再触发")
-	_assert(_captured.is_empty(), "周期 1 不触发通关 _sink")
-	_assert(not VictoryJudge.is_finished(), "周期 1 不封盘")
+	# 不重新 register_sink，直接 dispatch
+	VictoryJudge.dispatch_climax_victory()
+	_assert(not VictoryJudge.is_finished(), "sink 无效时 _finished 保持 false，避免永久封盘")
 
 
-## 7. OccupationSystem.try_occupy 翻转核心城镇（PLAYER 攻敌方核心）→ sink PLAYER
-func _test_occupation_system_integration_player_flip() -> void:
-	print("-- OccupationSystem 集成：玩家翻敌方核心")
+# ─────────────────────────────────────────
+# 用例：OccupationSystem 集成（占领与胜负解耦）
+# ─────────────────────────────────────────
+
+## 8. try_occupy 翻转敌方核心成功，但不再触发胜负 sink
+func _test_occupation_integration_flip_no_victory() -> void:
+	print("-- OccupationSystem 集成：翻敌方核心不再触发胜负")
 	_reset()
 	var core: PersistentSlot = PersistentSlot.new()
 	core.type = PersistentSlot.Type.CORE_TOWN
@@ -171,57 +147,14 @@ func _test_occupation_system_integration_player_flip() -> void:
 	core.max_range = 3
 
 	var flipped: bool = OccupationSystem.try_occupy(core, Faction.PLAYER)
-	_assert(flipped,                          "翻转成功")
+	_assert(flipped, "翻转成功")
 	_assert(core.owner_faction == Faction.PLAYER, "核心归属已切到 PLAYER")
-	_assert(_captured.size() == 1 and _captured[0] == Faction.PLAYER,
-		"sink 收到 PLAYER 胜利")
+	_assert(_captured.is_empty(), "占领与胜负解耦：不触发 sink")
+	_assert(not VictoryJudge.is_finished(), "_finished 保持 false")
 
 
-## 8. P0 X-A：核心翻转给 ENEMY_1 时 sink 不触发（阵营过滤防御）
-##    理论上 X-A 后玩家方不再有 CORE_TOWN（已降级为 TOWN 占位），此场景不会发生；
-##    但若代码 bug 导致玩家方 CORE_TOWN 残留并被翻转，VictoryJudge 也应过滤
-func _test_occupation_system_integration_enemy_flip() -> void:
-	print("-- P0 X-A：核心翻转给 ENEMY_1 时 sink 不触发（阵营过滤）")
-	_reset()
-	var core: PersistentSlot = PersistentSlot.new()
-	core.type = PersistentSlot.Type.CORE_TOWN
-	core.owner_faction = Faction.PLAYER
-	core.position = Vector2i(5, 5)
-	core.initial_range = 1
-	core.max_range = 3
-
-	var flipped: bool = OccupationSystem.try_occupy(core, Faction.ENEMY_1)
-	_assert(flipped,                             "翻转成功")
-	_assert(core.owner_faction == Faction.ENEMY_1, "核心归属已切到 ENEMY_1")
-	_assert(_captured.is_empty(),                "sink 不触发（owner != PLAYER 被 X-A 阵营过滤）")
-
-
-## 8.5 L1.2 Phase 1：玩家夺回据点（CORE_TOWN owner 翻回 PLAYER）不触发胜利
-##     据点也是 CORE_TOWN owner=PLAYER，但 position == RunState.stronghold_pos() → 视为夺回失地
-##     对照：同一 _reset 下若不设据点，占 CORE_TOWN owner=PLAYER 会触发（已由用例 2 覆盖）
-func _test_stronghold_recapture_no_victory() -> void:
-	print("-- L1.2 Phase 1：夺回据点不触发胜利")
-	_reset()
-	# 设定据点在 (3, 7)
-	RunState._has_stronghold = true
-	RunState._stronghold_pos = Vector2i(3, 7)
-
-	# 玩家夺回据点：该格 CORE_TOWN owner 翻回 PLAYER
-	var stronghold: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	stronghold.position = Vector2i(3, 7)
-	VictoryJudge.check_on_slot_owner_changed(stronghold)
-	_assert(_captured.is_empty(),            "夺回据点 sink 不触发")
-	_assert(not VictoryJudge.is_finished(),  "_finished 保持 false")
-
-	# 对照：同一局占敌方原始核心（position ≠ 据点）仍触发胜利
-	var enemy_core: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	enemy_core.position = Vector2i(9, 9)
-	VictoryJudge.check_on_slot_owner_changed(enemy_core)
-	_assert(_captured.size() == 1 and _captured[0] == Faction.PLAYER, "占敌方核心（非据点）仍触发胜利")
-
-
-## 9. 同阵营"占据"返回 false 且 sink 不触发
-func _test_same_faction_occupy_no_trigger() -> void:
+## 9. 同阵营"占据"返回 false 且不触发 sink
+func _test_occupation_same_faction_no_flip() -> void:
 	print("-- 同阵营占据不翻转 / 不触发 sink")
 	_reset()
 	var core: PersistentSlot = PersistentSlot.new()
@@ -231,27 +164,12 @@ func _test_same_faction_occupy_no_trigger() -> void:
 	core.max_range = 3
 
 	var flipped: bool = OccupationSystem.try_occupy(core, Faction.PLAYER)
-	_assert(not flipped,           "同阵营返回 false")
-	_assert(_captured.is_empty(),  "sink 未触发")
+	_assert(not flipped, "同阵营返回 false")
+	_assert(_captured.is_empty(), "sink 未触发")
 
 
-## 11. sink 未注册 / 无效时，_finished 不应被置位（审查 P1 修复回归）
-## 理由：旧实现"先置 _finished=true 再 call sink"，sink 失效会导致本局永远不再触发胜负
-## 修复后 sink 无效直接 return，留出后续恢复机会
-func _test_invalid_sink_does_not_lock_finished() -> void:
-	print("-- sink 无效不封盘（P1 修复回归）")
-	VictoryJudge.clear_sink()  # 清空 sink，_finished 同时置 false
-	_assert(not VictoryJudge.is_finished(), "起点 _finished = false")
-
-	# 不重新 register_sink，直接触发核心城镇翻转
-	var core: PersistentSlot = _make_slot(PersistentSlot.Type.CORE_TOWN, Faction.PLAYER)
-	VictoryJudge.check_on_slot_owner_changed(core)
-	_assert(not VictoryJudge.is_finished(),
-		"sink 无效时 _finished 保持 false，避免永久封盘")
-
-
-## 10. 非核心 slot 经 OccupationSystem.try_occupy 翻转不触发 sink
-func _test_non_core_occupy_no_trigger() -> void:
+## 10. 非核心 slot 经 try_occupy 翻转不触发 sink
+func _test_occupation_village_flip_no_victory() -> void:
 	print("-- 非核心 slot 翻转不触发 sink")
 	_reset()
 	var village: PersistentSlot = PersistentSlot.new()
@@ -261,23 +179,20 @@ func _test_non_core_occupy_no_trigger() -> void:
 	village.max_range = 2
 
 	var flipped: bool = OccupationSystem.try_occupy(village, Faction.PLAYER)
-	_assert(flipped,               "村庄翻转成功")
-	_assert(_captured.is_empty(),  "sink 未触发（非核心城镇）")
+	_assert(flipped, "村庄翻转成功")
+	_assert(_captured.is_empty(), "sink 未触发（非核心城镇）")
 
 
 # ─────────────────────────────────────────
 # 辅助
 # ─────────────────────────────────────────
 
-## 重置测试上下文：清理 VictoryJudge 静态态 + sink 捕获列表 + 重新注册 sink
+## 重置测试上下文：清理 VictoryJudge 静态态 + sink 捕获列表 + 重新注册 sink + 清据点态
 func _reset() -> void:
 	VictoryJudge.clear_sink()
 	_captured = []
 	VictoryJudge.register_sink(_on_sink)
-	RunState._max_cycles = 3
-	RunState._cycle_index = 2
-	# L1.2 Phase 1：清据点态 —— 不设据点时 has_stronghold=false，VictoryJudge 据点守卫不生效，
-	# 现有占敌方核心胜利用例行为不变；据点专项用例自行设定
+	# 据点态清零（占领集成用例不依赖据点；保持干净起点）
 	RunState._has_stronghold = false
 	RunState._stronghold_pos = Vector2i.ZERO
 
@@ -287,13 +202,7 @@ func _on_sink(winner: int) -> void:
 	_captured.append(winner)
 
 
-## L1.3：周期推进出口捕获回调
-func _on_cycle_advance() -> void:
-	_cycle_advance_captured += 1
-
-
 ## 构造指定类型 + 归属的 PersistentSlot（owner_faction 已设置为"翻转后"的状态）
-## check_on_slot_owner_changed 读 slot.owner_faction 作为 winner
 func _make_slot(type: int, owner: int) -> PersistentSlot:
 	var s: PersistentSlot = PersistentSlot.new()
 	s.type = type

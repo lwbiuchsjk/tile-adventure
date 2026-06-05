@@ -5,13 +5,13 @@ extends SceneTree
 ##
 ## 设计：tile-advanture-design/无限地图实装/L1.3a_扎营时钟与胜负模型_MVP.md §3.1 / §10 阶段 A
 ##
-## 验证范围（仅数据层；消费方源切换在阶段 B，本批不覆盖）：
+## 验证范围（RunState 数据层；阶段 B 后含命数消费语义）：
 ##   1. ensure_initialized 注入命数 K（可选参 + 默认值）
 ##   2. record_camp 累加 lifetime 主时钟 _total_camp_count（不随 advance_cycle 归零）
 ##   3. _total_camp_count 与 cycle 解耦（advance_cycle / consume_respawn_life 均不动它）
 ##   4. climax 标志：初始 false / mark 后 true / 幂等
 ##   5. reset 清零三个新字段
-##   6. 命数独立计数 respawns_remaining 与 cycle 解耦（阶段 A 仅就位 + 查询，不消费）
+##   6. 命数独立计数：advance_cycle 不动它 / consume_respawn_life 扣它（阶段 B 源切换）+ maxi 兜底
 
 var _failed: int = 0
 
@@ -109,17 +109,23 @@ func _test_reset_clears_new_fields() -> void:
 	_assert(not RunState.is_climax_triggered(), "reset 后 climax=false")
 
 
-## 6. 命数独立计数与 cycle 解耦（阶段 A：advance_cycle / consume_respawn_life 不动 respawns_remaining）
+## 6. 命数独立计数与 cycle 解耦（阶段 B 后：consume_respawn_life 扣独立计数、不再推 cycle）
 ##
-## 注：阶段 A 消费方未切换——consume_respawn_life 仍推 _cycle_index（旧逻辑），
-## 故本用例验证"新计数器不被旧 cycle 路径污染"，命数实际消费的源切换在阶段 B 覆盖
+## 阶段 B「命数源切换」后：advance_cycle 不影响 respawns_remaining；
+## consume_respawn_life 改扣 _respawns_remaining（不再推 _cycle_index），且 maxi(0,…) 兜底不为负
 func _test_respawns_remaining_decoupled_from_cycle() -> void:
-	print("-- respawns_remaining 与 cycle 解耦")
+	print("-- respawns_remaining 与 cycle 解耦（consume 扣独立计数）")
 	_reset()
 	_assert(RunState.respawns_remaining() == 3, "初始 respawns_remaining=3")
 	RunState.advance_cycle()
-	RunState.consume_respawn_life()  # 阶段 A 仍走 _cycle_index += 1
-	_assert(RunState.respawns_remaining() == 3, "cycle 推进不影响独立命数计数（仍 3）")
+	_assert(RunState.respawns_remaining() == 3, "advance_cycle 不影响独立命数计数（仍 3）")
+	RunState.consume_respawn_life()
+	_assert(RunState.respawns_remaining() == 2, "consume_respawn_life 扣独立命数 3→2")
+	# maxi(0,…) 兜底：扣到 0 后再扣不为负
+	RunState.consume_respawn_life()
+	RunState.consume_respawn_life()
+	RunState.consume_respawn_life()
+	_assert(RunState.respawns_remaining() == 0, "扣到 0 后再扣兜底为 0（不为负）")
 
 
 # ─────────────────────────────────────

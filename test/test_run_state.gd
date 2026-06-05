@@ -60,7 +60,7 @@ func _test_initial_state_after_init() -> void:
 	_assert(RunState.cycle_index() == 0, "cycle_index 初始为 0")
 	_assert(RunState.max_cycles() == 3, "max_cycles = 3")
 	_assert(not RunState.is_last_cycle(), "非末周期（cycle 0 / max 3）")
-	_assert(RunState.respawns_left() == 2, "respawns_left = max - 1 - cycle = 2")
+	_assert(RunState.respawns_left() == 3, "respawns_left = 独立命数 K（默认 3，已脱钩 cycle）")
 	_assert(not RunState.is_pending_respawn_intro(), "重生占位标志初始 false")
 	_assert(RunState.get_current_cycle_camp_count() == 0, "本周期扎营计数 = 0")
 
@@ -106,15 +106,18 @@ func _test_is_last_cycle_boundary() -> void:
 	_assert(RunState.is_last_cycle(), "cycle 2 = max-1 是末周期")
 
 
-## 5. respawns_left 计算（递减）
+## 5. respawns_left 递减（L1.3a 阶段 B：独立命数，consume_respawn_life 扣减、脱钩 cycle）
 func _test_respawns_left_calculation() -> void:
-	print("-- respawns_left 递减")
+	print("-- respawns_left 递减（独立命数）")
 	_reset()
-	_assert(RunState.respawns_left() == 2, "初始 2 次")
+	_assert(RunState.respawns_left() == 3, "初始 3 次（独立命数 K）")
 	RunState.advance_cycle()
-	_assert(RunState.respawns_left() == 1, "cycle 1 → 1 次")
-	RunState.advance_cycle()
-	_assert(RunState.respawns_left() == 0, "末周期 → 0 次")
+	_assert(RunState.respawns_left() == 3, "advance_cycle 不影响命数（已脱钩 cycle）")
+	RunState.consume_respawn_life()
+	_assert(RunState.respawns_left() == 2, "consume → 2 次")
+	RunState.consume_respawn_life()
+	RunState.consume_respawn_life()
+	_assert(RunState.respawns_left() == 0, "扣到 0")
 
 
 ## 6. draw_new_leader 标 used + 不重复抽
@@ -271,29 +274,30 @@ func _test_stronghold_cross_init_preserved() -> void:
 # 用例：无据点昏迷扣命数（L1.2 Phase 3）
 # ─────────────────────────────────────
 
-## 11. consume_respawn_life 扣 1 命数（推 cycle）但不触发 reload 范式副作用
+## 11. consume_respawn_life 扣 1 命数（L1.3a 阶段 B：独立计数，脱钩 cycle）不触发 reload 范式副作用
 ##
-## 与 advance_cycle 对比：consume_respawn_life 只推 _cycle_index（命数递减），
+## 阶段 B 后：consume_respawn_life 扣 _respawns_remaining，不再推 _cycle_index，
 ## 不置 _pending_respawn_intro（无新场景消费）、不 push 扎营 milestone、不触发 cycle_advance_sink
 func _test_consume_respawn_life() -> void:
-	print("-- consume_respawn_life 扣命数不触发 reload 副作用")
+	print("-- consume_respawn_life 扣独立命数不触发 reload 副作用")
 	_reset()
 	_cycle_advance_captured = []
 	RunState.register_cycle_advance_sink(_on_cycle_advance)
 	# 先扎营 2 次（验证不被 push 进 milestone）
 	RunState.record_camp()
 	RunState.record_camp()
-	_assert(RunState.respawns_left() == 2, "初始命数 2")
+	_assert(RunState.respawns_left() == 3, "初始命数 3（独立计数 K）")
 	RunState.consume_respawn_life()
-	_assert(RunState.cycle_index() == 1, "consume 后 cycle 推进到 1（命数递减）")
-	_assert(RunState.respawns_left() == 1, "命数 2 → 1")
+	_assert(RunState.cycle_index() == 0, "consume 不再推 cycle（脱钩，cycle 仍 0）")
+	_assert(RunState.respawns_left() == 2, "命数 3 → 2")
 	_assert(not RunState.is_pending_respawn_intro(), "不置 _pending_respawn_intro（无 reload）")
 	_assert(RunState.get_current_cycle_camp_count() == 2, "扎营计数不被归零（非周期推进）")
 	_assert(RunState.get_milestones_snapshot().is_empty(), "不 push 扎营 milestone")
 	_assert(_cycle_advance_captured.is_empty(), "不触发 cycle_advance_sink")
-	# 再扣一次到末周期
+	# 扣到命数耗尽
 	RunState.consume_respawn_life()
-	_assert(RunState.respawns_left() == 0, "再扣 → 命数 0（末周期，下次走 defeat）")
+	RunState.consume_respawn_life()
+	_assert(RunState.respawns_left() == 0, "扣到命数 0（下次昏迷走 defeat）")
 
 
 ## 12. consume_respawn_life 不影响据点（据点是 reset 才清，扣命数不动）

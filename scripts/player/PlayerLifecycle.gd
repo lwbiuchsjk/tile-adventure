@@ -76,6 +76,10 @@ var _coma_duration_sec: float = 1.5
 ## 返回 Dictionary {has_stronghold: bool, stronghold_pos: Vector2i, fallback_pos: Vector2i}
 ## 据点校验（slot 仍为 CORE_TOWN/PLAYER）+ fallback 最近占领 slot 解析都在 WorldMap 侧（数据在手边）
 var _coma_respawn_resolver: Callable = Callable()
+## L1.3a 阶段 B：当前是否处于 climax 决战（boss 战）。true 时队长昏迷走 sudden-death 失败②（不复活）。
+## 阶段 B 仅就位休眠分支——本字段无人置 true（无行为变更）；阶段 C boss 战开始/结束时由 WorldMap/EC
+## 经 set_climax_battle 置位/复位。设计 §2.2 / §4.2：决战定生死，据点也不复活。
+var _is_climax_battle: bool = false
 
 
 # ─────────────────────────────────────────
@@ -308,6 +312,12 @@ func evaluate_party_state(skip_if_finished: bool = false) -> bool:
 func trigger_coma_or_lose() -> void:
 	if _is_in_coma:
 		return
+	# L1.3a 阶段 B：climax 决战特例（sudden-death）——决战中队长昏迷直接整局失败②，不复活、不传送、不进昏迷态。
+	# 优先于据点/命数三路：据点的"无限复活"豁免在 climax 战不生效（设计 §2.2 / §4.2）。
+	# 阶段 B 休眠（_is_climax_battle 恒 false）；阶段 C boss 战上下文置位后激活。
+	if _is_climax_battle:
+		defeat_triggered.emit(Faction.ENEMY_1)
+		return
 	# 目标解析（resolver 未注册时退化为"无据点 + fallback=ZERO"，仅测试构造或异常路径出现）
 	var resolution: Dictionary = {}
 	if _coma_respawn_resolver.is_valid():
@@ -328,6 +338,17 @@ func trigger_coma_or_lose() -> void:
 	else:
 		# 命数耗尽 → 整局失败（沿用现有 VictoryUI 失败遮罩，由 WorldMap 接 sink 处理）
 		defeat_triggered.emit(Faction.ENEMY_1)
+
+
+## L1.3a 阶段 B：设置/复位 climax 决战态。阶段 C 由 WorldMap/EC 在 boss 战开始时置 true、
+## 决战结束（胜/败收束）时复位。置 true 后队长昏迷走 sudden-death 失败②（见 trigger_coma_or_lose）。
+func set_climax_battle(value: bool) -> void:
+	_is_climax_battle = value
+
+
+## L1.3a 阶段 B：查询 climax 决战态（调试 / WorldMap 时序协调用）
+func is_climax_battle() -> bool:
+	return _is_climax_battle
 
 
 ## 入口 2 MVP 2.1 议题 5（2026-05-10）：构造 coma 文案
