@@ -206,6 +206,16 @@ func _compute_battle_zoom_target() -> float:
 # 阶段 c：战斗会话启动 + 援军注入
 # ─────────────────────────────────────
 
+## L1.3a 阶段 C：包列表中是否含 climax boss（决定本场是否为 climax 决战 / 是否击败 boss）
+## 参数用无类型 Array：兼容 start_*_battle 的 Array[LevelSlot] 与结算回调的无类型 defeated_packs
+func _contains_climax_boss(packs: Array) -> bool:
+	for pack_v in packs:
+		var pack: LevelSlot = pack_v as LevelSlot
+		if pack != null and pack.is_climax_boss:
+			return true
+	return false
+
+
 ## 启动主动战斗（玩家按 [F] 命中候选包后调用）
 ##
 ## 流程（设计 §3.1）：
@@ -218,6 +228,10 @@ func _compute_battle_zoom_target() -> float:
 func start_battle_session(packs: Array[LevelSlot]) -> void:
 	if packs.is_empty():
 		return
+	# L1.3a 阶段 C：boss 战识别——参战包含 climax boss → 标记 climax 决战态
+	# （置于 session.start 之前，使 start 末尾防御性 COMA 也能命中 sudden-death 分流）
+	if _contains_climax_boss(packs):
+		_world_map._player_lifecycle.set_climax_battle(true)
 	# 补给扣除钳到 ≥0；调用前由 try_trigger_active_battle 已校验充足
 	# 钳位防御 _active_battle_supply_cost > _supply 时不进入负数（被动战斗 E4 路径同样适用）
 	_world_map._supply = maxi(0, _world_map._supply - _world_map._active_battle_supply_cost)
@@ -275,6 +289,9 @@ func start_battle_session(packs: Array[LevelSlot]) -> void:
 func start_passive_battle(packs: Array[LevelSlot]) -> void:
 	if packs.is_empty():
 		return
+	# L1.3a 阶段 C：boss 战识别（与主动战斗同口径）——boss 进军接触触发的被动战斗也是 climax 决战
+	if _contains_climax_boss(packs):
+		_world_map._player_lifecycle.set_climax_battle(true)
 	_world_map._supply = maxi(0, _world_map._supply - _world_map._passive_battle_supply_cost)
 	_world_map._battle_session = BattleSession.new()
 	# MVP-γ 阶段 2 修复：redraw_target 传 _renderer（非 self）—— _draw 已迁到
@@ -530,6 +547,11 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 	# 持久 slot 援军（L1.2）：战后回收——本场入场援军条目从储备永久扣减（一次性消耗）
 	# 与结束原因无关（VICTORY / RETREAT / COMA / MANUAL_EXIT 一致），置于任何 _battle_session = null 之前
 	_consume_reinforcement_rosters()
+	# L1.3a 阶段 C：在任何分支处理前快照 climax 决战态。
+	#   - COMA 分支：trigger_coma_or_lose 内读 _is_climax_battle（仍 true）走 sudden-death 失败②
+	#   - VICTORY 分支：was_climax → boss 已清空 → dispatch_climax_victory 通关
+	#   - 非 COMA 收尾末尾统一复位 set_climax_battle(false)（撤离/手动退后重新可正常战）
+	var was_climax: bool = _world_map._player_lifecycle.is_climax_battle()
 	# 入口 2 MVP 2.1 议题 5（2026-05-10 跑测调整）：COMA 分支与其他分支的动画清理时机不同
 	#
 	# COMA 分支：先 await 致命一击的攻击 / 死亡动画跑完，玩家能看到完整因果，再清理 + 黑屏
@@ -597,8 +619,12 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 				_world_map._schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
 				_world_map._original_slot_types.erase(lvpos)
 
-		# 核心目标传达 L1.5（H1）：移除兜底清场胜利——占领敌方核心为唯一胜利路径
-		# （清场后核心仍在地图上，玩家需走到核心占领；能清场必能占核心、分叉无意义）
+		# L1.3a 阶段 C：climax 决战胜 = 通关（→ _on_victory_decided(PLAYER) → VictoryUI）。
+		# 防御（codex P2）：把"通关"严格绑定到"boss 确被击败"——显式校验 defeated_packs 含 climax boss，
+		# 不仅凭 was_climax。当前 VICTORY == 全 arena 包击败、boss 必在其中；显式校验防 VICTORY 语义
+		# 未来扩展为局部胜利时误判通关（宁可不判胜，也不误判）。
+		if was_climax and _contains_climax_boss(defeated_packs):
+			VictoryJudge.dispatch_climax_victory()
 	elif reason == BattleSession.EndReason.RETREAT:
 		# 持久 slot 战场参与设计 L1.1：撤离分支
 		# defeated_packs 实际是 BattleSession.participating_packs（全部参战敌包）
@@ -625,6 +651,10 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 		# 核心目标传达 L1.5（H1）：兜底清场胜利已移除——撤离即便清空全部 pack 也不胜利，需占核心
 
 	# MANUAL_EXIT：不发奖励，敌方残余保留；走通用收尾
+
+	# L1.3a 阶段 C：boss 战收尾复位 climax 决战态（VICTORY 已分发通关→复位无副作用；
+	# RETREAT/MANUAL_EXIT 后 boss pack 残留，复位使下次再战重新识别）。COMA 分支已在上方 return，不经此。
+	_world_map._player_lifecycle.set_climax_battle(false)
 
 	# 4. 队员阵亡评估
 	#    VICTORY / MANUAL_EXIT：完整 evaluate（含队长跌阈值昏迷判定）；返回 true 表示已触发昏迷 / 失败遮罩，中断后续收尾

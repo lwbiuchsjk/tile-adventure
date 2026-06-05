@@ -27,7 +27,11 @@ extends RefCounted
 ##     原因：玩家占领前两周期 CORE_TOWN 后 owner 翻转，按 owner 查找会失效；用原始位置保证 spawn 持续
 ##   - tier 按当前 cycle 从 world_view.get_enemy_tier_ratio_rows() 加权抽样（默认路径）
 ##   - force_tier ≥ 0 时跳过权重抽样直接使用（initial deploy 末周期强制 tier 3）
-static func spawn_batch(world_view: WorldView, force_tier: int = -1) -> LevelSlot:
+##
+## L1.3a 阶段 C：新增可选 anchor_pos + anchor_range——指定 spawn 锚点（玩家/据点附近），
+## 用于 climax boss"防守向·向玩家进军"。anchor_pos 有效（x/y ≥ 0）且 anchor_range > 0 时
+## 以锚点 + 半径取空地；否则退回默认（敌方核心原始位置 + influence_range，常规增援路径不变）。
+static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos: Vector2i = Vector2i(-1, -1), anchor_range: int = -1) -> LevelSlot:
 	if world_view == null:
 		return null
 
@@ -36,31 +40,39 @@ static func spawn_batch(world_view: WorldView, force_tier: int = -1) -> LevelSlo
 		push_warning("EnemyReinforcement.spawn_batch: _schema 未初始化")
 		return null
 
-	# P0 第二阶段：用 WorldMap 缓存的 PCG 原始位置作 spawn 锚（不查 owner）
-	var core_origin: Vector2i = world_view.get_enemy_core_origin_pos()
-	if core_origin.x < 0 or core_origin.y < 0:
-		push_warning("EnemyReinforcement.spawn_batch: _enemy_core_origin_pos 未缓存（PCG 后应有效），跳过本次")
-		return null
+	# spawn 中心 + 半径：锚点模式（L1.3a climax）走 anchor，否则走敌方核心默认
+	var spawn_center: Vector2i
+	var spawn_radius: int
+	if anchor_pos.x >= 0 and anchor_pos.y >= 0 and anchor_range > 0:
+		# L1.3a 阶段 C：按指定锚点（玩家/据点）spawn，boss 在其附近逼近
+		spawn_center = anchor_pos
+		spawn_radius = anchor_range
+	else:
+		# P0 第二阶段：用 WorldMap 缓存的 PCG 原始位置作 spawn 锚（不查 owner）
+		var core_origin: Vector2i = world_view.get_enemy_core_origin_pos()
+		if core_origin.x < 0 or core_origin.y < 0:
+			push_warning("EnemyReinforcement.spawn_batch: _enemy_core_origin_pos 未缓存（PCG 后应有效），跳过本次")
+			return null
+		# 查 PersistentSlot 拿 influence_range（仍然要找 CORE_TOWN，但只用其位置半径，不用其 owner）
+		var enemy_core: PersistentSlot = _find_slot_at(schema.persistent_slots, core_origin)
+		if enemy_core == null:
+			push_warning("EnemyReinforcement.spawn_batch: 原始位置 %s 未找到 PersistentSlot" % core_origin)
+			return null
+		spawn_center = core_origin
+		spawn_radius = enemy_core.influence_range
 
-	# 查 PersistentSlot 拿 influence_range（仍然要找 CORE_TOWN，但只用其位置半径，不用其 owner）
-	# core_origin 即原始位置；只需 schema 中位置匹配即可（不管 owner 谁）
-	var enemy_core: PersistentSlot = _find_slot_at(schema.persistent_slots, core_origin)
-	if enemy_core == null:
-		push_warning("EnemyReinforcement.spawn_batch: 原始位置 %s 未找到 PersistentSlot" % core_origin)
-		return null
-
-	# 收集影响范围内的可用空地
+	# 收集范围内的可用空地
 	var level_slots: Dictionary = world_view.get_level_slots()
 	var resource_slots: Dictionary = world_view.get_resource_slots()
 	var unit: UnitData = world_view.get_unit()
 	var unit_pos: Vector2i = unit.position if unit != null else Vector2i(-1, -1)
 
 	var candidates: Array[Vector2i] = _find_passable_empty_tiles(
-		schema, core_origin, enemy_core.influence_range,
+		schema, spawn_center, spawn_radius,
 		level_slots, resource_slots, unit_pos
 	)
 	if candidates.is_empty():
-		push_warning("EnemyReinforcement.spawn_batch: 核心影响范围内无空地，跳过本次")
+		push_warning("EnemyReinforcement.spawn_batch: spawn 中心 %s 半径 %d 范围内无空地，跳过本次" % [spawn_center, spawn_radius])
 		return null
 
 	# 随机选一格

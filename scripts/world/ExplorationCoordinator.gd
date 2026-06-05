@@ -301,6 +301,10 @@ func start_camp() -> void:
 	# 放在 _camp_count += 1 紧后；advance_cycle 时 RunState 会把这个值 push 入 milestones
 	RunState.record_camp()
 
+	# L1.3a 阶段 C：扎营主时钟达阈值 → 触发 climax 决战（spawn boss pack 向玩家/据点进军）
+	# 放在 record_camp 紧后、补给/产出事件之前——"强敌来袭"预警事件优先入 FIFO 队列
+	_check_climax_trigger()
+
 	# D MVP：扎营按下瞬间进入夜晚（用户跑测 2026-05-06 反馈）
 	# 不等到 ENEMY_1 回合切换才生效——玩家心智上扎营即入夜
 	# override 由 DayNightState 在新 PLAYER 回合开始时自动清
@@ -353,6 +357,40 @@ func start_camp() -> void:
 		_world_map._pending_camp_manage_open = true
 	else:
 		_world_map._manage_ui.open(_world_map._player_lifecycle.characters(), _world_map._inventory, true)
+
+
+## L1.3a 阶段 C：climax boss spawn 锚点半径（玩家/据点附近多少格内取空地）；细化留子 MVP ②
+const CLIMAX_BOSS_SPAWN_RANGE: int = 6
+
+
+## L1.3a 阶段 C：climax 决战触发检查（start_camp 内 record_camp 后调用）
+## 扎营主时钟 total_camp_count 达 climax_camp_threshold 且本局未触发过 → spawn 一支强 boss pack。
+## 锚定玩家/据点附近（防守向·靠现有 EnemyMovement 逼近玩家），force_tier=3 最高强度（占位，细化留子 MVP ②）。
+## spawn 失败（锚点附近无空地）时不置 mark，下次扎营重试。
+func _check_climax_trigger() -> void:
+	if RunState.is_climax_triggered():
+		return
+	if RunState.total_camp_count() < WorldMap.RUN_PARAM_CFG.climax_camp_threshold:
+		return
+	# 锚点：有据点向据点逼近，否则向玩家当前位置
+	var anchor: Vector2i
+	if RunState.has_stronghold():
+		anchor = RunState.stronghold_pos()
+	elif _world_map._unit != null:
+		anchor = _world_map._unit.position
+	else:
+		push_warning("ExplorationCoordinator._check_climax_trigger: 无据点且 _unit 为空，无法确定 spawn 锚点，跳过")
+		return
+	var boss: LevelSlot = EnemyReinforcement.spawn_batch(
+		_world_map._world_view, 3, anchor, CLIMAX_BOSS_SPAWN_RANGE
+	)
+	if boss == null:
+		push_warning("ExplorationCoordinator._check_climax_trigger: boss spawn 失败（锚点附近无空地），不标记 climax 以便下次扎营重试")
+		return
+	boss.is_climax_boss = true
+	RunState.mark_climax_triggered()
+	# 最小来袭预警事件（视觉/叙事包装留设计 §8 P1）
+	_world_map._event_panel.push_event(_build_reward_event("强敌来袭", "末日的钟声已经敲响——一支强敌正向你逼近，决战在即。"))
 
 
 ## M6 扎营结算：ProductionSystem.settle_camp + apply_production + 飘字

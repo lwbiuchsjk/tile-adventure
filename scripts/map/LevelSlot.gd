@@ -32,6 +32,11 @@ var difficulty: int = 0
 ## 强度档位（0=弱, 1=中, 2=强, 3=超）
 var tier: int = 0
 
+## L1.3a 阶段 C：climax 决战 boss 标记。为 true 的 pack 参战时该场 = climax 决战
+## （BattleCoordinator 据此 set_climax_battle → 决定昏迷 sudden-death / 胜利 dispatch_climax_victory）。
+## 标记随 pack 移动而保留，比固定坐标可靠。EC 扎营时钟触发 spawn 时置位。
+var is_climax_boss: bool = false
+
 ## 关卡胜利奖励列表（初始化时预生成）
 var rewards: Array[ItemData] = []
 
