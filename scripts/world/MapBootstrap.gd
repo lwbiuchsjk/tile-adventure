@@ -394,10 +394,7 @@ func _load_pcg_internal() -> void:
 	config.end = _world_map._end_pos
 
 	# PCG 生成参数
-	config.threshold_mountain = float(pcg_cfg.get("threshold_mountain", "0.45"))
-	config.threshold_highland = float(pcg_cfg.get("threshold_highland", "0.15"))
-	config.threshold_flatland = float(pcg_cfg.get("threshold_flatland", "-0.25"))
-	config.noise_frequency = float(pcg_cfg.get("noise_frequency", "0.08"))
+	# 【L1.3b 阶段 A】地形阈值/频率随地形权威收敛到 ChunkPCG 已退役，不再从 pcg_config 读（codex P1-2）
 	config.max_retries = int(pcg_cfg.get("max_retries", "10"))
 
 	# 注入地形消耗配置（BFS 通达性校验需要）
@@ -422,6 +419,11 @@ func _load_pcg_internal() -> void:
 	_world_map._schema = MapGenerator.generate(config)
 	if _world_map._schema == null:
 		push_error("WorldMap: PCG 地图生成失败")
+		return
+	# 【L1.3b 阶段 A】回读局部出生校验解析出的出生点（缺陷 5）：
+	# 无限模式地形固定不可 reseed，出生点可能被微调到附近可走点，需覆盖 _start_pos
+	# 使玩家 spawn（finalize 阶段 _unit.position = _start_pos）与首个视野源落在可走开阔地
+	_world_map._start_pos = _world_map._schema.spawn_pos
 
 
 ## JSON 模式加载：从配置中读取文件路径后加载

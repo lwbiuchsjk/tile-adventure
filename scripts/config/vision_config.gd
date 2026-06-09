@@ -42,10 +42,9 @@ extends Resource
 
 @export_group("chunk 配置")
 
-## chunk 边长（格）；L1.1 占位 16，暂不开放调整
-## 16 × 16 = 256 格/chunk，与屏幕 17×10 显示量级接近
-## 注：ChunkSchema / ChunkManager 内部仍硬编码 CHUNK_SIZE=16，此字段当前不被消费
-## 留作未来可调切换；改时需同步两个 const
+## chunk 边长（格）；16 × 16 = 256 格/chunk，与屏幕 17×10 显示量级接近
+## 【L1.3b 阶段 A 起】运行时由 ChunkManager.setup 消费本字段（再传给 ChunkPCG.generate / ChunkSchema.size）
+## 结构性参数：改它 = 换一局地图（参与世界格↔chunk 映射 + 折返基准），重启生效
 @export_range(8, 32, 1) var chunk_size: int = 16
 
 

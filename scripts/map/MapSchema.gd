@@ -33,9 +33,18 @@ var width: int = 0
 var height: int = 0
 
 ## 地形网格，行优先二维数组：terrain_grid[y][x] -> TerrainType
+## 【L1.3b 阶段 A】仅有限模式（JSON/MapLoader）使用；无限模式（PCG）下为空数组，
+## 地形改由 _terrain_noise 全局 noise 场按需直算，不预分配全图（病根 fix）。
 var terrain_grid: Array = []
 ## 插槽网格，行优先二维数组：slot_grid[y][x] -> SlotType
+## 【L1.3b 阶段 A】slot 仍留核心区有限网格（slot 实体迁世界坐标稀疏表是阶段 D）
 var slot_grid: Array = []
+
+## 【L1.3b 阶段 A】无限模式地形权威：全局单一 noise 场（ChunkPCG.make_terrain_noise 产出）
+## 非 null = 无限模式（地形查询走 ChunkPCG.terrain_at，任意坐标按需直算，不卡 is_in_bounds）
+## null   = 有限模式（地形查询走 terrain_grid，保 JSON 地图兼容）
+## 与流式 chunk 共用同一套 make_terrain_noise + terrain_at → 核心区与 chunk 地形同源一致（缺陷 4）
+var _terrain_noise: FastNoiseLite = null
 
 ## 各地形移动力消耗（从 terrain_config.csv 加载）
 ## 格式：{ TerrainType(int) : float }，INF 表示不可通行
@@ -57,6 +66,11 @@ const TERRAIN_ALTITUDE: Dictionary = {
 ## 格式：{ SlotType(int) : Array[TerrainType(int)] }
 var slot_allowed_terrains: Dictionary = {}
 
+## 【L1.3b 阶段 A】解析后的出生点（局部出生校验产出，缺陷 5）
+## 无限模式地形固定（不可 reseed），出生点周围若开阔不足则微调到附近可走点；
+## 由 MapGenerator._resolve_spawn 写入，MapBootstrap 回读覆盖 _start_pos
+var spawn_pos: Vector2i = Vector2i(1, 1)
+
 ## 持久 slot 列表（M2 新增）
 ## 与 slot_grid 解耦：slot_grid 是格子层的占位标记（NONE/RESOURCE/...），
 ## persistent_slots 是实体层（村庄/城镇/核心 + 归属 + 等级 + 影响范围）
@@ -68,7 +82,11 @@ var persistent_slots: Array[PersistentSlot] = []
 # ─────────────────────────────────────────
 
 ## 初始化空白地图，所有格默认为平地、无插槽
-func init(p_width: int, p_height: int) -> void:
+## allocate_terrain：是否预分配全图 terrain_grid（L1.3b 阶段 A）
+##   true（默认，有限模式 / JSON）：分配 terrain_grid，地形存数组
+##   false（无限模式 / PCG）：不分配 terrain_grid（病根 fix），地形由 _terrain_noise 直算；
+##                            slot_grid 仍按核心区 width×height 分配（slot 迁移是阶段 D）
+func init(p_width: int, p_height: int, allocate_terrain: bool = true) -> void:
 	width = p_width
 	height = p_height
 	terrain_costs = {}
@@ -76,13 +94,27 @@ func init(p_width: int, p_height: int) -> void:
 	terrain_grid = []
 	slot_grid = []
 	for y in range(height):
-		var terrain_row: Array = []
 		var slot_row: Array = []
+		if allocate_terrain:
+			var terrain_row: Array = []
+			for x in range(width):
+				terrain_row.append(TerrainType.FLATLAND)
+			terrain_grid.append(terrain_row)
 		for x in range(width):
-			terrain_row.append(TerrainType.FLATLAND)
 			slot_row.append(SlotType.NONE)
-		terrain_grid.append(terrain_row)
 		slot_grid.append(slot_row)
+
+
+## 【L1.3b 阶段 A】启用无限模式地形：注入全局 noise 场（world_seed 派生）
+## 调用后 get_terrain / is_passable / get_terrain_cost / get_terrain_altitude 走 ChunkPCG.terrain_at，
+## 支持任意世界坐标按需直算，不再受 is_in_bounds / terrain_grid 范围约束
+func set_infinite_terrain(world_seed: int) -> void:
+	_terrain_noise = ChunkPCG.make_terrain_noise(world_seed)
+	terrain_grid = []  # 释放有限模式残留（若有）
+
+## 是否处于无限模式（地形 noise 已注入）
+func is_infinite() -> bool:
+	return _terrain_noise != null
 
 # ─────────────────────────────────────────
 # 边界检查
@@ -96,14 +128,21 @@ func is_in_bounds(x: int, y: int) -> bool:
 # 地形读写
 # ─────────────────────────────────────────
 
-## 获取指定坐标地形类型。越界时返回 MOUNTAIN（视为不可通行的出界处理）。
+## 获取指定坐标地形类型。
+## 无限模式（L1.3b 阶段 A）：走全局 noise 场 ChunkPCG.terrain_at，任意坐标按需直算（不卡边界）。
+## 有限模式：越界返回 MOUNTAIN（视为不可通行的出界处理）；否则读 terrain_grid。
 func get_terrain(x: int, y: int) -> TerrainType:
+	if _terrain_noise != null:
+		return ChunkPCG.terrain_at(_terrain_noise, x, y) as TerrainType
 	if not is_in_bounds(x, y):
 		return TerrainType.MOUNTAIN
 	return terrain_grid[y][x] as TerrainType
 
 ## 设置指定坐标地形类型，越界时静默忽略
+## 无限模式下地形由 noise 确定性生成、不可就地覆写，本操作为 no-op（地形改写留 L1.4 暗影流变）
 func set_terrain(x: int, y: int, terrain: TerrainType) -> void:
+	if _terrain_noise != null:
+		return
 	if not is_in_bounds(x, y):
 		return
 	terrain_grid[y][x] = terrain
@@ -149,6 +188,9 @@ func is_passable(x: int, y: int) -> bool:
 ## 越界返回 0（视作 LOWLAND，与 get_terrain 越界返回 MOUNTAIN 不同——
 ## 高度查询主要服务战斗场景，越界本就不会发生；返回 0 是保守兜底，避免影响伤害计算）
 func get_terrain_altitude(x: int, y: int) -> int:
+	if _terrain_noise != null:
+		var inf_terrain: TerrainType = ChunkPCG.terrain_at(_terrain_noise, x, y) as TerrainType
+		return TERRAIN_ALTITUDE.get(inf_terrain, 1) as int
 	if not is_in_bounds(x, y):
 		return 0
 	var terrain: TerrainType = terrain_grid[y][x] as TerrainType

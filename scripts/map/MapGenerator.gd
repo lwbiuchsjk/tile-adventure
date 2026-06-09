@@ -22,15 +22,10 @@ class GenerateConfig:
 	## 通达性校验失败时最大重试次数
 	var max_retries: int = 10
 
-	# —— 噪声参数（从 pcg_config.csv 加载）——
-	## 高于此值 → 高山
-	var threshold_mountain: float = 0.45
-	## 高于此值 → 高地
-	var threshold_highland: float = 0.15
-	## 高于此值 → 平地，低于则 → 洼地
-	var threshold_flatland: float = -0.25
-	## 噪声频率，越低地形过渡越平滑
-	var noise_frequency: float = 0.08
+	# —— 噪声参数 ——
+	## 【L1.3b 阶段 A】地形权威已收敛到 ChunkPCG（全局 noise 场常量），
+	## 原 threshold_* / noise_frequency 字段随地形 noise 退役一并删除（codex P1-2 清死配置）；
+	## 阈值重新调参化（让 ChunkPCG 接收/缓存地形参数）留议题 12「PCG 内容质量增强」MVP。
 
 	# —— 地形配置（从 terrain_config.csv 加载）——
 	## 地形移动力消耗表，BFS 通达性校验时需要此数据判断可通行性
@@ -61,30 +56,33 @@ class GenerateConfig:
 # 公共接口
 # ─────────────────────────────────────────
 
-## 生成地图。返回通过通达性 + 持久 slot 校验的 MapSchema；超出重试次数返回 null。
-## M2：通达校验后追加持久 slot 八阶段流水线，失败时换 seed 重试整张地图
+## 生成地图（L1.3b 阶段 A：无限模式）。返回 MapSchema；持久 slot 超出重试返回 null。
+##
+## L1.3b 阶段 A 改动：
+##   - 地形权威收敛 ChunkPCG（缺陷 4）：terrain noise 固定 = config.seed（与 chunk world_seed 同源，
+##     保证核心区与流式 chunk 地形一致），【不再随重试 reseed】——地形是确定性的，reseed 会破坏一致性
+##   - 全图通达 BFS 退役（缺陷 5）：无界世界无终点、无法全图 BFS；换【局部出生校验】，
+##     出生点周围开阔不足则微调出生点（写 schema.spawn_pos），不换 seed
+##   - 持久 slot 失败仍可重试：仅换【slot 放置 rng seed】（在同一固定地形上重新撒点），不动地形
 static func generate(config: GenerateConfig) -> MapSchema:
-	var retry_seed: int = config.seed
+	# 地形 = 固定 config.seed 的全局 noise 场（不 reseed）
+	var schema: MapSchema = _generate_once(config)
 
-	for i in range(config.max_retries):
-		var schema: MapSchema = _generate_once(config, retry_seed)
-		if not _validate_connectivity(schema, config.start, config.end):
-			# 通达性校验失败，递增种子后重试
-			retry_seed += 1
-			push_warning("MapGenerator: 通达性校验失败，第 %d 次重试（seed=%d）" % [i + 1, retry_seed])
-			continue
+	# 局部出生校验（缺陷 5）：解析可走出生点，写回 schema.spawn_pos 供 MapBootstrap 回读
+	schema.spawn_pos = _resolve_spawn(schema, config.start)
 
-		# M2 接入：持久 slot 生成失败也应换 seed 重试整张地图，避免"无城建锚地图"静默通过
-		if config.generate_persistent_slots:
-			if not _attach_persistent_slots(schema, config, retry_seed):
-				retry_seed += 1
-				push_warning("MapGenerator: 持久 slot 生成失败，第 %d 次重试整图（seed=%d）" % [i + 1, retry_seed])
-				continue
+	# M2 持久 slot：失败时仅换 slot 放置 rng seed 在同一地形上重撒，不影响地形一致性
+	if config.generate_persistent_slots:
+		var slot_seed: int = config.seed
+		for i in range(config.max_retries):
+			if _attach_persistent_slots(schema, config, slot_seed):
+				return schema
+			slot_seed += 1
+			push_warning("MapGenerator: 持久 slot 生成失败，第 %d 次重试（slot_seed=%d，地形不变）" % [i + 1, slot_seed])
+		push_error("MapGenerator: 持久 slot 超出最大重试次数（%d），无法生成合规分布" % config.max_retries)
+		return null
 
-		return schema
-
-	push_error("MapGenerator: 超出最大重试次数（%d），无法生成合规地图" % config.max_retries)
-	return null
+	return schema
 
 
 ## M2：把 GenerateConfig 中的持久 slot 参数转交给 PersistentSlotGenerator
@@ -169,54 +167,75 @@ static func place_level_slots(
 # 私有：单次生成
 # ─────────────────────────────────────────
 
-## 根据给定种子生成一张地图（不含通达性校验）
-static func _generate_once(config: GenerateConfig, use_seed: int) -> MapSchema:
+## 生成无限模式 schema（地形权威收敛 ChunkPCG，缺陷 4）
+## 不预分配 terrain_grid（病根 fix）；地形改由 set_infinite_terrain 注入的全局 noise 场直算；
+## terrain noise seed 固定 = config.seed，与 MapBootstrap 的 chunk world_seed 同源
+static func _generate_once(config: GenerateConfig) -> MapSchema:
 	var schema: MapSchema = MapSchema.new()
-	schema.init(config.width, config.height)
-	# 将地形消耗配置注入 schema，供 BFS 校验时使用
+	# allocate_terrain=false：无限模式不预分配全图地形数组（slot_grid 仍按核心区分配）
+	schema.init(config.width, config.height, false)
+	# 地形消耗配置（is_passable / get_terrain_cost 用）
 	schema.terrain_costs = config.terrain_costs.duplicate()
-
-	# 初始化柏林噪声
-	var noise: FastNoiseLite = FastNoiseLite.new()
-	noise.seed = use_seed
-	noise.noise_type = FastNoiseLite.TYPE_PERLIN
-	noise.frequency = config.noise_frequency
-
-	# 遍历每格，按噪声值映射地形类型
-	for y in range(config.height):
-		for x in range(config.width):
-			var value: float = noise.get_noise_2d(float(x), float(y))
-			var terrain: MapSchema.TerrainType
-			if value > config.threshold_mountain:
-				terrain = MapSchema.TerrainType.MOUNTAIN
-			elif value > config.threshold_highland:
-				terrain = MapSchema.TerrainType.HIGHLAND
-			elif value > config.threshold_flatland:
-				terrain = MapSchema.TerrainType.FLATLAND
-			else:
-				terrain = MapSchema.TerrainType.LOWLAND
-			schema.set_terrain(x, y, terrain)
-
+	# 注入全局 noise 场：地形按需直算，核心区与流式 chunk 同源一致
+	schema.set_infinite_terrain(config.seed)
 	return schema
 
 # ─────────────────────────────────────────
-# 私有：通达性校验（BFS）
+# 私有：局部出生校验（L1.3b 阶段 A，替代全图 BFS —— 缺陷 5）
 # ─────────────────────────────────────────
 
-## 使用 BFS 验证 start → end 是否存在可通行路径。
-## 使用 BFS 而非 A*：通达性校验只需判断连通性，无需最短路，BFS 更简洁高效。
-static func _validate_connectivity(schema: MapSchema, start: Vector2i, end: Vector2i) -> bool:
-	# 起点或终点本身不可通行，直接失败
+## 解析出生点：首选点周围开阔足够则用首选点，否则向外环搜更优可走点（不换 seed）
+## 无界世界无"终点"概念，校验从"start→end 全图连通"降级为"出生点周围有足够可走开阔地"
+static func _resolve_spawn(
+	schema: MapSchema,
+	preferred: Vector2i,
+	search_radius: int = 12,
+	bfs_radius: int = 5,
+	min_open: int = 12
+) -> Vector2i:
+	# 兜底候选：记录搜到的最开阔【可走】点（best_open >= 1 即代表该点可走）
+	# 防 codex P1-1：方环搜索失败时不能盲目回退 preferred（可能不可走 → 玩家卡在山地）
+	var best_pos: Vector2i = preferred
+	var best_open: int = _local_open_count(schema, preferred, bfs_radius)
+	if best_open >= min_open:
+		return preferred
+
+	# 向外按方环逐圈搜索（曼哈顿环）：优先满足 min_open，同时维护最佳可走兜底
+	for r in range(1, search_radius + 1):
+		for dy in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				# 仅取当前环边缘格（避免重复扫内圈）
+				if abs(dx) != r and abs(dy) != r:
+					continue
+				var cand: Vector2i = preferred + Vector2i(dx, dy)
+				var oc: int = _local_open_count(schema, cand, bfs_radius)
+				if oc >= min_open:
+					return cand  # 满足开阔要求，直接采用
+				if oc > best_open:
+					best_open = oc
+					best_pos = cand
+
+	# 无满足 min_open 的点：退而求其次用搜到的最开阔【可走】点（保证可走，避免卡死）
+	if best_open >= 1:
+		push_warning("MapGenerator: 出生点周围开阔不足，降级到最佳可走点 %s（open=%d）" % [str(best_pos), best_open])
+		return best_pos
+
+	# 极端：搜索半径内完全无可走格（Perlin 地形下近乎不可能）→ 回退首选点 + 告警
+	push_warning("MapGenerator: 出生点 %s 搜索半径内无可走格，回退首选点（请检查地形参数）" % str(preferred))
+	return preferred
+
+
+## 统计 start 周围 radius（切比雪夫）范围内、与 start 连通的可走格数量（有界 BFS）
+## start 本身不可走 → 返回 0
+static func _local_open_count(schema: MapSchema, start: Vector2i, radius: int) -> int:
 	if not schema.is_passable(start.x, start.y):
-		return false
-	if not schema.is_passable(end.x, end.y):
-		return false
+		return 0
 
 	var visited: Dictionary = {}
 	var queue: Array[Vector2i] = [start]
 	visited[start] = true
+	var count: int = 0
 
-	# 四方向邻居（不含斜向）
 	var directions: Array[Vector2i] = [
 		Vector2i(1, 0), Vector2i(-1, 0),
 		Vector2i(0, 1), Vector2i(0, -1),
@@ -224,22 +243,20 @@ static func _validate_connectivity(schema: MapSchema, start: Vector2i, end: Vect
 
 	while queue.size() > 0:
 		var current: Vector2i = queue.pop_front()
-		if current == end:
-			return true
-
+		count += 1
 		for dir in directions:
 			var neighbor: Vector2i = current + dir
 			if visited.has(neighbor):
 				continue
-			# 越界格视为不可通行（出界处理）
-			if not schema.is_in_bounds(neighbor.x, neighbor.y):
+			# 限制在 start 周围 radius 方框内（局部，非全图）
+			if abs(neighbor.x - start.x) > radius or abs(neighbor.y - start.y) > radius:
 				continue
 			if not schema.is_passable(neighbor.x, neighbor.y):
 				continue
 			visited[neighbor] = true
 			queue.append(neighbor)
 
-	return false
+	return count
 
 
 # ─────────────────────────────────────────

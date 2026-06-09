@@ -21,7 +21,9 @@ extends Node
 ##   不全图扫描，节省大量计算
 
 
-const CHUNK_SIZE: int = 16
+## chunk 边长默认值（仅作 tile_to_chunk 静态调用 / 测试 fallback）
+## 运行时实例消费 vision_config.chunk_size（见 _chunk_size，缺陷 3）
+const DEFAULT_CHUNK_SIZE: int = 16
 
 
 ## chunk 坐标 → ChunkRecord
@@ -31,6 +33,10 @@ var _chunks: Dictionary = {}
 var _config: VisionConfig = null
 var _vision: VisionSystem = null
 var _world_seed: int = 0
+
+## chunk 边长（运行时从 vision_config.chunk_size 取；setup 注入，缺陷 3）
+## 结构性参数：改它 = 换一局地图（参与世界格↔chunk 映射），重启生效
+var _chunk_size: int = DEFAULT_CHUNK_SIZE
 
 
 ## 信号：chunk 状态变化时发射，供 WorldMap 渲染层 / 实例管理层订阅
@@ -47,6 +53,9 @@ func setup(config: VisionConfig, vision: VisionSystem, world_seed: int) -> void:
 	_config = config
 	_vision = vision
 	_world_seed = world_seed
+	# 缺陷 3：消费 vision_config.chunk_size（结构性参数，重启生效）
+	if config != null and config.chunk_size > 0:
+		_chunk_size = config.chunk_size
 	# 监听格子状态变化
 	if not _vision.tile_state_changed.is_connected(_on_tile_state_changed):
 		_vision.tile_state_changed.connect(_on_tile_state_changed)
@@ -58,8 +67,9 @@ func setup(config: VisionConfig, vision: VisionSystem, world_seed: int) -> void:
 
 ## 世界格坐标 → chunk 坐标
 ## 注意：负坐标用 floori 而非 int()，避免 int(-0.5)=0 的截断错误
-static func tile_to_chunk(tile: Vector2i) -> Vector2i:
-	return Vector2i(floori(float(tile.x) / CHUNK_SIZE), floori(float(tile.y) / CHUNK_SIZE))
+## chunk_size 可选（默认 16）：实例内部传 _chunk_size；静态调用 / 测试用默认值
+static func tile_to_chunk(tile: Vector2i, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Vector2i:
+	return Vector2i(floori(float(tile.x) / chunk_size), floori(float(tile.y) / chunk_size))
 
 
 # ─────────────────────────────────────
@@ -109,11 +119,11 @@ func aggregate_chunk(coord: Vector2i) -> void:
 	if _config == null or _vision == null:
 		return
 
-	# 收集 chunk 内所有格子（256 格）
+	# 收集 chunk 内所有格子（_chunk_size² 格）
 	var tiles: Array[Vector2i] = []
-	for local_y in range(CHUNK_SIZE):
-		for local_x in range(CHUNK_SIZE):
-			tiles.append(Vector2i(coord.x * CHUNK_SIZE + local_x, coord.y * CHUNK_SIZE + local_y))
+	for local_y in range(_chunk_size):
+		for local_x in range(_chunk_size):
+			tiles.append(Vector2i(coord.x * _chunk_size + local_x, coord.y * _chunk_size + local_y))
 
 	var agg: int = _vision.aggregate_tiles(tiles)
 	var target_state: int = _state_from_aggregate(agg)
@@ -153,14 +163,14 @@ func _transition_to(coord: Vector2i, target: int) -> void:
 		ChunkRecord.State.ACTIVE:
 			# UNLOADED → ACTIVE / DORMANT → ACTIVE：保证 schema 存在
 			if rec.schema == null:
-				rec.schema = ChunkPCG.generate(_world_seed, coord, _config.poi_spawn_rate_per_chunk)
+				rec.schema = ChunkPCG.generate(_world_seed, coord, _config.poi_spawn_rate_per_chunk, _chunk_size)
 			rec.state = ChunkRecord.State.ACTIVE
 			rec.last_active_turn = _vision.get_current_turn()
 		ChunkRecord.State.DORMANT:
 			# ACTIVE → DORMANT：保留 schema，仅状态变化
 			# UNLOADED → DORMANT（极少见：初始覆盖恰好到 FOG 而无 NORMAL）：也要生成 schema
 			if rec.schema == null:
-				rec.schema = ChunkPCG.generate(_world_seed, coord, _config.poi_spawn_rate_per_chunk)
+				rec.schema = ChunkPCG.generate(_world_seed, coord, _config.poi_spawn_rate_per_chunk, _chunk_size)
 			rec.state = ChunkRecord.State.DORMANT
 		ChunkRecord.State.UNLOADED:
 			# DORMANT → UNLOADED：丢弃 schema
@@ -176,5 +186,5 @@ func _transition_to(coord: Vector2i, target: int) -> void:
 
 ## tile 状态变化 → 仅聚合该格所在 chunk（增量更新）
 func _on_tile_state_changed(tile: Vector2i, _new_state: int, _old_state: int) -> void:
-	var coord: Vector2i = tile_to_chunk(tile)
+	var coord: Vector2i = tile_to_chunk(tile, _chunk_size)
 	aggregate_chunk(coord)

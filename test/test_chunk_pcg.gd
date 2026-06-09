@@ -67,16 +67,16 @@ func _test_terrain_byte_length() -> void:
 	_assert(s.terrain.size() == 16 * 16, "terrain.size() = 256，实际 %d" % s.terrain.size())
 
 
-## 4. terrain 取值范围 [0, 2]
+## 4. terrain 取值范围 [0, 3]（L1.3b 阶段 A：4 级对齐 MapSchema.TerrainType）
 func _test_terrain_values_in_range() -> void:
-	print("-- terrain 取值范围 [0, 2]")
+	print("-- terrain 取值范围 [0, 3]")
 	var s: ChunkSchema = ChunkPCG.generate(42, Vector2i(7, 11), 0.0)
 	var has_out_of_range: bool = false
 	for i in range(s.terrain.size()):
-		if s.terrain[i] < 0 or s.terrain[i] > 2:
+		if s.terrain[i] < 0 or s.terrain[i] > 3:
 			has_out_of_range = true
 			break
-	_assert(not has_out_of_range, "所有 terrain 字节在 [0, 2] 内")
+	_assert(not has_out_of_range, "所有 terrain 字节在 [0, 3] 内")
 
 
 ## 5. spawn_rate = 0 必无 POI

@@ -1,10 +1,6 @@
 # PCG 生成参数配置
-# 噪声阈值：控制地形分布比例（噪声值范围 [-1, 1]）
-# noise_frequency：噪声频率，越低地形过渡越平滑
-# max_retries：通达性校验失败时最大重试次数
+# max_retries：持久 slot 生成失败时最大重试次数（换 slot 放置 rng seed 重撒，不动地形）
+# 注：L1.3b 阶段 A 起，地形阈值/频率（threshold_* / noise_frequency）已随地形权威收敛到 ChunkPCG，
+#     不再从本文件读取；阈值重新调参化留议题 12「PCG 内容质量增强」MVP
 key,value
-threshold_mountain,0.45
-threshold_highland,0.15
-threshold_flatland,-0.25
-noise_frequency,0.08
 max_retries,10
