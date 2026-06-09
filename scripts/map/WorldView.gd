@@ -264,6 +264,12 @@ func grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 	return _wm.call("_grid_to_pixel_center", grid_pos)
 
 
+## 【L1.3b 阶段 B】当前相机视口覆盖的世界格矩形（渲染层视口遍历用，替代全图遍历）
+func get_visible_tile_rect(padding: int = 2) -> Rect2i:
+	var rect: Rect2i = _wm.call("get_visible_tile_rect", padding)
+	return rect
+
+
 # ─────────────────────────────────────────
 # 写命令端（MVP-δ 阶段 1 追加）—— 转发 WorldMap 私有方法
 # EnemyMovement 不再直接 mutate 外部引用（_level_slots / _schema / _original_slot_types），

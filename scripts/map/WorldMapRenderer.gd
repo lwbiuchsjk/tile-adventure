@@ -71,6 +71,10 @@ var _select_bracket_phase: float = 0.0
 ## 设计：L1.1_视野循环与chunk底座_MVP.md §10 阶段 3 议题 E（E2 入口缓存）
 var _vision_state_cache: Dictionary = {}
 
+## 【L1.3b 阶段 B】当前帧相机视口覆盖的世界格矩形（_draw 入口缓存）
+## 替代全图 _schema 遍历：地形底色 / 视野缓存刷新均以此为界（无界世界只渲染视口范围）
+var _visible_tile_rect: Rect2i = Rect2i()
+
 
 ## 注入世界视图 + 战斗视图（WorldMap._init_subsystems 调用一次，跨战斗复用）
 func setup(world_view: WorldView, battle_view: BattleViewState) -> void:
@@ -121,14 +125,18 @@ func _draw() -> void:
 	if _schema == null:
 		return
 
-	# L1.1 阶段 3：视野状态本地缓存（_draw 入口一次性 snapshot）
-	# _schema 范围内（32×24=768 格）每帧重建；下游 _draw_vision_overlay 直接读
-	# 不在 _schema 范围内的格不缓存，靠 vision_overlay 默认按 SHADOW 处理（_schema 外不渲染）
+	# 【L1.3b 阶段 B】视口范围（世界格 Rect2i）：渲染以相机视口为中心，替代全图 _schema 遍历
+	# 每帧从相机推算（_draw 由 _process→queue_redraw 每帧触发，相机移动自动跟随）
+	_visible_tile_rect = _world_view.get_visible_tile_rect()
+
+	# L1.1 阶段 3 / L1.3b 阶段 B：视野状态本地缓存（_draw 入口一次性 snapshot）
+	# 改为遍历视口范围每帧重建（key 仍世界坐标）；下游 _draw_vision_overlay 直接读
 	_refresh_vision_state_cache()
 
-	# 第一层：地形底色 + Slot 标记
-	for y in range(_schema.height):
-		for x in range(_schema.width):
+	# 第一层：地形底色 + Slot 标记（遍历视口范围，逐格走无限模式地形门面）
+	var rect_end: Vector2i = _visible_tile_rect.end
+	for y in range(_visible_tile_rect.position.y, rect_end.y):
+		for x in range(_visible_tile_rect.position.x, rect_end.x):
 			_draw_tile(x, y)
 
 	# 第 1.6 层：资源点标记 + 文字
@@ -411,15 +419,12 @@ func _draw_persistent_influence_ranges() -> void:
 		var r0: int = slot.influence_range
 		var cx0: int = slot.position.x
 		var cy0: int = slot.position.y
+		# 【L1.3b 阶段 B】无界世界无 _schema 边界，菱形按 slot 局部范围枚举不再裁剪到 32×24
 		for dy0 in range(-r0, r0 + 1):
 			var y0: int = cy0 + dy0
-			if y0 < 0 or y0 >= _schema.height:
-				continue
 			var dx0_max: int = r0 - absi(dy0)
 			for dx0 in range(-dx0_max, dx0_max + 1):
 				var x0: int = cx0 + dx0
-				if x0 < 0 or x0 >= _schema.width:
-					continue
 				cells[Vector2i(x0, y0)] = true
 
 	# 第二遍：每个 slot 独立画填充（按距自己菱形边界分层），描边查询势力合集
@@ -441,13 +446,9 @@ func _draw_persistent_influence_ranges() -> void:
 		# 曼哈顿菱形：|dx| + |dy| <= r
 		for dy in range(-r, r + 1):
 			var y: int = cy + dy
-			if y < 0 or y >= _schema.height:
-				continue
 			var dx_max: int = r - absi(dy)
 			for dx in range(-dx_max, dx_max + 1):
 				var x: int = cx + dx
-				if x < 0 or x >= _schema.width:
-					continue
 				# 距菱形外边界的曼哈顿距离：r 圈最外为 0、向内逐层递增
 				var d_to_edge: int = r - (absi(dx) + absi(dy))
 				var fill_alpha: float
@@ -531,9 +532,7 @@ func _draw_enemy_threat_zones() -> void:
 			var remain: int = _battle_trigger_range - absi(dx)
 			for dy in range(-remain, remain + 1):
 				var p: Vector2i = Vector2i(origin.x + dx, origin.y + dy)
-				# 边界裁剪：超出地图范围不画
-				if p.x < 0 or p.y < 0 or p.x >= _schema.width or p.y >= _schema.height:
-					continue
+				# 【L1.3b 阶段 B】无界世界无 _schema 边界，威胁圈按 slot 局部范围枚举不再裁剪
 				var rect: Rect2 = Rect2(
 					float(p.x * TILE_SIZE + 2),
 					float(p.y * TILE_SIZE + 2),
@@ -1469,21 +1468,22 @@ func _draw_battle_dim_overlay() -> void:
 	draw_rect(Rect2(bx + bw, by, (ox + ow) - (bx + bw), bh), VISUAL_CFG.dim_color, true)
 
 
-## L1.1 阶段 3：视野状态本地缓存刷新（_draw 入口调一次）
+## L1.1 阶段 3 / L1.3b 阶段 B：视野状态本地缓存刷新（_draw 入口调一次）
 ##
-## 遍历 _schema 范围（width × height = 768 格 @ 32×24）每帧重建 _vision_state_cache。
-## 不在 _schema 范围内的格不入缓存——本阶段 _schema 仍是渲染上限，越界不渲染。
+## 【L1.3b 阶段 B】遍历【相机视口范围】（_visible_tile_rect）每帧重建 _vision_state_cache，
+## 替代原全图 _schema 遍历——无界世界只缓存视口内的格（key 仍世界坐标 Vector2i）。
+## VisionSystem._tile_state 本就无界、以世界坐标为 key，视口内任意格可查（SHADOW 兜底）。
 ##
-## 性能考虑：每帧 N² 次 WorldView.get_vision_state 调用，每次走 VisionSystem.get_tile_state
-## 内 Dictionary.get 查 _tile_state 字典——O(1)。768 次合计微秒级，对 60 fps 渲染无压力。
+## 性能考虑：每帧视口格数（≈视口宽×高 + padding，量级 ~数百）次 O(1) 查询，微秒级，对 60 fps 无压力。
 ##
-## 设计：L1.1_视野循环与chunk底座_MVP.md §10 阶段 3 议题 E（E2 入口缓存）
+## 设计：L1.3b_无限化地基_MVP.md §五 阶段 B；L1.1_视野循环与chunk底座_MVP.md §10 阶段 3 议题 E
 func _refresh_vision_state_cache() -> void:
 	_vision_state_cache.clear()
 	if _world_view == null or _schema == null:
 		return
-	for y in range(_schema.height):
-		for x in range(_schema.width):
+	var rect_end: Vector2i = _visible_tile_rect.end
+	for y in range(_visible_tile_rect.position.y, rect_end.y):
+		for x in range(_visible_tile_rect.position.x, rect_end.x):
 			var tile: Vector2i = Vector2i(x, y)
 			_vision_state_cache[tile] = _world_view.get_vision_state(tile)
 

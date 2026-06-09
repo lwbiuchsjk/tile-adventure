@@ -644,6 +644,35 @@ func _grid_to_pixel_center(grid_pos: Vector2i) -> Vector2:
 		grid_pos.y * TILE_SIZE + TILE_SIZE / 2
 	)
 
+
+## 【L1.3b 阶段 B】当前相机视口覆盖的世界格矩形（渲染切 chunk 用）
+## 用画布逆变换把视口四角映射到世界坐标取 AABB —— 自动正确处理相机
+## 旋转（战斗 zoom 期 tilt）/ offset / zoom / 屏幕中心（codex P1 修：轴对齐估算会漏边角）。
+## 复用本文件鼠标拾取同一变换（见 _process_input 的 (get_canvas_transform()*get_global_transform()).affine_inverse()）。
+## 返回 Rect2i（position=左上格，size=宽高格数）；渲染层据此遍历视口而非全图 _schema。
+## 相机/视口未就绪时回退 _schema 核心区范围（有限模式兜底）。
+func get_visible_tile_rect(padding: int = 2) -> Rect2i:
+	var viewport: Viewport = get_viewport()
+	if _camera == null or viewport == null:
+		var w: int = _schema.width if _schema != null else 0
+		var h: int = _schema.height if _schema != null else 0
+		return Rect2i(0, 0, w, h)
+	# 屏幕像素 → 世界坐标 的逆变换（与鼠标拾取一致）
+	var screen_to_world: Transform2D = (get_canvas_transform() * get_global_transform()).affine_inverse()
+	var vp_size: Vector2 = viewport.get_visible_rect().size
+	# 视口四角映射到世界坐标，取 AABB（旋转后四角范围 > 轴对齐 half）
+	var c0: Vector2 = screen_to_world * Vector2(0, 0)
+	var c1: Vector2 = screen_to_world * Vector2(vp_size.x, 0)
+	var c2: Vector2 = screen_to_world * Vector2(0, vp_size.y)
+	var c3: Vector2 = screen_to_world * Vector2(vp_size.x, vp_size.y)
+	var min_w: Vector2 = c0.min(c1).min(c2).min(c3)
+	var max_w: Vector2 = c0.max(c1).max(c2).max(c3)
+	var min_tx: int = floori(min_w.x / TILE_SIZE) - padding
+	var min_ty: int = floori(min_w.y / TILE_SIZE) - padding
+	var max_tx: int = floori(max_w.x / TILE_SIZE) + padding
+	var max_ty: int = floori(max_w.y / TILE_SIZE) + padding
+	return Rect2i(min_tx, min_ty, max_tx - min_tx + 1, max_ty - min_ty + 1)
+
 # ─────────────────────────────────────────
 # 镜头控制
 # ─────────────────────────────────────────
