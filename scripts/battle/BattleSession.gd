@@ -35,7 +35,7 @@ enum EndReason { VICTORY = 0, MANUAL_EXIT = 1, COMA = 2, RETREAT = 3 }
 # 字段
 # ─────────────────────────────────────
 
-## 战场范围（玩家中心 ±arena_range，与地图边界做交集）
+## 战场范围（玩家中心 ±arena_range；L1.3b 阶段 E：无限模式不裁剪 / 有限模式裁到地图）
 var arena: Rect2i = Rect2i()
 
 ## 复用世界 schema（查地形 cost / 高度 / 持久 slot 占据格）
@@ -168,7 +168,7 @@ func start(
 	current_actor_index = 0
 	battle_round = 1
 
-	# 战场 Rect2i = 玩家中心 ±arena_range 与地图边界交集
+	# 战场 Rect2i = 玩家中心 ±arena_range（阶段 E：无限模式不裁剪 / 有限模式裁到地图）
 	arena = BattleDeploy.compute_arena(player_pos, arena_range, schema)
 
 	# 全局占位字典（展开期间维护，由 BattleDeploy 系列函数 mutate）
@@ -446,6 +446,10 @@ func get_retreat_directions() -> Dictionary:
 	var dirs: Dictionary = {"up": false, "down": false, "left": false, "right": false}
 	if schema == null or arena.size.x <= 0 or arena.size.y <= 0:
 		return dirs
+	# 【L1.3b 阶段 E】无限模式：无世界边界，arena 不裁剪，四向皆有地图可撤退（缺陷6）
+	if schema.is_infinite():
+		return {"up": true, "down": true, "left": true, "right": true}
+	# 有限模式（JSON）：贴地图边界的方向撤出去即地图外，不可撤退
 	dirs["left"] = arena.position.x > 0
 	dirs["up"] = arena.position.y > 0
 	dirs["right"] = arena.end.x < schema.width

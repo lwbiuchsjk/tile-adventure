@@ -16,12 +16,16 @@ class_name BattleDeploy
 const NO_DEPLOY_SLOT: Vector2i = Vector2i(-9999, -9999)
 
 
-## 计算战场 Rect2i：玩家中心 ±arena_range 与地图边界做交集（E MVP §2.1）
+## 计算战场 Rect2i：玩家中心 ±arena_range（E MVP §2.1 / L1.3b 阶段 E）
+## 【L1.3b 阶段 E】无限模式：无世界边界，arena = 原始 ±range 矩形不裁剪（缺陷6）；
+## 有限模式（JSON）：仍与地图矩形做交集，保 JSON 地图战场行为不变
 static func compute_arena(center: Vector2i, arena_range: int, schema: MapSchema) -> Rect2i:
 	var raw: Rect2i = Rect2i(
 		center.x - arena_range, center.y - arena_range,
 		arena_range * 2 + 1, arena_range * 2 + 1
 	)
+	if schema != null and schema.is_infinite():
+		return raw
 	var map_rect: Rect2i = Rect2i(0, 0, schema.width, schema.height)
 	# Rect2i.intersection 在 Godot 4 中可用，返回交集
 	return raw.intersection(map_rect)
@@ -222,15 +226,14 @@ static func find_deploy_slot(
 
 
 ## 可占位条件（E MVP §2.4 is_valid_deploy_pos）
-##   - 战场内 / 地图内
+##   - 战场内（arena.has_point）/ 地形可通行（阶段 E：去世界边界 is_in_bounds 依赖）
 ##   - 地形可通行（不是 MOUNTAIN 等）
 ##   - 不在持久 slot 占据格
 ##   - 不在 occupied 字典
 static func can_deploy_at(grid_pos: Vector2i, occupied: Dictionary, arena: Rect2i, schema: MapSchema) -> bool:
 	if not arena.has_point(grid_pos):
 		return false
-	if not schema.is_in_bounds(grid_pos.x, grid_pos.y):
-		return false
+	# 【L1.3b 阶段 E】去 is_in_bounds 冗余：arena.has_point + 地形 cost 才是真边界（无限模式 arena 可超核心区）
 	if schema.get_terrain_cost(grid_pos.x, grid_pos.y) >= INF:
 		return false
 	if occupied.has(grid_pos):

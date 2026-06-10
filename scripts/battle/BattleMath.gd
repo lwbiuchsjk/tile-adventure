@@ -40,8 +40,7 @@ static func bfs_reachable(
 				continue
 			if not arena.has_point(next_pos):
 				continue
-			if not schema.is_in_bounds(next_pos.x, next_pos.y):
-				continue
+			# 【L1.3b 阶段 E】去 is_in_bounds 冗余：arena.has_point + 地形 cost 才是真边界
 			var terrain_cost: float = schema.get_terrain_cost(next_pos.x, next_pos.y)
 			if terrain_cost >= INF:
 				continue
