@@ -64,6 +64,11 @@ static func load_from_json_string(json_text: String) -> MapSchema:
 			var sx: int = int(sd["x"])
 			var sy: int = int(sd["y"])
 			var slot_id: int = int(sd["type"])
+			# 【L1.3b 阶段 D】set_slot 已去 is_in_bounds 守卫（稀疏 dict 任意坐标可写），
+			# JSON 脏数据的越界校验改在加载层把关（codex P1），避免越界 slot 静默落库
+			if not schema.is_in_bounds(sx, sy):
+				push_warning("MapLoader: slot 坐标 (%d,%d) 越出地图 %d×%d，跳过" % [sx, sy, schema.width, schema.height])
+				continue
 			schema.set_slot(sx, sy, slot_id as MapSchema.SlotType)
 
 	return schema

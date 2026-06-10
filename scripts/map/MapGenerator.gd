@@ -172,7 +172,7 @@ static func place_level_slots(
 ## terrain noise seed 固定 = config.seed，与 MapBootstrap 的 chunk world_seed 同源
 static func _generate_once(config: GenerateConfig) -> MapSchema:
 	var schema: MapSchema = MapSchema.new()
-	# allocate_terrain=false：无限模式不预分配全图地形数组（slot_grid 仍按核心区分配）
+	# allocate_terrain=false：无限模式不预分配全图地形数组（阶段 D 起 _slots 也改稀疏 dict 不预分配）
 	schema.init(config.width, config.height, false)
 	# 地形消耗配置（is_passable / get_terrain_cost 用）
 	schema.terrain_costs = config.terrain_costs.duplicate()

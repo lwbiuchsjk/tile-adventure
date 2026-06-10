@@ -36,9 +36,12 @@ var height: int = 0
 ## 【L1.3b 阶段 A】仅有限模式（JSON/MapLoader）使用；无限模式（PCG）下为空数组，
 ## 地形改由 _terrain_noise 全局 noise 场按需直算，不预分配全图（病根 fix）。
 var terrain_grid: Array = []
-## 插槽网格，行优先二维数组：slot_grid[y][x] -> SlotType
-## 【L1.3b 阶段 A】slot 仍留核心区有限网格（slot 实体迁世界坐标稀疏表是阶段 D）
-var slot_grid: Array = []
+## 插槽标记稀疏表（L1.3b 阶段 D：有限二维数组 → 世界坐标稀疏 dict）
+## { Vector2i(世界格坐标) -> SlotType(int) }；缺 key 即 NONE，set NONE 即 erase（保持稀疏）。
+## 改稀疏 dict 的意义：① 解绑有限 _schema（标记可在任意世界坐标，为 ② 敌方跨 chunk 铺路）
+##   ② 可序列化就绪（Vector2i→int 纯数据，议题13 存档基础）③ 不再预分配全图。
+## 注：与 _level_slots/_resource_slots 存在标记冗余（选项 A 留存），清理择机随 L1.3c ②/议题13。
+var _slots: Dictionary = {}
 
 ## 【L1.3b 阶段 A】无限模式地形权威：全局单一 noise 场（ChunkPCG.make_terrain_noise 产出）
 ## 非 null = 无限模式（地形查询走 ChunkPCG.terrain_at，任意坐标按需直算，不卡 is_in_bounds）
@@ -72,9 +75,12 @@ var slot_allowed_terrains: Dictionary = {}
 var spawn_pos: Vector2i = Vector2i(1, 1)
 
 ## 持久 slot 列表（M2 新增）
-## 与 slot_grid 解耦：slot_grid 是格子层的占位标记（NONE/RESOURCE/...），
+## 与 _slots 解耦：_slots 是格子层的占位标记（NONE/RESOURCE/...），
 ## persistent_slots 是实体层（村庄/城镇/核心 + 归属 + 等级 + 影响范围）
-## 由 PersistentSlotGenerator 在地形生成完成后填充；MVP 一局一次性生成
+## 由 PersistentSlotGenerator 在地形生成完成后填充；MVP 一局一次性生成。
+## position 是世界坐标、字段纯数据（可序列化就绪）；MVP 26 个线性遍历访问，量级无虞。
+## 【阶段 D 剩余 seam】仍挂在 _schema 上（随 reload 重建），"彻底搬离 _schema 生命周期独立持久"
+## 留议题13 存档实装时连同 to_dict/from_dict 一并做。
 var persistent_slots: Array[PersistentSlot] = []
 
 # ─────────────────────────────────────────
@@ -84,25 +90,21 @@ var persistent_slots: Array[PersistentSlot] = []
 ## 初始化空白地图，所有格默认为平地、无插槽
 ## allocate_terrain：是否预分配全图 terrain_grid（L1.3b 阶段 A）
 ##   true（默认，有限模式 / JSON）：分配 terrain_grid，地形存数组
-##   false（无限模式 / PCG）：不分配 terrain_grid（病根 fix），地形由 _terrain_noise 直算；
-##                            slot_grid 仍按核心区 width×height 分配（slot 迁移是阶段 D）
+##   false（无限模式 / PCG）：不分配 terrain_grid（病根 fix），地形由 _terrain_noise 直算
+## 【L1.3b 阶段 D】_slots 改稀疏 dict（init 起始空，按需 set_slot 填）不再预分配核心区网格
 func init(p_width: int, p_height: int, allocate_terrain: bool = true) -> void:
 	width = p_width
 	height = p_height
 	terrain_costs = {}
 	slot_allowed_terrains = {}
 	terrain_grid = []
-	slot_grid = []
-	for y in range(height):
-		var slot_row: Array = []
-		if allocate_terrain:
+	_slots = {}
+	if allocate_terrain:
+		for y in range(height):
 			var terrain_row: Array = []
 			for x in range(width):
 				terrain_row.append(TerrainType.FLATLAND)
 			terrain_grid.append(terrain_row)
-		for x in range(width):
-			slot_row.append(SlotType.NONE)
-		slot_grid.append(slot_row)
 
 
 ## 【L1.3b 阶段 A】启用无限模式地形：注入全局 noise 场（world_seed 派生）
@@ -151,17 +153,20 @@ func set_terrain(x: int, y: int, terrain: TerrainType) -> void:
 # 插槽读写
 # ─────────────────────────────────────────
 
-## 获取指定坐标插槽类型，越界返回 NONE
+## 获取指定坐标插槽类型；无标记（缺 key）返回 NONE
+## 【L1.3b 阶段 D】稀疏 dict：不再卡 is_in_bounds，任意世界坐标可查（缺 key 即 NONE）
 func get_slot(x: int, y: int) -> SlotType:
-	if not is_in_bounds(x, y):
-		return SlotType.NONE
-	return slot_grid[y][x] as SlotType
+	return _slots.get(Vector2i(x, y), SlotType.NONE) as SlotType
 
-## 设置指定坐标插槽类型，越界时静默忽略
+## 设置指定坐标插槽类型
+## 【L1.3b 阶段 D】稀疏 dict：不再卡 is_in_bounds，任意世界坐标可写；
+## set NONE 即 erase（保持稀疏 + 与"缺 key=NONE"语义一致）
 func set_slot(x: int, y: int, slot: SlotType) -> void:
-	if not is_in_bounds(x, y):
-		return
-	slot_grid[y][x] = slot
+	var key: Vector2i = Vector2i(x, y)
+	if slot == SlotType.NONE:
+		_slots.erase(key)
+	else:
+		_slots[key] = slot
 
 # ─────────────────────────────────────────
 # 移动力查询
