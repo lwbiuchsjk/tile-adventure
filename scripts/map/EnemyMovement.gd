@@ -382,7 +382,7 @@ func _get_blocked_positions(exclude_level: LevelSlot) -> Dictionary:
 ## 战斗将在敌方阶段末尾的保护区扫描中由 _on_enemy_phase_finished 触发
 ##
 ## 候选过滤：
-##   - 在地图内
+##   - 任意世界坐标（L1.3b 阶段 C：is_in_bounds 退役，无界世界无地图边界），按地形 cost 判可走
 ##   - 地形可通行（cost < INF）
 ##   - 不在 blocked 字典（其它 LevelSlot 占据等）
 ##
@@ -405,8 +405,7 @@ func _find_protected_zone_edge_target(pack_pos: Vector2i, blocked: Dictionary) -
 			dx_candidates.append(-dx_abs)
 		for dx in dx_candidates:
 			var pos: Vector2i = _player_pos + Vector2i(dx, dy)
-			if not _schema.is_in_bounds(pos.x, pos.y):
-				continue
+			# 【L1.3b 阶段 C】is_in_bounds 退役：方环按 _protected_zone_range 有界枚举，可走性由地形 cost 决定
 			if _schema.get_terrain_cost(pos.x, pos.y) >= INF:
 				continue
 			if blocked.has(pos):

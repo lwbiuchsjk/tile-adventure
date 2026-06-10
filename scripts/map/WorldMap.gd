@@ -810,8 +810,11 @@ func _handle_click(screen_pos: Vector2) -> void:
 
 	# 屏幕坐标经 Canvas + 全局变换逆变换，转为世界坐标
 	var world_pos: Vector2 = (get_canvas_transform() * get_global_transform()).affine_inverse() * screen_pos
-	var grid_x: int = int(world_pos.x) / TILE_SIZE
-	var grid_y: int = int(world_pos.y) / TILE_SIZE
+	# 【L1.3b 阶段 C】负世界坐标必须用 floori 而非 int()/TILE_SIZE 截断：
+	# int(-50)/72=0（向零截断）会把世界格 [-72,0) 误算成 0；floori(-50.0/72)=-1 正确。
+	# 阶段 C 玩家可走到负坐标后此潜伏 bug 暴露（与 ChunkManager.tile_to_chunk 同因，那里早用 floori）
+	var grid_x: int = floori(world_pos.x / TILE_SIZE)
+	var grid_y: int = floori(world_pos.y / TILE_SIZE)
 	var target: Vector2i = Vector2i(grid_x, grid_y)
 
 	# E 战斗就地展开 MVP：战斗态点击分流

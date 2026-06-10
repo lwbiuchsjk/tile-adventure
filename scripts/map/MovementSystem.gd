@@ -42,8 +42,7 @@ static func get_reachable_tiles(schema: MapSchema, position: Vector2i, movement:
 
 			if visited.has(neighbor):
 				continue
-			if not schema.is_in_bounds(neighbor.x, neighbor.y):
-				continue
+			# 【L1.3b 阶段 C】is_in_bounds 退役：可达范围可延伸到核心区外（由 movement 预算有界，无界世界无隐形墙）
 			# 额外阻挡位置检查（如击退状态的关卡）
 			if blocked_positions.has(neighbor):
 				continue

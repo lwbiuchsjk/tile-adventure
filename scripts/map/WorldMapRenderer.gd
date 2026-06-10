@@ -706,7 +706,8 @@ func _draw_enemy_move_marker() -> void:
 		return
 	# L1.1 阶段 3：视野状态机过滤——移动中敌方关卡按当前 visual 像素位置映射到格坐标
 	# FOG/SHADOW 时跳过；与 _draw_level_slots 同步保证视觉一致
-	var enemy_tile: Vector2i = Vector2i(int(enemy_vis_pos.x / TILE_SIZE), int(enemy_vis_pos.y / TILE_SIZE))
+	# 【L1.3b 阶段 C】floori 而非 int()：负世界坐标向零截断会错算格（敌方现仅核心区不触发，L1.3c 上 chunk 后防患）
+	var enemy_tile: Vector2i = Vector2i(floori(enemy_vis_pos.x / TILE_SIZE), floori(enemy_vis_pos.y / TILE_SIZE))
 	if _world_view.is_tile_invisible(enemy_tile):
 		return
 	# 外圈光晕菱形（比标记更大，半透明）
