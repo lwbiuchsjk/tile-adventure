@@ -185,6 +185,13 @@ func end_battle_camera() -> void:
 	# 入口 4 MVP（2026-05-09 补）：倾斜归位
 	_world_map._battle_zoom_tween.tween_property(_world_map._camera, "rotation", 0.0, _world_map.VISUAL_CFG.zoom_tween_duration) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 【L1.3b 阶段 B 回归修复】相机开了 position_smoothing：用 Tween 改 camera.position 与平滑相互作用，
+	# Tween 完成后平滑内部态未收敛、卡在偏移位 → 阶段 B 的 shader（_process 读 canvas_transform）与
+	# 地形渲染（_draw 读 canvas_transform）按帧序差一个平滑偏移 → 夜里 shader 黑幕把视野亮区涂黑，
+	# 直到移动重设 camera.position 才重新收敛。Tween 结束强制 reset_smoothing 吸附，消除错位（Bug1 黑格修复）
+	_world_map._battle_zoom_tween.chain().tween_callback(func() -> void:
+		if _world_map._camera != null:
+			_world_map._camera.reset_smoothing())
 
 
 ## 入口 4 MVP：战斗 zoom 目标值计算（设计文档公式）

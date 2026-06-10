@@ -187,7 +187,13 @@ func teleport_party_to(target_pos: Vector2i) -> void:
 	# 1. 逻辑位置 + 视觉位置 + 相机对齐（与 _on_move_finished 同步逻辑一致）
 	wm._unit.position = target_pos
 	wm._unit_visual_pos = wm._grid_to_pixel_center(target_pos)
-	wm._camera.position = wm._unit_visual_pos
+	# 【L1.3b 阶段 B 回归修复】相机开了 position_smoothing，传送是大跳跃；不 reset_smoothing
+	# 则相机多帧才插值到位，而阶段 B 视口视野缓存按"平滑后画布变换"算 → 落点视野显示滞后，
+	# 直到移动触发相机到位才顺切正常。强制吸附让传送当帧视口即覆盖落点（Bug2 修复）
+	# codex P2：position 赋值与 reset_smoothing 同进 _camera != null 守卫，避免早期/测试 _camera==null 解引用崩
+	if wm._camera != null:
+		wm._camera.position = wm._unit_visual_pos
+		wm._camera.reset_smoothing()
 	# 2. 队伍满血（队长 + 全队员 troop）——HP 权威源在 PlayerLifecycle.characters() 的 troop
 	for ch in wm._player_lifecycle.characters():
 		if ch != null and ch.has_troop():

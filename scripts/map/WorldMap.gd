@@ -56,6 +56,13 @@ const CONFIG_ENEMY_GARRISON: String = "res://assets/config/enemy_garrison_config
 ## 入口 4 第 1 份 MVP（地格放大与镜头）：48 → 72；基线分辨率 1280×720 下单屏 17×10 格
 const TILE_SIZE: int = 72
 
+## 【L1.3b Bug2 修复】昏迷重生黑屏期重绘时序（秒）：
+## DELAY = 传送后等这么久再 queue_redraw（让相机 reset_smoothing 在黑屏下稳定，否则帧0重绘视口仍偏）；
+## HOLD  = 黑屏总 hold（> DELAY），确保延迟重绘的 _draw 在揭幕前跑完 → 揭幕即正确、无闪烁。
+## 均在黑屏内，玩家不可感知。
+const _RESPAWN_REDRAW_DELAY_SEC: float = 0.05
+const _RESPAWN_REDRAW_HOLD_SEC: float = 0.15
+
 ## 地形 / 槽位 / 可达性高亮渲染常量 → MVP-B.2 阶段 1 迁移到 MAP_BASE_CFG（见本文件下方 Resource preload 段）
 ## 设计要点（地形 Civ 风格去饱和 / 可达性"立即操作 > 长期状态"层级）保留在 map_base_config.gd schema 内
 
@@ -1446,7 +1453,8 @@ func _get_active_troops() -> Array[TroopData]:
 ##   - is_stronghold：简版黑屏（无火苗）+ 传送据点，midpoint 不扣命数
 ##   - 非 stronghold ：火苗黑屏（count = 当前命数）+ 传送 fallback，midpoint 调 consume_respawn_life 扣命数
 ##
-## 关键时序：midpoint 在 phase B 全黑期执行传送（玩家看不到瞬移），返回 void（非 Signal）→ play 直接进字幕；
+## 关键时序（L1.3b Bug2 修复后）：midpoint 在 phase B 全黑期执行传送 + 相机吸附 + 延迟重绘，
+## 并【返回 Signal】（hold 计时器）→ play 在全黑期 await 它，让落点视野在黑屏下刷新完再揭幕（消除闪烁）；
 ## 过渡播完后显式 clear_coma 解锁（传送路径不 reload，同一 PlayerLifecycle 实例不会自动清 _is_in_coma）
 ##
 ## 视图态副作用（_reachable_tiles / _pending_camp_manage_open / queue_redraw）与原 coma 一致清理
@@ -1469,16 +1477,30 @@ func _on_player_coma_respawn_triggered(target_pos: Vector2i, deduct_life: bool, 
 		lines = PackedStringArray([coma_line])
 		icon_data = {"icon": "🔥", "count": RunState.respawns_left()}
 
-	var midpoint: Callable = func() -> void:
+	# 【L1.3b Bug2 修复】midpoint 返回 Signal → OverlayTransitionUI 在【全黑期】await 它（见 play Phase B）。
+	# 利用这点把"传送 + 视野/相机就绪 + 强制重绘 + 等渲染落定"全部塞进黑屏内：
+	# 非战斗态渲染器不每帧重绘，teleport 的 queue_redraw 需配 reset_smoothing 后的相机；
+	# 黑屏下多 hold 一小段让 _draw 用新状态/吸附相机跑完，揭幕即正确 → 消除"黑屏结束→旧帧→刷新"的闪烁。
+	var midpoint: Callable = func() -> Signal:
 		if deduct_life:
 			RunState.consume_respawn_life()
 		_exploration_coordinator.teleport_party_to(target_pos)
+		# 黑屏下延迟重绘：等相机 reset_smoothing 稳定（约 DELAY 秒）后再 queue_redraw，
+		# 否则帧 0 重绘时相机变换未稳、视口偏 → 仍卡旧帧（与之前回退现象一致）
+		get_tree().create_timer(_RESPAWN_REDRAW_DELAY_SEC).timeout.connect(
+			_renderer.queue_redraw, CONNECT_ONE_SHOT)
+		# 黑屏总 hold > DELAY，确保延迟重绘的 _draw 在揭幕前跑完
+		return get_tree().create_timer(_RESPAWN_REDRAW_HOLD_SEC).timeout
 	# play 内含 await（fade in → midpoint → 字幕 → fade out）；await 等整段过渡播完
 	# codex P1-1 修复：play 被并发拒绝（已有过渡进行中）时不执行 midpoint → 复活逻辑被吞 → soft-lock。
 	# 此时直接兜底执行 midpoint（无 fade；拒绝意味着已有别的过渡在覆盖屏幕，瞬移不可见），保证传送/扣命数落地。
 	var accepted: bool = await OverlayTransitionUI.play(lines, icon_data, midpoint)
 	if not accepted:
-		midpoint.call()
+		# 并发拒绝兜底：midpoint 现返回 Signal（内含传送 + 延迟重绘 + hold）；直接 call 不 await
+		# 会让重绘 hold 时序失效 → 仍可能露旧帧。取返回 Signal 并 await，保证落地后再解锁（codex P1）
+		var ret: Variant = midpoint.call()
+		if ret is Signal:
+			await ret
 	# 传送路径不 reload → 须显式解除昏迷锁
 	_player_lifecycle.clear_coma()
 
