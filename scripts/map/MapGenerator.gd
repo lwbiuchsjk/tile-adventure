@@ -15,11 +15,10 @@ class GenerateConfig:
 	var height: int = 24
 	## 随机种子
 	var seed: int = 0
-	## 通达性校验起点
-	var start: Vector2i = Vector2i(1, 1)
-	## 通达性校验终点
-	var end: Vector2i = Vector2i(30, 22)
-	## 通达性校验失败时最大重试次数
+	## 出生点首选坐标（L1.3c 阶段 A：出生居中，默认世界原点；_resolve_spawn 做局部可走校验微调）
+	## 注：原"通达性校验终点 end"字段已删——L1.3b 全图 BFS 退役后即死字段
+	var start: Vector2i = Vector2i(0, 0)
+	## 局部出生校验失败时最大重试次数（沿用旧语义；撒点生成器确定性，不参与重试）
 	var max_retries: int = 10
 
 	# —— 噪声参数 ——
@@ -32,38 +31,29 @@ class GenerateConfig:
 	## 格式：{ TerrainType(int) : float }
 	var terrain_costs: Dictionary = {}
 
-	# —— M2 持久 slot 生成参数（从 map_config.csv 加载）——
+	# —— 持久 slot 生成参数（L1.3c 阶段 A：网格抖动撒点，来自 content_config.tres）——
 	## 是否启用持久 slot 生成；MVP 默认开
 	var generate_persistent_slots: bool = true
-	## 与 PersistentSlotGenerator.GenConfig 字段一一对应
-	## P0 X-A 后默认值：1 敌方核心 + 7 城镇（含玩家方占位）+ 18 村庄 = 26
-	var persistent_total_count: int = 26
-	var persistent_core_count: int = 1
-	var persistent_town_count: int = 7
-	var persistent_village_count: int = 18
-	var persistent_min_dist_normal: int = 3
-	var persistent_min_dist_core: int = 5
-	var persistent_emerge_steps: int = 3
-	var persistent_field_radius: int = 20
-	var persistent_core_zone_min: float = 0.125
-	var persistent_core_zone_max: float = 0.25
-	var persistent_max_retries: int = 5
-	## 每方开局归属下限（设计 §3.2 三桶下限；双方共享同一套配置）
-	var persistent_faction_town_quota: int = 2
-	var persistent_faction_village_quota: int = 6
+	## 与 PersistentSlotGenerator.GenConfig 撒点参数一一对应（结构性参数：改 = 换内容分布）
+	## 旧八阶段流水线参数（对角区 / 染色 / 涌现 / 三桶下限等 13 键）随生成器重写退役
+	var persistent_cell_size: int = 5
+	var persistent_slot_spawn_rate: float = 0.85
+	var persistent_town_ratio: float = 0.27
 
 # ─────────────────────────────────────────
 # 公共接口
 # ─────────────────────────────────────────
 
-## 生成地图（L1.3b 阶段 A：无限模式）。返回 MapSchema；持久 slot 超出重试返回 null。
+## 生成地图（L1.3b 阶段 A 无限模式 + L1.3c 阶段 A 出生居中撒点）。
+## 返回 MapSchema；锚点放置失败（出生区无可走格，近乎不可能）返回 null。
 ##
-## L1.3b 阶段 A 改动：
-##   - 地形权威收敛 ChunkPCG（缺陷 4）：terrain noise 固定 = config.seed（与 chunk world_seed 同源，
-##     保证核心区与流式 chunk 地形一致），【不再随重试 reseed】——地形是确定性的，reseed 会破坏一致性
-##   - 全图通达 BFS 退役（缺陷 5）：无界世界无终点、无法全图 BFS；换【局部出生校验】，
-##     出生点周围开阔不足则微调出生点（写 schema.spawn_pos），不换 seed
-##   - 持久 slot 失败仍可重试：仅换【slot 放置 rng seed】（在同一固定地形上重新撒点），不动地形
+## L1.3b 阶段 A 改动（保留）：
+##   - 地形权威收敛 ChunkPCG（缺陷 4）：terrain noise 固定 = config.seed，不 reseed
+##   - 全图通达 BFS 退役（缺陷 5）：换【局部出生校验】微调出生点（写 schema.spawn_pos）
+## L1.3c 阶段 A 改动：
+##   - 出生居中：config.start 默认世界原点，内容区域以解析后的出生点为中心
+##   - 撒点确定性：网格抖动撒点是 (seed, cell) 纯函数，无"换 seed 重试"语义——
+##     旧重试循环退役（生成失败仅剩配置非法 / 锚点无可走格两种 fatal，重试无意义）
 static func generate(config: GenerateConfig) -> MapSchema:
 	# 地形 = 固定 config.seed 的全局 noise 场（不 reseed）
 	var schema: MapSchema = _generate_once(config)
@@ -71,48 +61,33 @@ static func generate(config: GenerateConfig) -> MapSchema:
 	# 局部出生校验（缺陷 5）：解析可走出生点，写回 schema.spawn_pos 供 MapBootstrap 回读
 	schema.spawn_pos = _resolve_spawn(schema, config.start)
 
-	# M2 持久 slot：失败时仅换 slot 放置 rng seed 在同一地形上重撒，不影响地形一致性
+	# 持久 slot：以出生点为中心的网格抖动撒点（确定性，不重试）
 	if config.generate_persistent_slots:
-		var slot_seed: int = config.seed
-		for i in range(config.max_retries):
-			if _attach_persistent_slots(schema, config, slot_seed):
-				return schema
-			slot_seed += 1
-			push_warning("MapGenerator: 持久 slot 生成失败，第 %d 次重试（slot_seed=%d，地形不变）" % [i + 1, slot_seed])
-		push_error("MapGenerator: 持久 slot 超出最大重试次数（%d），无法生成合规分布" % config.max_retries)
-		return null
+		if not _attach_persistent_slots(schema, config):
+			push_error("MapGenerator: 持久 slot 撒点失败（配置非法或出生区无可走格）")
+			return null
 
 	return schema
 
 
-## M2：把 GenerateConfig 中的持久 slot 参数转交给 PersistentSlotGenerator
-## 返回 true = 成功（schema.persistent_slots 已填充并通过校验）；false = 失败（调用方应换 seed 重试）
-## seed 与地形 seed 同源，保证同 seed 同地图（含 slot 分布）
+## 把 GenerateConfig 中的撒点参数转交给 PersistentSlotGenerator（L1.3c 阶段 A）
+## 内容区域以 schema.spawn_pos 为中心（出生居中后内容围绕实际出生点对称）
+## 返回 true = 成功（schema.persistent_slots 已填充）；false = fatal 失败
 static func _attach_persistent_slots(
 	schema: MapSchema,
-	config: GenerateConfig,
-	use_seed: int
+	config: GenerateConfig
 ) -> bool:
 	var pcfg: PersistentSlotGenerator.GenConfig = PersistentSlotGenerator.GenConfig.new()
-	pcfg.width = config.width
-	pcfg.height = config.height
-	pcfg.seed = use_seed
-	pcfg.total_count = config.persistent_total_count
-	pcfg.core_count = config.persistent_core_count
-	pcfg.town_count = config.persistent_town_count
-	pcfg.village_count = config.persistent_village_count
-	pcfg.min_dist_normal = config.persistent_min_dist_normal
-	pcfg.min_dist_core = config.persistent_min_dist_core
-	pcfg.emerge_steps = config.persistent_emerge_steps
-	pcfg.field_radius = config.persistent_field_radius
-	pcfg.core_zone_min = config.persistent_core_zone_min
-	pcfg.core_zone_max = config.persistent_core_zone_max
-	pcfg.max_retries = config.persistent_max_retries
-	pcfg.faction_town_quota = config.persistent_faction_town_quota
-	pcfg.faction_village_quota = config.persistent_faction_village_quota
+	pcfg.seed = config.seed
+	pcfg.region_center = schema.spawn_pos
+	pcfg.region_width = config.width
+	pcfg.region_height = config.height
+	pcfg.cell_size = config.persistent_cell_size
+	pcfg.slot_spawn_rate = config.persistent_slot_spawn_rate
+	pcfg.town_ratio = config.persistent_town_ratio
 
 	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, pcfg)
-	# 失败语义：generate() 内部超过 max_retries 时返回空数组
+	# 失败语义：配置非法 / 锚点放置失败时返回空数组
 	if slots.is_empty():
 		schema.persistent_slots = []
 		return false

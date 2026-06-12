@@ -168,11 +168,11 @@ var _turn_manager: TurnManager = null
 ## 当前可达格集合 {Vector2i: float(消耗)}
 var _reachable_tiles: Dictionary = {}
 
-## 起点坐标（从 map_config 读取）
-## P0 第二阶段（整局节奏重设计）：当前周期 PCG 生成的敌方 CORE_TOWN 原始位置
-## 缓存到字段供 EnemyReinforcement.spawn_batch 用作 spawn 锚（不查 owner，玩家占领后仍 spawn）
-## 在 _load_pcg 之后从 schema 找敌方 CORE_TOWN 位置写入；reload 后重新缓存
-var _enemy_core_origin_pos: Vector2i = Vector2i(-1, -1)
+## 敌方增援 spawn 锚（L1.3c 阶段 A 过渡 shim：距出生点最远的持久 slot 位置；
+## 阶段 C 将替换为"玩家视野外暗影环带"采样，本字段届时退役）
+## 在 _load_pcg 之后由 MapBootstrap._cache_enemy_core_origin_pos_internal 写入
+## 哨兵：NO_ANCHOR = 未缓存/无 slot（出生居中后负坐标合法，不能用 (-1,-1)）
+var _enemy_core_origin_pos: Vector2i = EnemyReinforcement.NO_ANCHOR
 
 ## P0 第二阶段：周期级配置原始行数据（按 cycle_index 索引）
 var _cycle_config_rows: Array = []
@@ -1157,21 +1157,6 @@ func _on_day_night_phase_changed(phase: int) -> void:
 # ─────────────────────────────────────────
 # 敌方 AI 协作辅助
 # ─────────────────────────────────────────
-
-## 敌方 AI 进军 target 位置（P0 第二阶段后已废弃）
-##
-## 历史：
-##   X-A 前：扫 schema 找 CORE_TOWN owner=PLAYER（玩家方核心位置）
-##   X-A 后：返回 _start_pos 作静态锚
-##   P0 第二阶段：EnemyMovement._pick_target_for 改为"附近 slot 占领 + 追玩家"二元，
-##                 不再依赖任何全局战略锚；本函数无被调用方。
-##
-## 保留函数体为占位（返回 _start_pos）以防其他历史代码引用；新代码不应调用
-func _get_enemy_target_pos() -> Vector2i:
-	if _schema == null:
-		return Vector2i(-1, -1)
-	return _start_pos
-
 
 # ─────────────────────────────────────────
 # 敌方移动信号处理（_on_enemy_phase_finished 已迁出至 BattleCoordinator 批 2 阶段 e）

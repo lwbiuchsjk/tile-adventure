@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="ContentConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/config/content_config.gd" id="1_content"]
+
+[resource]
+script = ExtResource("1_content")
+cell_size = 5
+slot_spawn_rate = 0.85
+town_ratio = 0.27

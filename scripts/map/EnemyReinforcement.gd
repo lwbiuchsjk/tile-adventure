@@ -15,6 +15,9 @@ extends RefCounted
 ##
 ## 静态纯函数；所有状态通过 WorldView facade 读写（MVP-β）
 
+## 无效锚哨兵（L1.3c 阶段 A：出生居中后负坐标合法，不能再用 (-1,-1)/"x<0" 表示无效锚）
+const NO_ANCHOR: Vector2i = Vector2i(-2147483648, -2147483648)
+
 
 ## 生成一批增援并注入 WorldView 暴露的 _level_slots 字典
 ## world_view: WorldView facade（强类型，访问点编译期可校验 —— MVP-β）
@@ -29,9 +32,10 @@ extends RefCounted
 ##   - force_tier ≥ 0 时跳过权重抽样直接使用（initial deploy 末周期强制 tier 3）
 ##
 ## L1.3a 阶段 C：新增可选 anchor_pos + anchor_range——指定 spawn 锚点（玩家/据点附近），
-## 用于 climax boss"防守向·向玩家进军"。anchor_pos 有效（x/y ≥ 0）且 anchor_range > 0 时
-## 以锚点 + 半径取空地；否则退回默认（敌方核心原始位置 + influence_range，常规增援路径不变）。
-static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos: Vector2i = Vector2i(-1, -1), anchor_range: int = -1) -> LevelSlot:
+## 用于 climax boss"防守向·向玩家进军"。anchor_pos 有效（≠ NO_ANCHOR）且 anchor_range > 0 时
+## 以锚点 + 半径取空地；否则退回默认（增援锚位置 + influence_range，常规增援路径不变）。
+## L1.3c 阶段 A：锚有效性判定从"x/y ≥ 0"改为哨兵比较——出生居中后负坐标是合法世界坐标。
+static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos: Vector2i = NO_ANCHOR, anchor_range: int = -1) -> LevelSlot:
 	if world_view == null:
 		return null
 
@@ -40,32 +44,35 @@ static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos:
 		push_warning("EnemyReinforcement.spawn_batch: _schema 未初始化")
 		return null
 
-	# spawn 中心 + 半径：锚点模式（L1.3a climax）走 anchor，否则走敌方核心默认
+	# spawn 中心 + 半径：锚点模式（L1.3a climax）走 anchor，否则走默认增援锚
 	var spawn_center: Vector2i
 	var spawn_radius: int
-	if anchor_pos.x >= 0 and anchor_pos.y >= 0 and anchor_range > 0:
+	if anchor_pos != NO_ANCHOR and anchor_range > 0:
 		# L1.3a 阶段 C：按指定锚点（玩家/据点）spawn，boss 在其附近逼近
 		spawn_center = anchor_pos
 		spawn_radius = anchor_range
 	else:
-		# P0 第二阶段：用 WorldMap 缓存的 PCG 原始位置作 spawn 锚（不查 owner）
+		# 默认增援锚：WorldMap 缓存的锚位置（L1.3c 阶段 A 过渡 shim = 距出生点最远的持久 slot；
+		# 阶段 C 将替换为"玩家视野外暗影环带"）
 		var core_origin: Vector2i = world_view.get_enemy_core_origin_pos()
-		if core_origin.x < 0 or core_origin.y < 0:
-			push_warning("EnemyReinforcement.spawn_batch: _enemy_core_origin_pos 未缓存（PCG 后应有效），跳过本次")
+		if core_origin == NO_ANCHOR:
+			push_warning("EnemyReinforcement.spawn_batch: 增援锚未缓存（PCG 后应有效），跳过本次")
 			return null
-		# 查 PersistentSlot 拿 influence_range（仍然要找 CORE_TOWN，但只用其位置半径，不用其 owner）
-		var enemy_core: PersistentSlot = _find_slot_at(schema.persistent_slots, core_origin)
-		if enemy_core == null:
-			push_warning("EnemyReinforcement.spawn_batch: 原始位置 %s 未找到 PersistentSlot" % core_origin)
+		# 查锚点上的 PersistentSlot 拿 influence_range 作半径（锚是普通 TOWN/VILLAGE 时
+		# influence_range 可能很小，取下限 4 保证有足够空地候选）
+		var anchor_slot: PersistentSlot = _find_slot_at(schema.persistent_slots, core_origin)
+		if anchor_slot == null:
+			push_warning("EnemyReinforcement.spawn_batch: 锚位置 %s 未找到 PersistentSlot" % core_origin)
 			return null
 		spawn_center = core_origin
-		spawn_radius = enemy_core.influence_range
+		spawn_radius = maxi(4, anchor_slot.influence_range)
 
 	# 收集范围内的可用空地
 	var level_slots: Dictionary = world_view.get_level_slots()
 	var resource_slots: Dictionary = world_view.get_resource_slots()
 	var unit: UnitData = world_view.get_unit()
-	var unit_pos: Vector2i = unit.position if unit != null else Vector2i(-1, -1)
+	# 占位哨兵用 NO_ANCHOR（codex P2 修复）：负坐标合法后 (-1,-1) 是真实世界格，会误判占用
+	var unit_pos: Vector2i = unit.position if unit != null else NO_ANCHOR
 
 	var candidates: Array[Vector2i] = _find_passable_empty_tiles(
 		schema, spawn_center, spawn_radius,
@@ -190,15 +197,13 @@ static func _find_passable_empty_tiles(
 		if ps != null:
 			persistent_occupied[ps.position] = true
 
+	# L1.3c 阶段 A：width/height 有界过滤退役——无界世界负坐标合法，
+	# 可走性由 schema.is_passable 唯一裁决（无限模式路由 ChunkPCG 任意坐标可查）
 	for dy in range(-range_val, range_val + 1):
 		var y: int = center.y + dy
-		if y < 0 or y >= schema.height:
-			continue
 		var dx_max: int = range_val - absi(dy)
 		for dx in range(-dx_max, dx_max + 1):
 			var x: int = center.x + dx
-			if x < 0 or x >= schema.width:
-				continue
 			var pos: Vector2i = Vector2i(x, y)
 			# 地形不可通行 → 跳过
 			if not schema.is_passable(x, y):

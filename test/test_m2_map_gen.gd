@@ -1,31 +1,32 @@
 extends SceneTree
-## M2 地图生成（持久 slot 八阶段流水线）冒烟测试
+## M2 地图生成（L1.3c 阶段 A：网格抖动撒点）冒烟测试
 ## 运行：tools/run_godot.ps1 --headless -s test/test_m2_map_gen.gd
 ##
-## 验证范围（对应 M2 验收标准；P0 X-A 后更新）：
-##   1. 26 数量 / 1+7+18 类型配比（X-A 后：1 敌方 CORE_TOWN + 7 城镇含玩家方占位 + 18 村庄）
-##   2. 普通 slot 间距 ≥ 3，核心 slot 与其他 ≥ 5
-##   3. 三桶下限（quota=1/2 与 map_config.csv 一致）：每势力 ≥ 1 镇 + ≥ 2 村
-##   4. 敌方 CORE_TOWN 落右下对角块；玩家方 TOWN 占位落左上对角块；初始状态校验
-##   5. 普通 slot 初始 level=0
-##   6. 同 seed 跑两次 → slot 位置 / 类型 / 归属完全一致
-##   7. 连续 20 次随机 seed 均无 crash 且三桶下限全满足
-##   8. PersistentSlotGenerator.GenConfig 透传 / 默认值正确
+## 验证范围（对应 L1.3c §七 headless 冒烟 1-4 项的生成器局部）：
+##   1. 基本生成：玩家锚点 TOWN 唯一且近出生点；无 CORE_TOWN / 无 ENEMY_1 染色；全部 level=0
+##   2. 出生居中：内容覆盖负坐标象限；全部落在区域内
+##   3. 撒点间距：任意两 slot 曼哈顿间距 ≥ 3（网格抖动 PAD=1 下界）
+##   4. 确定性：同 seed 两次生成完全一致（位置/类型/归属/display_id）
+##   5. 区域单调性（阶段 B chunk 流式复用基石）：小区域结果 ⊆ 大区域结果（cell 输出与范围无关）
+##   6. 地形约束：MOUNTAIN 不可走时全部 slot 落可走格；20 随机 seed 无 crash
+##   7. 配置自检：非法参数被入口拦截（返回空数组）
+##   8. display_id 全局唯一
 
 var _failed: int = 0
 
 
 func _init() -> void:
-	print("=== M2 地图生成冒烟测试 ===")
+	print("=== M2 地图生成（网格抖动撒点）冒烟测试 ===")
 
 	_test_basic_generation()
-	_test_type_breakdown()
+	_test_centered_negative_coords()
 	_test_min_distance()
-	_test_three_bucket_quota()
-	_test_core_zone_and_init_state()
 	_test_seed_reproducibility()
-	_test_twenty_random_seeds()
+	_test_region_monotonicity()
+	_test_cell_function_properties()
+	_test_terrain_constraint_and_random_seeds()
 	_test_config_validation_traps()
+	_test_display_id_unique()
 
 	if _failed > 0:
 		printerr("✗ 共 %d 项失败" % _failed)
@@ -39,121 +40,80 @@ func _init() -> void:
 # 测试用例
 # ─────────────────────────────────────────
 
-## 1. 基础生成：在 32x32 全可通行假地图上跑通流水线，输出 26 个 slot
+## 1. 基本生成：锚点唯一 + 无敌方染色 + 无 CORE_TOWN + 全部 level=0
 func _test_basic_generation() -> void:
-	var schema: MapSchema = _make_test_schema(32, 32)
-	var cfg: PersistentSlotGenerator.GenConfig = _make_test_config(12345)
-	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
-	_assert(slots.size() == 26, "基础生成应输出 26 个 slot（实际 %d）" % slots.size())
-
-
-## 2. 类型配比（P0 X-A 后）：恰好 1 敌方 CORE_TOWN + 7 城镇（含玩家方占位） + 18 村庄
-func _test_type_breakdown() -> void:
-	var schema: MapSchema = _make_test_schema(32, 32)
-	var cfg: PersistentSlotGenerator.GenConfig = _make_test_config(2026)
+	var schema: MapSchema = _make_test_schema(12345)
+	var cfg: PersistentSlotGenerator.GenConfig = _make_cfg(12345)
 	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
 
-	var core: int = 0
-	var town: int = 0
-	var village: int = 0
+	_assert(slots.size() > 1, "生成结果非空（锚点 + 撒点；实际 %d）" % slots.size())
+
+	var anchor_count: int = 0
+	var ok_init: bool = true
 	for s in slots:
-		match s.type:
-			PersistentSlot.Type.CORE_TOWN: core += 1
-			PersistentSlot.Type.TOWN:      town += 1
-			PersistentSlot.Type.VILLAGE:   village += 1
-	# P0 X-A 后：仅敌方 1 个 CORE_TOWN，城镇 7 个（含玩家方占位）
-	_assert(core == 1,    "核心数 == 1（X-A 后仅敌方核心；实际 %d）" % core)
-	_assert(town == 7,    "城镇数 == 7（含玩家方占位 TOWN；实际 %d）" % town)
-	_assert(village == 18, "村庄数 == 18（实际 %d）" % village)
+		# L1.3c 拍板：PCG 不再预置 CORE_TOWN；开局无 ENEMY_1 染色
+		if s.type == PersistentSlot.Type.CORE_TOWN:
+			ok_init = false
+			printerr("  违规: 出现 CORE_TOWN @%s" % str(s.position))
+		if s.owner_faction == Faction.ENEMY_1:
+			ok_init = false
+			printerr("  违规: 出现 ENEMY_1 染色 @%s" % str(s.position))
+		if s.level != 0:
+			ok_init = false
+			printerr("  违规: 初始 level != 0 @%s" % str(s.position))
+		if s.owner_faction == Faction.PLAYER:
+			anchor_count += 1
+			var dist: int = absi(s.position.x - cfg.region_center.x) + absi(s.position.y - cfg.region_center.y)
+			_assert(s.type == PersistentSlot.Type.TOWN, "玩家锚点 type == TOWN")
+			_assert(dist <= cfg.anchor_search_radius, "玩家锚点距出生点 ≤ %d（实际 %d）" % [cfg.anchor_search_radius, dist])
+	_assert(anchor_count == 1, "玩家锚点 TOWN 恰好 1 个（实际 %d）" % anchor_count)
+	_assert(ok_init, "无 CORE_TOWN / 无 ENEMY_1 / 全部 level=0")
 
 
-## 3. 最小间距：普通 ≥ 3，核心 ≥ 5
+## 2. 出生居中：内容覆盖负坐标 + 全部落在区域内
+func _test_centered_negative_coords() -> void:
+	var schema: MapSchema = _make_test_schema(2026)
+	var cfg: PersistentSlotGenerator.GenConfig = _make_cfg(2026)
+	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
+
+	var region_min: Vector2i = cfg.region_center - Vector2i(cfg.region_width / 2, cfg.region_height / 2)
+	var region_max: Vector2i = region_min + Vector2i(cfg.region_width - 1, cfg.region_height - 1)
+	var has_neg_x: bool = false
+	var has_neg_y: bool = false
+	var all_in_region: bool = true
+	for s in slots:
+		if s.position.x < 0: has_neg_x = true
+		if s.position.y < 0: has_neg_y = true
+		if s.position.x < region_min.x or s.position.x > region_max.x \
+			or s.position.y < region_min.y or s.position.y > region_max.y:
+			all_in_region = false
+			printerr("  越界: %s 不在 [%s, %s]" % [str(s.position), str(region_min), str(region_max)])
+	_assert(has_neg_x and has_neg_y, "内容覆盖负坐标象限（出生居中四方等价）")
+	_assert(all_in_region, "全部 slot 落在内容区域内")
+
+
+## 3. 撒点间距：任意两 slot 曼哈顿间距 ≥ 3
 func _test_min_distance() -> void:
-	var schema: MapSchema = _make_test_schema(32, 32)
-	var cfg: PersistentSlotGenerator.GenConfig = _make_test_config(7777)
+	var schema: MapSchema = _make_test_schema(7777)
+	var cfg: PersistentSlotGenerator.GenConfig = _make_cfg(7777)
 	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
 
 	var ok: bool = true
 	for i in range(slots.size()):
-		var a: PersistentSlot = slots[i]
 		for j in range(i + 1, slots.size()):
+			var a: PersistentSlot = slots[i]
 			var b: PersistentSlot = slots[j]
 			var dist: int = absi(a.position.x - b.position.x) + absi(a.position.y - b.position.y)
-			var required: int = 3
-			if a.type == PersistentSlot.Type.CORE_TOWN or b.type == PersistentSlot.Type.CORE_TOWN:
-				required = 5
-			if dist < required:
+			if dist < 3:
 				ok = false
-				printerr("  间距违规: %s-%s dist=%d req=%d" % [
-					_describe(a), _describe(b), dist, required
-				])
-	_assert(ok, "全部 slot 间距满足约束（普通 ≥ 3，核心 ≥ 5）")
+				printerr("  间距违规: %s-%s dist=%d" % [str(a.position), str(b.position), dist])
+	_assert(ok, "全部 slot 曼哈顿间距 ≥ 3（网格抖动下界）")
 
 
-## 4. 三桶下限（quota 与 map_config.csv 一致：town_quota=1 / village_quota=2）
-##    P0 X-A 关键路径覆盖：玩家方 town_quota=1 时占位 TOWN 是唯一 quota，painted 初始扫描后阶段 5 不再额外染 TOWN
-func _test_three_bucket_quota() -> void:
-	var schema: MapSchema = _make_test_schema(32, 32)
-	var cfg: PersistentSlotGenerator.GenConfig = _make_test_config(98765)
-	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
-
-	for fid in [Faction.PLAYER, Faction.ENEMY_1]:
-		var fid_int: int = fid as int
-		var t: int = 0
-		var v: int = 0
-		for s in slots:
-			if s.owner_faction != fid_int:
-				continue
-			if s.type == PersistentSlot.Type.TOWN:    t += 1
-			if s.type == PersistentSlot.Type.VILLAGE: v += 1
-		_assert(t >= cfg.faction_town_quota, "%s 城镇下限 ≥ %d（实际 %d）" % [Faction.faction_name(fid_int), cfg.faction_town_quota, t])
-		_assert(v >= cfg.faction_village_quota, "%s 村庄下限 ≥ %d（实际 %d）" % [Faction.faction_name(fid_int), cfg.faction_village_quota, v])
-
-
-## 5. P0 X-A：仅敌方 CORE_TOWN，玩家方占位 TOWN；初始状态校验
-##    敌方核心：CORE_TOWN level=3 owner=ENEMY_1，落在右下对角块
-##    玩家方占位：TOWN level=0 owner=PLAYER，落在左上对角块（功能层等同普通 TOWN）
-##    其他 slot：level=0
-func _test_core_zone_and_init_state() -> void:
-	var schema: MapSchema = _make_test_schema(32, 32)
-	var cfg: PersistentSlotGenerator.GenConfig = _make_test_config(31415)
-	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
-
-	var enemy_core: PersistentSlot = null
-	var player_anchor_in_zone: PersistentSlot = null
-	for s in slots:
-		if s.type == PersistentSlot.Type.CORE_TOWN:
-			if s.owner_faction == Faction.ENEMY_1:
-				enemy_core = s
-		else:
-			_assert(s.level == 0, "普通 slot 初始 level == 0")
-			# 玩家方占位 TOWN：左上对角块 + owner=PLAYER + type=TOWN
-			if s.type == PersistentSlot.Type.TOWN \
-				and s.owner_faction == Faction.PLAYER \
-				and s.position.x <= 32 / 4 \
-				and s.position.y <= 32 / 4:
-				player_anchor_in_zone = s
-
-	_assert(player_anchor_in_zone != null, "玩家方占位 TOWN 存在（左上对角块 owner=PLAYER）")
-	_assert(enemy_core != null,            "敌方核心存在")
-
-	if player_anchor_in_zone != null:
-		_assert(player_anchor_in_zone.level == 0,    "玩家方占位 TOWN 初始 level == 0")
-		_assert(player_anchor_in_zone.type == PersistentSlot.Type.TOWN, "玩家方占位 TOWN type == TOWN")
-	if enemy_core != null:
-		_assert(enemy_core.level == 3, "敌方核心初始 level == 3")
-		_assert(enemy_core.position.x >= 32 * 3 / 4, "敌方核心 x 在右 1/4")
-		_assert(enemy_core.position.y >= 32 * 3 / 4, "敌方核心 y 在下 1/4")
-
-
-## 6. Seed 复现：同 seed 跑两次 → 完全一致
+## 4. 确定性：同 seed 两次生成完全一致
 func _test_seed_reproducibility() -> void:
-	var schema_a: MapSchema = _make_test_schema(32, 32)
-	var schema_b: MapSchema = _make_test_schema(32, 32)
-	var cfg_a: PersistentSlotGenerator.GenConfig = _make_test_config(424242)
-	var cfg_b: PersistentSlotGenerator.GenConfig = _make_test_config(424242)
-	var slots_a: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema_a, cfg_a)
-	var slots_b: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema_b, cfg_b)
+	var slots_a: Array[PersistentSlot] = PersistentSlotGenerator.generate(_make_test_schema(424242), _make_cfg(424242))
+	var slots_b: Array[PersistentSlot] = PersistentSlotGenerator.generate(_make_test_schema(424242), _make_cfg(424242))
 
 	_assert(slots_a.size() == slots_b.size(), "两次生成 slot 数量一致")
 	if slots_a.size() == slots_b.size():
@@ -161,123 +121,187 @@ func _test_seed_reproducibility() -> void:
 		for i in range(slots_a.size()):
 			var a: PersistentSlot = slots_a[i]
 			var b: PersistentSlot = slots_b[i]
-			if a.position != b.position or a.type != b.type or a.owner_faction != b.owner_faction:
+			if a.position != b.position or a.type != b.type \
+				or a.owner_faction != b.owner_faction or a.display_id != b.display_id:
 				all_match = false
 				break
-		_assert(all_match, "同 seed 两次生成所有 slot 位置/类型/归属一致")
+		_assert(all_match, "同 seed 两次生成位置/类型/归属/display_id 完全一致")
 
 
-## 8. 配置自检：每类非法输入都被入口拦截（返回空数组）
-## 验证 _validate_config 真正提前暴露问题，避免 max_retries 后才报错
+## 5. 区域单调性：小区域结果 ⊆ 大区域结果（cell 输出与生成范围无关——阶段 B chunk 流式基石）
+func _test_region_monotonicity() -> void:
+	var seed: int = 31415
+	var small: Array[PersistentSlot] = PersistentSlotGenerator.generate(_make_test_schema(seed), _make_cfg(seed, 32, 32))
+	var large: Array[PersistentSlot] = PersistentSlotGenerator.generate(_make_test_schema(seed), _make_cfg(seed, 48, 48))
+
+	# 大区域按 position 建索引
+	var large_by_pos: Dictionary = {}
+	for s in large:
+		large_by_pos[s.position] = s
+	var subset_ok: bool = true
+	for s in small:
+		if not large_by_pos.has(s.position):
+			subset_ok = false
+			printerr("  单调性违规: 小区域 slot %s 不在大区域结果中" % str(s.position))
+			continue
+		var counterpart: PersistentSlot = large_by_pos[s.position] as PersistentSlot
+		if counterpart.type != s.type:
+			subset_ok = false
+			printerr("  单调性违规: %s 类型不一致" % str(s.position))
+	_assert(subset_ok, "小区域结果 ⊆ 大区域结果（位置+类型；cell 确定性与范围无关）")
+	_assert(large.size() > small.size(), "大区域 slot 更多（%d > %d）" % [large.size(), small.size()])
+
+
+## 5b. generate_cell_slot 直接性质断言（codex P2 加固）：
+##     负 cell / 对角 cell 边界间距 + 纯函数确定性（与调用次数/范围无关）
+func _test_cell_function_properties() -> void:
+	var seed: int = 555
+	var schema: MapSchema = _make_test_schema(seed)
+	var cfg: PersistentSlotGenerator.GenConfig = _make_cfg(seed)
+
+	# 纯函数确定性：同 cell 调两次结果一致（含 null 情形）
+	var pure_ok: bool = true
+	# 围绕原点的 4 个象限 cell + 更远的负 cell，覆盖 floor 除法负坐标路径
+	var probe_cells: Array[Vector2i] = [
+		Vector2i(0, 0), Vector2i(-1, 0), Vector2i(0, -1), Vector2i(-1, -1),
+		Vector2i(-3, -2), Vector2i(2, -3),
+	]
+	for cell in probe_cells:
+		var a: PersistentSlot = PersistentSlotGenerator.generate_cell_slot(seed, cell, cfg, schema)
+		var b: PersistentSlot = PersistentSlotGenerator.generate_cell_slot(seed, cell, cfg, schema)
+		if (a == null) != (b == null):
+			pure_ok = false
+		elif a != null and b != null and (a.position != b.position or a.type != b.type):
+			pure_ok = false
+		# cell 内位置约束：落点必须在该 cell 的 PAD 内缩区间（间距下界的前提）
+		if a != null:
+			var cs: int = cfg.cell_size
+			var local: Vector2i = a.position - cell * cs
+			if local.x < 1 or local.x > cs - 2 or local.y < 1 or local.y > cs - 2:
+				pure_ok = false
+				printerr("  cell %s 落点 %s 超出 PAD 内缩区间" % [str(cell), str(a.position)])
+	_assert(pure_ok, "generate_cell_slot 纯函数确定性 + PAD 内缩约束（含负 cell）")
+
+	# 相邻/对角 cell 间距：扫负象限 5×5 cell 块，全对断言曼哈顿间距 ≥ 3
+	var produced: Array[PersistentSlot] = []
+	for cy in range(-3, 2):
+		for cx in range(-3, 2):
+			var s: PersistentSlot = PersistentSlotGenerator.generate_cell_slot(seed, Vector2i(cx, cy), cfg, schema)
+			if s != null:
+				produced.append(s)
+	var spacing_ok: bool = true
+	for i in range(produced.size()):
+		for j in range(i + 1, produced.size()):
+			var dist: int = absi(produced[i].position.x - produced[j].position.x) \
+				+ absi(produced[i].position.y - produced[j].position.y)
+			if dist < 3:
+				spacing_ok = false
+				printerr("  负象限 cell 间距违规: %s-%s dist=%d" % [
+					str(produced[i].position), str(produced[j].position), dist
+				])
+	_assert(produced.size() > 0, "负象限 cell 块有产出（实际 %d）" % produced.size())
+	_assert(spacing_ok, "负象限相邻/对角 cell 全对间距 ≥ 3")
+
+
+## 6. 地形约束 + 20 随机 seed：MOUNTAIN 不可走时全部落可走格，无 crash
+func _test_terrain_constraint_and_random_seeds() -> void:
+	var failures: int = 0
+	for i in range(20):
+		var seed: int = 1000 + i * 31
+		var schema: MapSchema = _make_test_schema(seed, false)  # MOUNTAIN 不可走（真实规则）
+		var cfg: PersistentSlotGenerator.GenConfig = _make_cfg(seed)
+		var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
+		if slots.is_empty():
+			# 真实地形下出生点可能落山地导致锚点失败——本测试 region_center 固定原点，
+			# 噪声下原点周围 8 格全山概率极低；视为失败计数
+			failures += 1
+			continue
+		for s in slots:
+			if not schema.is_passable(s.position.x, s.position.y):
+				failures += 1
+				printerr("  seed=%d slot %s 落在不可走格" % [seed, str(s.position)])
+				break
+	_assert(failures == 0, "20 次随机 seed 全部 slot 落可走格且无 crash（失败 %d 次）" % failures)
+
+
+## 7. 配置自检：非法参数被入口拦截
 func _test_config_validation_traps() -> void:
-	var schema: MapSchema = _make_test_schema(32, 32)
+	var schema: MapSchema = _make_test_schema(1)
 
-	# 8.1 配比与总数不一致
-	var cfg_a: PersistentSlotGenerator.GenConfig = _make_test_config(1)
-	cfg_a.town_count = 10  # 2 + 10 + 18 = 30 ≠ total_count(26)
-	_assert(PersistentSlotGenerator.generate(schema, cfg_a).is_empty(), "配比与总数不一致 → 拦截")
+	var cfg_a: PersistentSlotGenerator.GenConfig = _make_cfg(1)
+	cfg_a.cell_size = 2
+	_assert(PersistentSlotGenerator.generate(schema, cfg_a).is_empty(), "cell_size < 3 → 拦截")
 
-	# 8.2 双方城镇下限超出总量
-	var cfg_b: PersistentSlotGenerator.GenConfig = _make_test_config(2)
-	cfg_b.faction_town_quota = 4  # 4 * 2 = 8 > town_count(6)
-	_assert(PersistentSlotGenerator.generate(schema, cfg_b).is_empty(), "城镇下限超量 → 拦截")
+	var cfg_b: PersistentSlotGenerator.GenConfig = _make_cfg(2)
+	cfg_b.slot_spawn_rate = 1.5
+	_assert(PersistentSlotGenerator.generate(schema, cfg_b).is_empty(), "出点概率 > 1 → 拦截")
 
-	# 8.3 双方村庄下限超出总量
-	var cfg_c: PersistentSlotGenerator.GenConfig = _make_test_config(3)
-	cfg_c.faction_village_quota = 10  # 10 * 2 = 20 > village_count(18)
-	_assert(PersistentSlotGenerator.generate(schema, cfg_c).is_empty(), "村庄下限超量 → 拦截")
+	var cfg_c: PersistentSlotGenerator.GenConfig = _make_cfg(3)
+	cfg_c.town_ratio = -0.1
+	_assert(PersistentSlotGenerator.generate(schema, cfg_c).is_empty(), "城镇占比 < 0 → 拦截")
 
-	# 8.4 核心数非 1（P0 X-A 后 MVP 仅支持 core_count=1，仅敌方核心）
-	var cfg_d: PersistentSlotGenerator.GenConfig = _make_test_config(4)
-	cfg_d.core_count = 3
-	cfg_d.total_count = 28  # 让配比一致避免被前一个检查拦截
-	_assert(PersistentSlotGenerator.generate(schema, cfg_d).is_empty(), "核心数非 1 → 拦截")
+	var cfg_d: PersistentSlotGenerator.GenConfig = _make_cfg(4)
+	cfg_d.region_width = 0
+	_assert(PersistentSlotGenerator.generate(schema, cfg_d).is_empty(), "区域宽度 0 → 拦截")
 
-	# 8.5 势力场半径为 0
-	var cfg_e: PersistentSlotGenerator.GenConfig = _make_test_config(5)
-	cfg_e.field_radius = 0
-	_assert(PersistentSlotGenerator.generate(schema, cfg_e).is_empty(), "势力场半径 0 → 拦截")
+	var cfg_e: PersistentSlotGenerator.GenConfig = _make_cfg(5)
+	cfg_e.anchor_search_radius = 1
+	_assert(PersistentSlotGenerator.generate(schema, cfg_e).is_empty(), "锚搜半径 < 2 → 拦截")
 
-	# 8.6 核心采样区间反转
-	var cfg_f: PersistentSlotGenerator.GenConfig = _make_test_config(6)
-	cfg_f.core_zone_min = 0.3
-	cfg_f.core_zone_max = 0.2
-	_assert(PersistentSlotGenerator.generate(schema, cfg_f).is_empty(), "核心区间反转 → 拦截")
-
-	# 8.7 地图尺寸为 0
-	var cfg_g: PersistentSlotGenerator.GenConfig = _make_test_config(7)
-	cfg_g.width = 0
-	_assert(PersistentSlotGenerator.generate(schema, cfg_g).is_empty(), "地图宽度 0 → 拦截")
-
-	# 8.8 下限合计 > 总数
-	var cfg_h: PersistentSlotGenerator.GenConfig = _make_test_config(8)
-	# core(2) + town_quota*2(2*2=4) + village_quota*2(11*2=22) = 28 > 26
-	cfg_h.faction_village_quota = 11
-	# 但单类 11*2=22 ≤ village_count(18)? 不，22 > 18 所以会被村庄下限超量先拦截
-	# 改成下限合计 > 总数但单类不超：core(2) + 3*2 + 9*2 = 26，需要 = 27 才触发合计超
-	cfg_h.faction_town_quota = 3   # 3*2=6 == town_count(6) 边界 OK
-	cfg_h.faction_village_quota = 9  # 9*2=18 == village_count(18) 边界 OK
-	# 总锁定 = 2 + 6 + 18 = 26，恰等于 total_count → 触发 push_warning 但 return ""，
-	# 应能成功生成（中立桶为 0，涌现染色无候选）
-	# 此 case 不验证拦截，仅验证不被 fatal
-	_assert(not PersistentSlotGenerator.generate(schema, cfg_h).is_empty(), "锁定 == 总数边界 → 仍可生成（中立桶 0）")
-
-	# 8.9 合法基线仍能通过
-	var cfg_ok: PersistentSlotGenerator.GenConfig = _make_test_config(9)
+	var cfg_ok: PersistentSlotGenerator.GenConfig = _make_cfg(6)
 	_assert(not PersistentSlotGenerator.generate(schema, cfg_ok).is_empty(), "默认配置 → 正常生成")
 
 
-## 7. 连续 20 次随机 seed：无 crash + 三桶下限全满足（quota 与 _make_test_config 一致）
-func _test_twenty_random_seeds() -> void:
-	var failures: int = 0
-	for i in range(20):
-		var schema: MapSchema = _make_test_schema(32, 32)
-		var cfg: PersistentSlotGenerator.GenConfig = _make_test_config(1000 + i * 31)
-		var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
-		if slots.size() != 26:
-			failures += 1
-			continue
-		# 三桶下限抽查（用 cfg 中的 quota，与 _make_test_config 同步）
-		for fid in [Faction.PLAYER, Faction.ENEMY_1]:
-			var t: int = 0
-			var v: int = 0
-			for s in slots:
-				if s.owner_faction != fid: continue
-				if s.type == PersistentSlot.Type.TOWN:    t += 1
-				if s.type == PersistentSlot.Type.VILLAGE: v += 1
-			if t < cfg.faction_town_quota or v < cfg.faction_village_quota:
-				failures += 1
-				break
-	_assert(failures == 0, "20 次随机 seed 均通过（失败 %d 次）" % failures)
+## 8. display_id 全局唯一
+func _test_display_id_unique() -> void:
+	var schema: MapSchema = _make_test_schema(98765)
+	var cfg: PersistentSlotGenerator.GenConfig = _make_cfg(98765)
+	var slots: Array[PersistentSlot] = PersistentSlotGenerator.generate(schema, cfg)
+
+	var seen: Dictionary = {}
+	var unique_ok: bool = true
+	for s in slots:
+		if seen.has(s.display_id):
+			unique_ok = false
+			printerr("  display_id 重复: %s" % s.display_id)
+		seen[s.display_id] = true
+		if s.display_id.is_empty():
+			unique_ok = false
+			printerr("  display_id 为空 @%s" % str(s.position))
+	_assert(unique_ok, "display_id 全局唯一且非空")
 
 
 # ─────────────────────────────────────────
 # 测试辅助
 # ─────────────────────────────────────────
 
-## 构造一张全平地的测试 schema（隔离 PCG 噪声影响，专测 slot 算法）
-func _make_test_schema(w: int, h: int) -> MapSchema:
+## 构造无限模式测试 schema（L1.3b 后地形经 set_infinite_terrain 路由 ChunkPCG，任意坐标可查）
+## all_passable=true：4 级地形全可走（隔离地形影响专测撒点算法）
+## all_passable=false：MOUNTAIN 不可走（真实规则，测地形约束）
+func _make_test_schema(world_seed: int, all_passable: bool = true) -> MapSchema:
 	var schema: MapSchema = MapSchema.new()
-	schema.init(w, h)
-	# 注入"平地可通行 1.0"地形消耗，让 is_passable 全 true
+	schema.init(32, 32, false)
+	schema.set_infinite_terrain(world_seed)
+	schema.terrain_costs[MapSchema.TerrainType.HIGHLAND as int] = 2.0
 	schema.terrain_costs[MapSchema.TerrainType.FLATLAND as int] = 1.0
+	schema.terrain_costs[MapSchema.TerrainType.LOWLAND as int] = 1.0
+	if all_passable:
+		schema.terrain_costs[MapSchema.TerrainType.MOUNTAIN as int] = 3.0
 	return schema
 
 
-## 构造默认参数 GenConfig
-func _make_test_config(seed: int) -> PersistentSlotGenerator.GenConfig:
+## 构造默认撒点 GenConfig（区域以世界原点为中心）
+func _make_cfg(seed: int, w: int = 32, h: int = 32) -> PersistentSlotGenerator.GenConfig:
 	var cfg: PersistentSlotGenerator.GenConfig = PersistentSlotGenerator.GenConfig.new()
 	cfg.seed = seed
-	# P0 X-A 后：显式同步 quota 与 map_config.csv 一致（town_quota=1 / village_quota=2）
-	# 这样测试覆盖运行真实路径——玩家方 town_quota=1 时占位 TOWN 是唯一 quota
-	cfg.faction_town_quota = 1
-	cfg.faction_village_quota = 2
+	cfg.region_center = Vector2i.ZERO
+	cfg.region_width = w
+	cfg.region_height = h
+	cfg.cell_size = 5
+	cfg.slot_spawn_rate = 0.85
+	cfg.town_ratio = 0.27
+	cfg.anchor_search_radius = 8
 	return cfg
-
-
-## 描述 slot 用于错误信息
-func _describe(s: PersistentSlot) -> String:
-	return "%s@%s/F%d" % [s.get_map_label(), str(s.position), s.owner_faction]
 
 
 ## 简易断言

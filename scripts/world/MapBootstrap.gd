@@ -1,5 +1,8 @@
 class_name MapBootstrap
 extends RefCounted
+
+## 世界内容生成参数（L1.3c 阶段 A：网格抖动撒点；结构性参数，改 = 换内容分布，重启生效）
+const CONTENT_CFG: ContentConfig = preload("res://assets/config/content_config.tres")
 ## WorldMap 启动协调器（一次性流程对象，跑完即弃）
 ##
 ## 设计原文：
@@ -259,11 +262,14 @@ func load_configs() -> void:
 func load_map() -> void:
 	_apply_cycle_config_internal()
 
-	# 读取起终点坐标（经 _apply_cycle_config 注入后，map_cfg 已包含本周期值）
+	# 读取出生点首选坐标（经 _apply_cycle_config 注入后，map_cfg 已包含本周期值）
+	# L1.3c 阶段 A：出生居中——默认世界原点 (0,0)，实际落位由 _resolve_spawn 局部校验微调
 	_world_map._start_pos = Vector2i(
-		int(map_cfg.get("start_x", "1")),
-		int(map_cfg.get("start_y", "1"))
+		int(map_cfg.get("start_x", "0")),
+		int(map_cfg.get("start_y", "0"))
 	)
+	# _end_pos：L1.3b 全图 BFS 退役后仅剩 EC.generate_resource_slots（无调用方）引用，
+	# 保留读取兜底；随阶段 B 资源生成改道一并退役
 	_world_map._end_pos = Vector2i(
 		int(map_cfg.get("end_x", "30")),
 		int(map_cfg.get("end_y", "22"))
@@ -290,10 +296,9 @@ func load_map() -> void:
 ##
 ## 处理流程：
 ##   1. 加载 cycle_config.csv → _world_map._cycle_config_rows
-##   2. 按 RunState.cycle_index() 找对应行
-##   3. 找到则把 map_width / map_height / start_x/y / end_x/y / persistent_total_count
-##      / persistent_town_count / persistent_village_count 字段覆盖到 self.map_cfg 字典；
-##      has_enemy_core 推导 persistent_core_count = "1"（始终生成 1 个敌方 CORE_TOWN）
+##   2. 恒读 cycle 0 行（L1.3a 阶段 D 固定单图）
+##   3. 找到则把 map_width / map_height / start_x/y / end_x/y 覆盖到 self.map_cfg 字典
+##      （L1.3c 阶段 A：persistent_* 数量覆盖随八阶段生成器退役删除，撒点参数走 content_config.tres）
 ##   4. 缓存 initial_enemy_pack_count / reinforcement_interval / has_enemy_core 到 _world_map 字段
 ##   5. 找不到则 push_warning，map_cfg 字段保留原值（map_config 兜底）；spawn 节奏字段用默认
 ##
@@ -321,34 +326,15 @@ func _apply_cycle_config_internal() -> void:
 		return
 
 	# 用 cycle row 覆盖 map_cfg 中对应字段（后续 _load_pcg 读 map_cfg 拿到本周期值）
-	# persistent_total_count 不在此列表 —— 由 core(1) + town + village 自动推导避免配置错位
+	# L1.3c 阶段 A：persistent_* 数量/配额覆盖随八阶段生成器退役删除——
+	# 撒点参数（cell_size / spawn_rate / town_ratio）改由 content_config.tres 提供，
+	# cycle_config 中的 persistent_total/town/village_count 列保留但不再被消费
 	var override_keys: Array[String] = [
 		"map_width", "map_height", "start_x", "start_y", "end_x", "end_y",
-		"persistent_town_count", "persistent_village_count",
 	]
 	for key in override_keys:
 		if cycle_row.has(key):
 			map_cfg[key] = str(cycle_row[key])
-
-	# has_enemy_core 推导 persistent_core_count（数据层始终生成 1 个，视觉 / 判定由 has_enemy_core 控制）
-	# 当前 MVP：始终 1（has_enemy_core=false 时仅视觉走普通 TOWN + VictoryJudge cycle 过滤拦截胜利）
-	map_cfg["persistent_core_count"] = "1"
-
-	# P0 第二阶段（跑测 BUG 修复 2026-05-11）：persistent_total_count 由 1 + town + village 自动推导
-	# 原因：csv 中 total 与 town/village 是冗余双写，用户手动调整时极易错位（如 cycle_config
-	# 调整地图大小时改了 total 忘改 town/village），导致 PCG 校验失败
-	# cycle_config.csv 中 persistent_total_count 字段保留作"目标参考"（编辑时可见目标总数），
-	# 但 PCG 实际用推导值；字段值与推导值不一致时 push_warning 提示
-	var derived_town: int = int(map_cfg.get("persistent_town_count", "7"))
-	var derived_village: int = int(map_cfg.get("persistent_village_count", "18"))
-	var derived_total: int = 1 + derived_town + derived_village
-	if cycle_row.has("persistent_total_count"):
-		var declared_total: int = int(cycle_row.get("persistent_total_count", "0"))
-		if declared_total != derived_total:
-			push_warning("WorldMap: cycle_config[%d].persistent_total_count=%d 与 1+town(%d)+village(%d)=%d 不一致；以推导值 %d 为准" % [
-				current_cycle, declared_total, derived_town, derived_village, derived_total, derived_total
-			])
-	map_cfg["persistent_total_count"] = str(derived_total)
 
 	# 缓存周期级字段
 	# initial_enemy_pack_count: 钳制 ≥ 0（0 = 本周期不预置初始 pack，合理边界）
@@ -389,32 +375,21 @@ func _load_pcg_internal() -> void:
 	_world_map._world_rng = RandomNumberGenerator.new()
 	_world_map._world_rng.seed = config.seed
 
-	# 通达性校验起终点
+	# 出生点首选坐标（L1.3c 阶段 A：出生居中，默认原点）
 	config.start = _world_map._start_pos
-	config.end = _world_map._end_pos
 
 	# PCG 生成参数
 	# 【L1.3b 阶段 A】地形阈值/频率随地形权威收敛到 ChunkPCG 已退役，不再从 pcg_config 读（codex P1-2）
 	config.max_retries = int(pcg_cfg.get("max_retries", "10"))
 
-	# 注入地形消耗配置（BFS 通达性校验需要）
+	# 注入地形消耗配置（出生局部校验 / 撒点可走判定需要）
 	config.terrain_costs = terrain_costs
 
-	# M2：从 map_config 加载持久 slot 八阶段参数
-	config.persistent_total_count = int(map_cfg.get("persistent_total_count", "26"))
-	# P0 X-A 后默认 1 敌方核心 + 7 城镇（含玩家方占位）；CSV 通常会覆盖此处默认
-	config.persistent_core_count = int(map_cfg.get("persistent_core_count", "1"))
-	config.persistent_town_count = int(map_cfg.get("persistent_town_count", "7"))
-	config.persistent_village_count = int(map_cfg.get("persistent_village_count", "18"))
-	config.persistent_min_dist_normal = int(map_cfg.get("persistent_min_dist_normal", "3"))
-	config.persistent_min_dist_core = int(map_cfg.get("persistent_min_dist_core", "5"))
-	config.persistent_emerge_steps = int(map_cfg.get("persistent_emerge_steps", "3"))
-	config.persistent_field_radius = int(map_cfg.get("persistent_field_radius", "20"))
-	config.persistent_core_zone_min = float(map_cfg.get("persistent_core_zone_min", "0.125"))
-	config.persistent_core_zone_max = float(map_cfg.get("persistent_core_zone_max", "0.25"))
-	config.persistent_max_retries = int(map_cfg.get("persistent_max_retries", "5"))
-	config.persistent_faction_town_quota = int(map_cfg.get("persistent_faction_town_quota", "2"))
-	config.persistent_faction_village_quota = int(map_cfg.get("persistent_faction_village_quota", "6"))
+	# L1.3c 阶段 A：撒点参数来自 content_config.tres（剥离原则：schema @export + @tunable 埋点）
+	# 旧八阶段流水线的 13 个 persistent_* CSV 键随生成器重写退役
+	config.persistent_cell_size = CONTENT_CFG.cell_size
+	config.persistent_slot_spawn_rate = CONTENT_CFG.slot_spawn_rate
+	config.persistent_town_ratio = CONTENT_CFG.town_ratio
 
 	_world_map._schema = MapGenerator.generate(config)
 	if _world_map._schema == null:
@@ -438,26 +413,36 @@ func _load_json_internal() -> void:
 		push_error("WorldMap: JSON 地图加载失败，路径：" + path)
 
 
-## P0 第二阶段：PCG 生成后从 schema 找敌方 CORE_TOWN 位置缓存到 _enemy_core_origin_pos
+## L1.3c 阶段 A 过渡 shim：敌方增援 spawn 锚 = 距出生点最远的持久 slot 位置
 ##
-## 设计原因：EnemyReinforcement.spawn_batch 当前查 owner=ENEMY_1 的 CORE_TOWN 作 spawn 锚，
-##           前两周期玩家占领后 owner 翻转 → reinforcement 失效。改为缓存"PCG 生成时的原始位置"，
-##           不查 owner——玩家占领后敌方仍从该位置周围 spawn。
+## 背景：PCG 预置敌方 CORE_TOWN 已退役（L1.3c 拍板"敌方无老家"），原"缓存敌核心位置作 spawn 锚"
+## 语义失效。阶段 C 将把增援锚替换为"玩家视野外暗影环带"（设计 §五阶段 C），本 shim 仅保证
+## A 落地后敌人仍能 spawn、游戏可玩：取距出生点最远的持久 slot（确定性——slot 分布由 seed 唯一决定，
+## 平距时取遍历序首个），敌人从世界边缘方向出现，与"从远方威胁逼近"的体验方向一致。
 ##
 ## 抽离自 WorldMap._cache_enemy_core_origin_pos
 func _cache_enemy_core_origin_pos_internal() -> void:
 	if _world_map._schema == null:
-		_world_map._enemy_core_origin_pos = Vector2i(-1, -1)
+		_world_map._enemy_core_origin_pos = EnemyReinforcement.NO_ANCHOR
 		return
+	var spawn: Vector2i = _world_map._start_pos
+	var best_pos: Vector2i = EnemyReinforcement.NO_ANCHOR
+	var best_dist: int = -1
 	for entry in _world_map._schema.persistent_slots:
 		var slot: PersistentSlot = entry as PersistentSlot
 		if slot == null:
 			continue
-		if slot.type == PersistentSlot.Type.CORE_TOWN and slot.owner_faction == Faction.ENEMY_1:
-			_world_map._enemy_core_origin_pos = slot.position
-			return
-	push_warning("WorldMap: PCG 后未找到敌方 CORE_TOWN，_enemy_core_origin_pos 保持 (-1,-1)；reinforcement 将跳过")
-	_world_map._enemy_core_origin_pos = Vector2i(-1, -1)
+		# 跳过玩家方 slot（codex P1 修复）：极端配置下只剩玩家锚点时，
+		# 不能让敌人在玩家出生点附近刷出；无中立 slot 则保持 NO_ANCHOR（增援跳过）
+		if slot.owner_faction == Faction.PLAYER:
+			continue
+		var dist: int = absi(slot.position.x - spawn.x) + absi(slot.position.y - spawn.y)
+		if dist > best_dist:
+			best_dist = dist
+			best_pos = slot.position
+	if best_dist < 0:
+		push_warning("WorldMap: 无中立持久 slot 可作增援锚，保持 NO_ANCHOR；reinforcement 将跳过")
+	_world_map._enemy_core_origin_pos = best_pos
 
 
 # ─────────────────────────────────────

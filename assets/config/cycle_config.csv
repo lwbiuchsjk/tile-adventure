@@ -6,18 +6,14 @@
 #   map_width/height      地图尺寸 (列/行)
 #   start_x/y             玩家初始 spawn 锚 + 通达性校验起点
 #   end_x/y               PCG 通达性校验终点 (须在地图边界内,通常落右下区)
-#   persistent_total_count 持久 slot 总数 (参考冗余字段:实际由 1+town+village 自动推导;此字段仅作编辑参考)
-#   persistent_town_count  普通 TOWN 数量 (不含敌方 CORE;数据层敌方 CORE 始终 +1 单独计)
-#   persistent_village_count VILLAGE 数量
-#   has_enemy_core        bool: 是否视觉激活敌方核心 (金边/徽记/核 label)
-#                          数据层敌方 CORE_TOWN 始终生成 (PCG 不分周期)
-#                          L1.3 周期胜利目标 MVP 后全周期 true: 每周期占据核心都触发胜利分流
-#                          (非末周期=周期推进 / 末周期=真正通关; 判定按 RunState.is_last_cycle)
+#   persistent_*          已退役列 (L1.3c 阶段 A 撒点参数改 content_config.tres; 列保留不再消费)
+#   has_enemy_core        bool: L1.3c 阶段 A 起恒 false——PCG 预置敌方 CORE_TOWN 已退役
+#                          (敌方无老家, 敌人改运行期刷新; 该列与视觉门控/force_tier 读点保留待阶段 C 清理)
 #   initial_enemy_pack_count 开局预置敌方 pack 数
 #   reinforcement_interval 增援间隔 (敌方回合数)
 #
 # 数值为 MVP 起步占位,跑测调参 (见整局节奏重设计_MVP §8)
 cycle_index,map_width,map_height,start_x,start_y,end_x,end_y,persistent_total_count,persistent_town_count,persistent_village_count,has_enemy_core,initial_enemy_pack_count,reinforcement_interval
-0,32,32,1,1,30,22,26,7,18,true,5,5
+0,32,32,0,0,30,22,26,7,18,false,5,5
 1,26,26,1,1,22,18,20,5,15,true,5,4
 2,20,20,1,1,16,14,16,4,12,true,7,3
