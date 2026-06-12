@@ -16,3 +16,6 @@ extends Resource
 
 ## 出点时为 TOWN 的概率（其余为 VILLAGE）
 @export_range(0.0, 1.0) var town_ratio: float = 0.27
+
+## 每 chunk 资源 slot 配额（L1.3c 阶段 B；0 = 不生成资源 slot）
+@export_range(0, 4) var resource_quota_per_chunk: int = 1

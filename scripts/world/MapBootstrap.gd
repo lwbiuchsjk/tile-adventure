@@ -253,7 +253,7 @@ func load_configs() -> void:
 ##
 ## 内部按顺序：
 ##   1. _apply_cycle_config_internal —— cycle_config 覆盖 self.map_cfg + 写 _world_map._current_cycle_*
-##   2. 读取 start/end → _world_map._start_pos / _end_pos
+##   2. 读取出生点首选坐标 → _world_map._start_pos
 ##   3. _load_pcg_internal / _load_json_internal 分流 → 写 _world_map._schema 与 _world_rng
 ##   4. 注入 _world_map._schema.terrain_costs / slot_allowed_terrains
 ##   5. _cache_enemy_core_origin_pos_internal —— 缓存 _world_map._enemy_core_origin_pos
@@ -268,12 +268,7 @@ func load_map() -> void:
 		int(map_cfg.get("start_x", "0")),
 		int(map_cfg.get("start_y", "0"))
 	)
-	# _end_pos：L1.3b 全图 BFS 退役后仅剩 EC.generate_resource_slots（无调用方）引用，
-	# 保留读取兜底；随阶段 B 资源生成改道一并退役
-	_world_map._end_pos = Vector2i(
-		int(map_cfg.get("end_x", "30")),
-		int(map_cfg.get("end_y", "22"))
-	)
+	# _end_pos 已随阶段 B 资源生成改道退役（L1.3b 起即死字段；CSV 的 end_x/y 列保留不再消费）
 
 	# 根据配置选择加载模式
 	var is_random: bool = map_cfg.get("random_generate", "true") == "true"
@@ -443,6 +438,51 @@ func _cache_enemy_core_origin_pos_internal() -> void:
 	if best_dist < 0:
 		push_warning("WorldMap: 无中立持久 slot 可作增援锚，保持 NO_ANCHOR；reinforcement 将跳过")
 	_world_map._enemy_core_origin_pos = best_pos
+
+
+## L1.3c 阶段 B：创建 ContentSpawner 并订阅 chunk 首次生成信号
+##
+## 时机约束：finalize_startup 内、EC.init_vision_runtime（玩家视野源注册 = 首批 chunk
+## 生成触发点）之前——订阅晚了首批 chunk 信号就漏掉了。
+## 撒点参数与开局批共用同一来源（CONTENT_CFG + world_seed），保证规则同一套。
+func _wire_content_spawner_internal() -> void:
+	if _world_map._schema == null or _world_map._chunk_manager == null:
+		push_warning("MapBootstrap: schema / chunk_manager 未就绪，跳过 ContentSpawner 接线")
+		return
+
+	# 撒点参数：与 _load_pcg_internal 装载的开局批同源（cell 纯函数 → 新旧区域天然一致）
+	var gcfg: PersistentSlotGenerator.GenConfig = PersistentSlotGenerator.GenConfig.new()
+	gcfg.seed = _world_map._chunk_manager._world_seed
+	gcfg.cell_size = CONTENT_CFG.cell_size
+	gcfg.slot_spawn_rate = CONTENT_CFG.slot_spawn_rate
+	gcfg.town_ratio = CONTENT_CFG.town_ratio
+
+	# 玩家锚点：距出生点最近的玩家方持久 slot（此时占领未发生，唯一 PLAYER slot 即开局锚点）
+	var anchor_pos: Vector2i = PersistentSlotGenerator.NO_POS
+	var anchor_dist: int = 2147483647
+	for entry in _world_map._schema.persistent_slots:
+		var slot: PersistentSlot = entry as PersistentSlot
+		if slot == null or slot.owner_faction != Faction.PLAYER:
+			continue
+		var dist: int = absi(slot.position.x - _world_map._start_pos.x) \
+			+ absi(slot.position.y - _world_map._start_pos.y)
+		if dist < anchor_dist:
+			anchor_dist = dist
+			anchor_pos = slot.position
+
+	var chunk_size: int = WorldMap.VISION_CFG.chunk_size if WorldMap.VISION_CFG.chunk_size > 0 \
+		else ChunkManager.DEFAULT_CHUNK_SIZE
+
+	var spawner: ContentSpawner = ContentSpawner.new()
+	spawner.setup(
+		_world_map._schema, gcfg, anchor_pos, chunk_size,
+		_world_map._resource_slots, _world_map._level_slots,
+		_world_map._resource_slot_config_rows, CONTENT_CFG.resource_quota_per_chunk,
+		_world_map._garrison_config, town_pool_rows,
+		Callable(_world_map._renderer, "queue_redraw")
+	)
+	spawner.attach(_world_map._chunk_manager)
+	_world_map._content_spawner = spawner
 
 
 # ─────────────────────────────────────
@@ -851,13 +891,18 @@ func finalize_startup() -> void:
 	# 初始化地图标签字体：使用顶部 const MAIN_FONT（preload 形式，编辑期校验路径）
 	_world_map._label_font = WorldMap.MAIN_FONT
 
-	# M7：开局预置 5 支敌方部队包（在敌方核心影响范围内随机空地）
-	# 必须在资源点铺好之后、首个玩家回合开始之前，避免位置冲突。
+	# M7：开局预置敌方部队包（增援锚周围随机空地；L1.3c 阶段 C 将退役改暗影刷新）
+	# 注（codex P3 修正）：资源 slot 由后续 ContentSpawner 流式撒（落位时避让 _level_slots），
+	# 与本步先后顺序不冲突
 	_deploy_initial_packs_internal()
 
 	# M7：启动首个玩家回合（TickRegistry 跑 M4/M5 tick → emit faction_turn_started(PLAYER)
 	# → _on_faction_turn_started 接管 HUD / reachable 刷新）
 	_world_map._turn_manager.start_faction_turn(Faction.PLAYER)
+
+	# L1.3c 阶段 B：chunk 内容钩子接线——必须在玩家 VisionSource 注册之前完成订阅，
+	# 否则首批 chunk 的 chunk_first_generated 在订阅前发射，初始区域漏撒资源 slot
+	_wire_content_spawner_internal()
 
 	# L1.1 阶段 2：注册玩家 VisionSource + 触发首次 chunk aggregate
 	# 时机：所有子系统就绪 + _unit.position 已定 + 初始 pack 部署完毕；视野启动不影响 spawn 判定

@@ -94,50 +94,8 @@ static func _attach_persistent_slots(
 	schema.persistent_slots = slots
 	return true
 
-## 在已生成的地图上随机放置关卡 Slot（FUNCTION 类型）
-## schema: 目标地图
-## count: 最大放置数量
-## exclude: 需要排除的坐标列表（如起点、终点）
-## rng:    可选的注入 RNG；传 null 时退化为全局 RNG（保留旧调用兼容，但破坏 seed 复现）
-## 返回实际放置的坐标列表
-static func place_level_slots(
-	schema: MapSchema,
-	count: int,
-	exclude: Array[Vector2i],
-	rng: RandomNumberGenerator = null
-) -> Array[Vector2i]:
-	# 收集所有可通行且不在排除列表中的格子
-	var candidates: Array[Vector2i] = []
-	for y in range(schema.height):
-		for x in range(schema.width):
-			var pos: Vector2i = Vector2i(x, y)
-			if exclude.has(pos):
-				continue
-			# 仅在可通行格上放置
-			if not schema.is_passable(x, y):
-				continue
-			# 已有 Slot 的格子跳过
-			if schema.get_slot(x, y) != MapSchema.SlotType.NONE:
-				continue
-			candidates.append(pos)
-
-	# 随机打乱候选列表
-	# 注入 RNG 走 Fisher-Yates 保证 seed 贯穿；未注入则退化全局 RNG（兼容旧调用方）
-	if rng != null:
-		_shuffle_with_rng(candidates, rng)
-	else:
-		candidates.shuffle()
-
-	# 取前 count 个，放置 FUNCTION 类型 Slot
-	var placed: Array[Vector2i] = []
-	var actual_count: int = mini(count, candidates.size())
-	for i in range(actual_count):
-		var pos: Vector2i = candidates[i]
-		schema.set_slot(pos.x, pos.y, MapSchema.SlotType.FUNCTION)
-		placed.append(pos)
-
-	return placed
-
+## L1.3c 阶段 B：原 place_level_slots（全图遍历随机放置 FUNCTION slot）已退役删除——
+## 最后调用方 EC.generate_resource_slots 随资源生成改道 ContentSpawner 一并退役
 # ─────────────────────────────────────────
 # 私有：单次生成
 # ─────────────────────────────────────────
@@ -232,18 +190,3 @@ static func _local_open_count(schema: MapSchema, start: Vector2i, radius: int) -
 			queue.append(neighbor)
 
 	return count
-
-
-# ─────────────────────────────────────────
-# 内部工具：注入 RNG 的 Fisher-Yates 洗牌
-# ─────────────────────────────────────────
-
-## 与 PersistentSlotGenerator._shuffle_with_rng 等价；保留独立副本避免跨模块依赖
-## 用途：place_level_slots 等需要 seed 复现的随机洗牌点
-static func _shuffle_with_rng(arr: Array[Vector2i], rng: RandomNumberGenerator) -> void:
-	for i in range(arr.size() - 1, 0, -1):
-		var j: int = rng.randi_range(0, i)
-		if j != i:
-			var tmp: Vector2i = arr[i]
-			arr[i] = arr[j]
-			arr[j] = tmp

@@ -28,6 +28,11 @@ var schema: ChunkSchema = null
 ## 上次进入 ACTIVE 的回合号；用于诊断 / 后续可挂淘汰策略
 var last_active_turn: int = -1
 
+## 是否已经历过首次 schema 生成（L1.3c 阶段 B）
+## 区分「首次生成」vs「UNLOADED 退化后重建」：静态内容（持久 slot / 资源 slot）只在
+## 首次生成时撒一次（ContentSpawner），重建不重撒——资源被采集后不得随 chunk 重建复活
+var was_ever_generated: bool = false
+
 
 func _init(p_coord: Vector2i = Vector2i.ZERO) -> void:
 	coord = p_coord

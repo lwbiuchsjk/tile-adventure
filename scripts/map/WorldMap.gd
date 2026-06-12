@@ -194,9 +194,6 @@ var _current_cycle_has_enemy_core: bool = false
 
 var _start_pos: Vector2i = Vector2i.ZERO
 
-## 终点坐标（从 map_config 读取）
-var _end_pos: Vector2i = Vector2i.ZERO
-
 ## 流程是否已结束（全部通关或部队被击败）
 var _game_finished: bool = false
 
@@ -318,6 +315,9 @@ var _exploration_coordinator: ExplorationCoordinator = null
 var _vision_system: VisionSystem = null
 var _chunk_manager: ChunkManager = null
 var _player_vision_source: VisionSource = null
+## L1.3c 阶段 B：chunk 流式内容撒点（订阅 chunk_first_generated；
+## 由 MapBootstrap._wire_content_spawner_internal 在 finalize_startup 内创建接线）
+var _content_spawner: ContentSpawner = null
 ## L1.2 Phase 2：据点 + 占领 slot 视野绑定（纯事件驱动；随 reload 释放）
 var _stronghold_vision_binding: StrongholdVisionBinding = null
 
@@ -1217,7 +1217,7 @@ func _on_day_night_phase_changed(phase: int) -> void:
 # 原 _clear_level_slots / _generate_level_slots / _get_tier_plan_for_round 已无调用方，M7 重构时删除
 
 
-## Slot 生成（clear_onetime_resource_slots / generate_resource_slots）已迁出至
+## Slot 生成（clear_onetime_resource_slots；generate_resource_slots 已退役删除）已迁出至
 ## ExplorationCoordinator（批 3 阶段 f）
 ## 当前无调用方（cycle 推进重设计时废弃），保留作 P3 候选
 

@@ -43,6 +43,12 @@ var _chunk_size: int = DEFAULT_CHUNK_SIZE
 ## 参数：coord（chunk 坐标）、new_state、old_state、schema（target=UNLOADED 时为 null）
 signal chunk_state_changed(coord: Vector2i, new_state: int, old_state: int, schema: ChunkSchema)
 
+## 信号：chunk【首次】生成 schema 时发射一次（L1.3c 阶段 B 内容钩子）
+## 与 chunk_state_changed 的区别：退化（UNLOADED）后再激活会重新生成 schema 但不再发本信号
+## （was_ever_generated 守卫）。订阅方：ContentSpawner（持久 slot / 资源 slot 流式撒点）。
+## 发射时机在 chunk_state_changed 之后（状态机已收尾，订阅方副作用不与状态机交错）
+signal chunk_first_generated(coord: Vector2i, schema: ChunkSchema)
+
 
 # ─────────────────────────────────────
 # 生命周期
@@ -159,11 +165,18 @@ func _transition_to(coord: Vector2i, target: int) -> void:
 		_chunks[coord] = rec
 
 	# 按 target 状态处理 schema
+	# L1.3c 阶段 B：记录本次是否触发了【首次】生成（was_ever_generated 翻转点），
+	# 在状态机收尾（chunk_state_changed 发射）之后再发 chunk_first_generated，
+	# 避免订阅方副作用与状态机执行交错
+	var first_generated: bool = false
 	match target:
 		ChunkRecord.State.ACTIVE:
 			# UNLOADED → ACTIVE / DORMANT → ACTIVE：保证 schema 存在
 			if rec.schema == null:
 				rec.schema = ChunkPCG.generate(_world_seed, coord, _config.poi_spawn_rate_per_chunk, _chunk_size)
+				if not rec.was_ever_generated:
+					rec.was_ever_generated = true
+					first_generated = true
 			rec.state = ChunkRecord.State.ACTIVE
 			rec.last_active_turn = _vision.get_current_turn()
 		ChunkRecord.State.DORMANT:
@@ -171,6 +184,9 @@ func _transition_to(coord: Vector2i, target: int) -> void:
 			# UNLOADED → DORMANT（极少见：初始覆盖恰好到 FOG 而无 NORMAL）：也要生成 schema
 			if rec.schema == null:
 				rec.schema = ChunkPCG.generate(_world_seed, coord, _config.poi_spawn_rate_per_chunk, _chunk_size)
+				if not rec.was_ever_generated:
+					rec.was_ever_generated = true
+					first_generated = true
 			rec.state = ChunkRecord.State.DORMANT
 		ChunkRecord.State.UNLOADED:
 			# DORMANT → UNLOADED：丢弃 schema
@@ -178,6 +194,8 @@ func _transition_to(coord: Vector2i, target: int) -> void:
 			rec.state = ChunkRecord.State.UNLOADED
 
 	chunk_state_changed.emit(coord, target, current, rec.schema)
+	if first_generated:
+		chunk_first_generated.emit(coord, rec.schema)
 
 
 # ─────────────────────────────────────

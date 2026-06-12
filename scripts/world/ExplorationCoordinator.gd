@@ -868,56 +868,8 @@ func clear_onetime_resource_slots() -> void:
 	_world_map._resource_slots = {}
 
 
-## 从配置生成本轮资源点
-##
-## 当前无调用方（可能 cycle 推进重设计时废弃），保留作 P3 候选
-func generate_resource_slots() -> void:
-	if _world_map._schema == null or _world_map._resource_slot_config_rows.is_empty():
-		return
-	# 构建排除列表
-	var exclude: Array[Vector2i] = [_world_map._start_pos, _world_map._end_pos]
-	if _world_map._unit != null and not exclude.has(_world_map._unit.position):
-		exclude.append(_world_map._unit.position)
-	# M2：排除持久 slot 占据的格子，避免一次性资源与城建锚 slot 重叠
-	for ps in _world_map._schema.persistent_slots:
-		if not exclude.has(ps.position):
-			exclude.append(ps.position)
-	# 排除本轮已存在的资源点（M1 重构后无持久分支，本循环仍保留以防多次调用复用）
-	for pos in _world_map._resource_slots:
-		var p: Vector2i = pos as Vector2i
-		if not exclude.has(p):
-			exclude.append(p)
-	# 排除已有关卡位置
-	for pos in _world_map._level_slots:
-		var p: Vector2i = pos as Vector2i
-		if not exclude.has(p):
-			exclude.append(p)
-
-	# 按权重从配置中抽取资源点并放置
-	# 先计算总数量
-	var total_count: int = 0
-	for entry in _world_map._resource_slot_config_rows:
-		var row: Dictionary = entry as Dictionary
-		total_count += int(row.get("count_per_round", "1"))
-
-	# 放置位置（M2 P1#4：注入 _world_rng 保证 seed 复现）
-	var placed: Array[Vector2i] = MapGenerator.place_level_slots(_world_map._schema, total_count, exclude, _world_map._world_rng)
-
-	# 按配置行顺序分配位置
-	var place_idx: int = 0
-	for entry in _world_map._resource_slot_config_rows:
-		var row: Dictionary = entry as Dictionary
-		var count: int = int(row.get("count_per_round", "1"))
-		for i in range(count):
-			if place_idx >= placed.size():
-				break
-			var rs: ResourceSlot = ResourceSlot.new()
-			rs.position = placed[place_idx]
-			rs.resource_type = int(row.get("resource_type", "0")) as ResourceSlot.ResourceType
-			rs.output_amount = int(row.get("output_amount", "1"))
-			# M1 重构：is_persistent / effective_range 移除，CSV 同步删列
-			_world_map._resource_slots[placed[place_idx]] = rs
-			place_idx += 1
+## L1.3c 阶段 B：原 generate_resource_slots（按轮全图撒资源，长期无调用方）已退役删除——
+## 资源 slot 生成改道 ContentSpawner（chunk 首次生成时 per-chunk 配额流式落位）
 
 
 ## 从敌方部队快照中随机抽取 1 支，转为 TROOP 道具加入背包
