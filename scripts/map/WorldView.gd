@@ -80,11 +80,6 @@ func get_enemy_tier_ratio_rows() -> Array:
 	return _wm.get("_enemy_tier_ratio_rows") as Array
 
 
-## slot 原始地形类型记录（增援写回 FUNCTION 标记前缓存原类型）
-func get_original_slot_types() -> Dictionary:
-	return _wm.get("_original_slot_types") as Dictionary
-
-
 # ─────────────────────────────────────────
 # 命令转发（3 个）—— 转发 WorldMap 公共方法
 # ─────────────────────────────────────────
@@ -267,18 +262,16 @@ func get_visible_tile_rect(padding: int = 2) -> Rect2i:
 
 # ─────────────────────────────────────────
 # 写命令端（MVP-δ 阶段 1 追加）—— 转发 WorldMap 私有方法
-# EnemyMovement 不再直接 mutate 外部引用（_level_slots / _schema / _original_slot_types），
+# EnemyMovement 不再直接 mutate 外部引用（_level_slots / _schema），
 # 改为通过本段写命令把整组原子写一次性提交到 WorldMap 内部。
 # ─────────────────────────────────────────
 
-## 提交一次敌方关卡移动（包整组 7 行原子写）
+## 提交一次敌方关卡移动
 ## 由 EnemyMovement._process_next_move 在选定新位置后调用
 ##
-## 内部行为（详见 WorldMap._commit_enemy_move 实现）：
-##   - _level_slots erase(old) / set(new, level)
-##   - level.position = new_pos
-##   - _schema.set_slot(old, restored_original_type) / set_slot(new, FUNCTION)
-##   - _original_slot_types erase(old) / 条件 set(new, schema 当前类型)
+## 内部行为（详见 _commit_enemy_move 实现）：
+##   - L1.3c 阶段 D：_level_slots erase(old) / set(new, level) + level.position = new_pos
+##     （schema FUNCTION 双写 + _original_slot_types 恢复机制已退役，_level_slots 唯一权威）
 func commit_enemy_move(level: LevelSlot, old_pos: Vector2i, new_pos: Vector2i) -> void:
 	# WorldMap 二次重构 批 3 阶段 e：转发指向 _exploration_coordinator._commit_enemy_move()
 	# fallback 兼容 _MockWorld（测试 mock 无 EC 字段，但当前测试不触发本路径）

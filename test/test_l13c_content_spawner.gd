@@ -125,7 +125,7 @@ func _test_cross_boundary_order_independence() -> void:
 	_assert(no_dup, "无跨界重复位置")
 
 
-## 4. 资源配额 + FUNCTION 标记 + 采集后不复生
+## 4. 资源配额 + 采集后不复生（L1.3c 阶段 D：_resource_slots 唯一权威源，schema FUNCTION 双写已退役）
 func _test_resource_quota_and_no_respawn() -> void:
 	var ctx: Dictionary = _make_ctx(TEST_SEED + 3)
 	var spawner: ContentSpawner = ctx["spawner"] as ContentSpawner
@@ -135,21 +135,26 @@ func _test_resource_quota_and_no_respawn() -> void:
 	spawner.on_chunk_first_generated(Vector2i(0, 0), null)
 	var quota: int = 2  # 与 _make_ctx 注入一致
 	_assert(resources.size() > 0 and resources.size() <= quota, "资源数 ∈ (0, 配额=%d]（实际 %d）" % [quota, resources.size()])
-	var marker_ok: bool = true
+	# 阶段 D：资源点不再写 schema 标记，断言落点不被写入 _slots（保持稀疏）
+	var schema_clean: bool = true
 	for pos in resources:
 		var p: Vector2i = pos as Vector2i
-		if schema.get_slot(p.x, p.y) != MapSchema.SlotType.FUNCTION:
-			marker_ok = false
-			printerr("  违规: 资源位 %s 无 FUNCTION 标记" % str(p))
-	_assert(marker_ok, "资源位 FUNCTION 标记就位（沿用现行双写约定，阶段 D 清理）")
+		if schema.get_slot(p.x, p.y) != MapSchema.SlotType.NONE:
+			schema_clean = false
+			printerr("  违规: 资源位 %s 不应再写 schema 标记（阶段 D 双写已退役）" % str(p))
+	_assert(schema_clean, "资源位不写 schema 标记（_resource_slots 唯一权威）")
 
-	# 模拟采集：移除一个资源 + 标记复位 → 同 chunk 信号再来（如重复发射）不回填
+	# 模拟采集（真实语义，codex P3）：保留 ResourceSlot + 设 is_collected=true（不删字典条目）——
+	# 与生产代码 ExplorationCoordinator.try_collect_resource_at 一致（_resource_slots 唯一权威，采集态由 is_collected 表达）
 	var first_pos: Vector2i = (resources.keys()[0]) as Vector2i
-	resources.erase(first_pos)
-	schema.set_slot(first_pos.x, first_pos.y, MapSchema.SlotType.NONE)
-	var after_collect: int = resources.size()
+	var first_rs: ResourceSlot = resources[first_pos] as ResourceSlot
+	first_rs.is_collected = true
+	var before_count: int = resources.size()
+	# 同 chunk 信号重复发射：占用判定 _resource_slots.has(first_pos) 仍为 true（已采集 slot 不删）→ 不在该格复生
 	spawner.on_chunk_first_generated(Vector2i(0, 0), null)
-	_assert(resources.size() == after_collect and not resources.has(first_pos), "采集后资源不随重复信号复生")
+	_assert(resources.size() == before_count, "重复信号不新增资源（占用判定生效）")
+	_assert(resources.has(first_pos) and (resources[first_pos] as ResourceSlot).is_collected,
+		"已采集资源点保留且 is_collected=true（不复生、不被覆盖）")
 
 
 ## 5. 确定性：独立 spawner 同 seed 同 chunk → 持久/资源产物一致

@@ -17,7 +17,7 @@ extends RefCounted
 ##
 ## 字段归属（沿用批 1/2 哲学）：
 ##   - WorldMap 字段（_unit / _is_moving / _is_camping / _supply /
-##     _level_slots / _resource_slots / _original_slot_types /
+##     _level_slots / _resource_slots /
 ##     _enemy_movement / _inventory 等）仍声明在 WorldMap.gd
 ##   - 本类通过 `_world_map._xxx = ...` 读写
 ##   - 本类自持 `_world_map` 引用 + 任何探索流程内的临时中间状态
@@ -638,9 +638,9 @@ func try_collect_resource_at(pos: Vector2i) -> void:
 		[entry], add_supply, add_stone_cb, add_item_cb
 	)
 
+	# L1.3c 阶段 D：_resource_slots 唯一权威源，rs.is_collected 标采集态（条目不删保不复生）；
+	# 原 schema set_slot(NONE) 双写已退役（资源点不再写 schema 标记）
 	rs.is_collected = true
-	if _world_map._schema != null:
-		_world_map._schema.set_slot(pos.x, pos.y, MapSchema.SlotType.NONE)
 
 	var applied: Array = outcome.get("applied", []) as Array
 	var dropped: Array = outcome.get("dropped", []) as Array
@@ -715,8 +715,8 @@ func _on_turn_end_settlement() -> void:
 ## 仍传值给保持签名兼容；实际 per-pack 决策不再读取该值（详见 EnemyMovement.gd）
 ## 无可移动 → 直接触发 phase_finished（走 BC._on_enemy_phase_finished → 回 PLAYER）
 ##
-## MVP-δ 阶段 1（2026-05-15）：EnemyMovement 不再持有 _level_slots / _original_slot_types
-## 字典引用，改为通过 _world_view facade 读写。签名相应缩 2 参（旧 9 参 → 新 8 参）。
+## MVP-δ 阶段 1（2026-05-15）：EnemyMovement 不再持有 _level_slots 字典引用，
+## 改为通过 _world_view facade 读写。签名相应缩 2 参（旧 9 参 → 新 8 参）。
 func start_enemy_move_phase() -> void:
 	if _world_map._game_finished or not _world_map._enemy_movement_enabled:
 		_world_map._battle_coordinator._on_enemy_phase_finished()
@@ -742,24 +742,12 @@ func start_enemy_move_phase() -> void:
 ## MVP-δ 阶段 1：敌方关卡移动的原子写提交
 ##
 ## 由 WorldView.commit_enemy_move 转发；EnemyMovement._process_next_move 在选定新位置后调用。
-## 7 行原子写（原 EnemyMovement.gd L329-L339 整组迁过来）：
-##   - _level_slots erase(old) / set(new, level)
-##   - level.position = new_pos（mutate LevelSlot 字段）
-##   - _schema.set_slot(old, restored_original_type)：恢复 old_pos 原始地形
-##   - _original_slot_types erase(old)
-##   - 条件 set _original_slot_types[new] = 当前 schema 类型（首次踩到该格才记录）
-##   - _schema.set_slot(new, FUNCTION)：把 new_pos 标为 FUNCTION（敌方占用语义）
+## L1.3c 阶段 D：_level_slots 为敌方 pack 唯一权威源，移动 = erase(old) + set(new) + mutate position。
+## 原 schema FUNCTION 双写 + _original_slot_types 恢复机制已退役（消费方均直查 _level_slots）。
 func _commit_enemy_move(level: LevelSlot, old_pos: Vector2i, new_pos: Vector2i) -> void:
 	_world_map._level_slots.erase(old_pos)
 	level.position = new_pos
 	_world_map._level_slots[new_pos] = level
-	# 恢复 old_pos 的原始地形类型（敌方占用时记录的 FUNCTION 标记还原）
-	var restored_type: int = _world_map._original_slot_types.get(old_pos, MapSchema.SlotType.NONE) as int
-	_world_map._schema.set_slot(old_pos.x, old_pos.y, restored_type as MapSchema.SlotType)
-	_world_map._original_slot_types.erase(old_pos)
-	if not _world_map._original_slot_types.has(new_pos):
-		_world_map._original_slot_types[new_pos] = _world_map._schema.get_slot(new_pos.x, new_pos.y)
-	_world_map._schema.set_slot(new_pos.x, new_pos.y, MapSchema.SlotType.FUNCTION)
 
 
 ## MVP-δ 阶段 1：敌方对持久 slot 的占据尝试
@@ -856,15 +844,11 @@ func push_battle_victory_event(rewards: Array[ItemData]) -> void:
 
 
 ## 清除所有资源点（每轮次刷新前调用）
-## M1 重构：ResourceSlot 已无持久分支，全部清空并恢复 MapSchema slot 为 NONE；
+## L1.3c 阶段 D：_resource_slots 唯一权威源，整体清空即可；schema 标记双写已退役
 ## 持久 slot 由 PersistentSlot 独立通道维护，不在此处处理
 ##
 ## 当前无调用方（可能 cycle 推进重设计时废弃），保留作 P3 候选
 func clear_onetime_resource_slots() -> void:
-	for pos in _world_map._resource_slots:
-		var p: Vector2i = pos as Vector2i
-		if _world_map._schema != null:
-			_world_map._schema.set_slot(p.x, p.y, MapSchema.SlotType.NONE)
 	_world_map._resource_slots = {}
 
 

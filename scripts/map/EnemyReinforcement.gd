@@ -122,14 +122,9 @@ static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos:
 	pack.troops = generator.generate_troops_for_tier(tier)
 	# rewards 保留空数组——被玩家击败仍可发常规奖励（若 MVP 不需要可保空）
 
-	# 注册到 _level_slots
+	# 注册到 _level_slots（L1.3c 阶段 D：_level_slots 为敌方 pack 唯一权威源；
+	# schema FUNCTION 双写 + _original_slot_types 恢复机制已退役，渲染/寻路/AI 均直查 _level_slots）
 	level_slots[spawn_pos] = pack
-
-	# 更新 MapSchema slot 标记（以便渲染识别为敌方格）
-	var original_types: Dictionary = world_view.get_original_slot_types()
-	if not original_types.has(spawn_pos):
-		original_types[spawn_pos] = schema.get_slot(spawn_pos.x, spawn_pos.y)
-	schema.set_slot(spawn_pos.x, spawn_pos.y, MapSchema.SlotType.FUNCTION)
 
 	return pack
 

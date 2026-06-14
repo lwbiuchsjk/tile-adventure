@@ -619,12 +619,9 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 			pack.remove_defeated_troops()
 			pack.mark_defeated()
 			var lvpos: Vector2i = pack.position
+			# L1.3c 阶段 D：_level_slots 为唯一权威源，erase 即移除 pack；schema FUNCTION 恢复已退役
 			if _world_map._level_slots.has(lvpos):
 				_world_map._level_slots.erase(lvpos)
-			if _world_map._schema != null:
-				var orig_type: int = _world_map._original_slot_types.get(lvpos, MapSchema.SlotType.NONE) as int
-				_world_map._schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
-				_world_map._original_slot_types.erase(lvpos)
 
 		# L1.3a 阶段 C：climax 决战胜 = 通关（→ _on_victory_decided(PLAYER) → VictoryUI）。
 		# 防御（codex P2）：把"通关"严格绑定到"boss 确被击败"——显式校验 defeated_packs 含 climax boss，
@@ -636,7 +633,7 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 		# 持久 slot 战场参与设计 L1.1：撤离分支
 		# defeated_packs 实际是 BattleSession.participating_packs（全部参战敌包）
 		# 对每个 pack 区分两种处置：
-		#   1. troops 全死（current_hp<=0 全部移除后空了）→ 与 VICTORY 同处置（erase + schema 恢复），但不发奖励
+		#   1. troops 全死（current_hp<=0 全部移除后空了）→ 与 VICTORY 同处置（_level_slots erase），但不发奖励
 		#   2. troops 部分残余 → 敌包保留在 _level_slots 原位置，HP / 剩余 troop 已在战斗中实时写入
 		for pack_v in defeated_packs:
 			var pack: LevelSlot = pack_v as LevelSlot
@@ -644,15 +641,12 @@ func _on_battle_session_ended(reason: int, defeated_packs: Array) -> void:
 				continue
 			pack.remove_defeated_troops()
 			if pack.troops.is_empty():
-				# 全灭路径（与 VICTORY 同步处置 _level_slots / _schema）
+				# 全灭路径（与 VICTORY 同处置 _level_slots）
+				# L1.3c 阶段 D：_level_slots 唯一权威源，erase 即移除；schema FUNCTION 恢复已退役
 				pack.mark_defeated()
 				var lvpos: Vector2i = pack.position
 				if _world_map._level_slots.has(lvpos):
 					_world_map._level_slots.erase(lvpos)
-				if _world_map._schema != null:
-					var orig_type: int = _world_map._original_slot_types.get(lvpos, MapSchema.SlotType.NONE) as int
-					_world_map._schema.set_slot(lvpos.x, lvpos.y, orig_type as MapSchema.SlotType)
-					_world_map._original_slot_types.erase(lvpos)
 			# 否则：敌包部分残余,保留在 _level_slots,troops HP 已是战斗结果
 
 		# 核心目标传达 L1.5（H1）：兜底清场胜利已移除——撤离即便清空全部 pack 也不胜利，需占核心

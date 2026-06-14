@@ -267,17 +267,16 @@ func _spawn_resources_for_chunk(coord: Vector2i) -> bool:
 			)
 			if not _schema.is_passable(pos.x, pos.y):
 				continue
+			# L1.3c 阶段 D：占用判定直查实体 dict 单一权威源（_resource_slots/_level_slots/持久 slot）；
+			# 原 schema get_slot != NONE 守卫是被上一行完全覆盖的死代码，随 FUNCTION 双写退役一并删
 			if occupied.has(pos) or _resource_slots.has(pos) or _level_slots.has(pos):
-				continue
-			if _schema.get_slot(pos.x, pos.y) != MapSchema.SlotType.NONE:
 				continue
 			var rs: ResourceSlot = ResourceSlot.new()
 			rs.position = pos
 			rs.resource_type = int(picked_row.get("resource_type", "0")) as ResourceSlot.ResourceType
 			rs.output_amount = int(picked_row.get("output_amount", "1"))
+			# _resource_slots 为资源点唯一权威源（schema RESOURCE/FUNCTION 双写已退役）
 			_resource_slots[pos] = rs
-			# FUNCTION 标记沿用现行双写约定（阶段 D 统一清理，本阶段不另立约定）
-			_schema.set_slot(pos.x, pos.y, MapSchema.SlotType.FUNCTION)
 			added = true
 			break
 	return added

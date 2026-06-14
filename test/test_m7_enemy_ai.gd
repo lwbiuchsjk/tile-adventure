@@ -519,7 +519,6 @@ func _make_world_mock(player_pos: Vector2i) -> Node:
 	var world: _MockWorld = _MockWorld.new()
 	world._schema = schema
 	world._level_slots = {}
-	world._original_slot_types = {}
 	world._unit = unit
 	# 空 VisionSystem：get_tile_state 对未设置格默认返回 SHADOW → 玩家周围环带全暗影，敌人可刷
 	world._vision_system = VisionSystem.new()
@@ -555,8 +554,6 @@ class _MockWorld extends Node:
 	var _schema
 	## 部队包字典（Vector2i → LevelSlot）
 	var _level_slots: Dictionary = {}
-	## slot 原始类型恢复表（M4 增援 / 击败时写入）
-	var _original_slot_types: Dictionary = {}
 	## 玩家单位（UnitData 或 null）
 	var _unit
 	## 视野系统（L1.3c 阶段 C：spawn_batch 暗影环带采样查 is_tile_shadow 用；空实例 → 全图 SHADOW）

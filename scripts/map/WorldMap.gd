@@ -385,8 +385,8 @@ var _explore_action_bar: HBoxContainer = null
 ## 默认 10（约为 enemy_movement_points*1.6，给 1-2 回合反应冗余）
 var _enemy_target_switch_range: int = 10
 
-## 敌方关卡占据位置的原始 SlotType（用于移动后恢复）
-var _original_slot_types: Dictionary = {}
+## L1.3c 阶段 D：_original_slot_types 已退役——敌方 pack 不再写 schema FUNCTION 标记，
+## 无原类型可恢复（_level_slots 为唯一权威源，移动/击败直接 erase）
 
 ## 关卡奖励池原始行数据（缓存，按 round_id 过滤用）
 var _level_reward_pool_rows: Array = []

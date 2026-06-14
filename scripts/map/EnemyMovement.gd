@@ -33,6 +33,9 @@ var _camera: Camera2D = null
 ## 是否正在执行移动阶段
 var _is_moving: bool = false
 
+## L1.3c 回归修复：phase_finished 是否已排入延迟发出（防同帧多终止出口重复 defer/emit）
+var _phase_finish_deferred: bool = false
+
 ## 待移动关卡队列
 var _move_queue: Array[LevelSlot] = []
 
@@ -50,7 +53,7 @@ var _move_tween: Tween = null
 # ─────────────────────────────────────
 
 var _schema: MapSchema = null
-## 世界视图 facade（MVP-δ 阶段 1 引入）—— 取代原 _level_slots / _original_slot_types 字典副本
+## 世界视图 facade（MVP-δ 阶段 1 引入）—— 取代原 _level_slots 字典副本
 ##
 ## EnemyMovement 不再持有任何 WorldMap 私字段引用；所有读访问通过 facade getter，
 ## 所有写操作通过 facade command（commit_enemy_move / try_enemy_occupy_persistent_slot）。
@@ -133,6 +136,7 @@ func start_phase(schema: MapSchema, world_view: WorldView,
 	_protected_zone_range = protected_zone_range
 
 	_is_moving = true
+	_phase_finish_deferred = false   # L1.3c 回归修复：新阶段开始，复位延迟结束守卫
 	_move_queue = _get_sorted_movable_levels()
 	_process_next_move()
 
@@ -336,9 +340,9 @@ func _process_next_move() -> void:
 	var old_pos: Vector2i = level.position
 	var new_pos: Vector2i = move_path[move_path.size() - 1]
 
-	# MVP-δ 阶段 1：7 行原子写收敛到 world_view facade command
-	#   - 字典 erase/set / level.position / schema set_slot 双格 / original_slot_types erase/conditional set
-	#   全部由 WorldMap._commit_enemy_move 在内部一次性执行
+	# MVP-δ 阶段 1：原子写收敛到 world_view facade command
+	#   - L1.3c 阶段 D：_level_slots erase/set + level.position（schema FUNCTION 双写已退役）
+	#   由 EC._commit_enemy_move 在内部一次性执行
 	_world_view.commit_enemy_move(level, old_pos, new_pos)
 
 	# 播放移动动画
@@ -532,6 +536,22 @@ func _finish_phase_internal() -> void:
 	_is_moving = false
 	_moving_level = null
 	_move_queue = []
+	# L1.3c 阶段 C 回归修复（首夜滤镜卡夜，codex P1 补全）：phase_finished 延迟一帧发出。
+	# 病因：start_phase 由 faction_turn_started(ENEMY_1) 信号的 EnemyAI 处理器同步调用；当敌方阶段
+	#   在该调用栈内同步结束（空队列 / 全队路径<2 无法移动 / 全 invalid 等不产生动画的路径），立即
+	#   phase_finished → 同步嵌套 start_faction_turn(PLAYER) → 而 DayNightState 的 faction_turn_started
+	#   处理器（连接顺序在 EnemyAI 之后）最后才跑、用 ENEMY=夜 覆盖了已切到 PLAYER 的昼 → 滤镜卡夜。
+	#   动画路径走 Tween 回调（已在信号 emit 返回后），本就安全；延迟发出统一两类路径、彻底消除重入。
+	# once-guard：_process_next_move 递归 + 多终止出口可能多次进入，防同帧重复 defer / 重复 emit。
+	if _phase_finish_deferred:
+		return
+	_phase_finish_deferred = true
+	call_deferred("_emit_phase_finished")
+
+
+## L1.3c 回归修复：延迟一帧后真正发出 phase_finished（脱离 faction_turn_started 信号调用栈）
+func _emit_phase_finished() -> void:
+	_phase_finish_deferred = false
 	phase_finished.emit()
 
 
