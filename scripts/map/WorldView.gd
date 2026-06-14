@@ -49,11 +49,6 @@ func get_turn_manager() -> TurnManager:
 	return _wm.get("_turn_manager") as TurnManager
 
 
-## 敌方核心 PCG 原始位置（spawn 锚，不查 owner）
-func get_enemy_core_origin_pos() -> Vector2i:
-	return _wm.get("_enemy_core_origin_pos")
-
-
 ## 关卡 slot 字典（position -> LevelSlot）
 func get_level_slots() -> Dictionary:
 	return _wm.get("_level_slots") as Dictionary

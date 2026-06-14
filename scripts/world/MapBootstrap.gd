@@ -12,10 +12,10 @@ const CONTENT_CFG: ContentConfig = preload("res://assets/config/content_config.t
 ##
 ## 启动期职责（每阶段一个方法）：
 ##   阶段 a `load_configs()` ✅ —— CSV 加载 + 数值校验/回退/钳制 + 写入 _world_map 配置字段
-##   阶段 b（未实装）—— cycle 应用 + 地图加载（_apply_cycle_config / _load_pcg / _load_json / _cache_enemy_core_origin_pos）
+##   阶段 b（未实装）—— cycle 应用 + 地图加载（_apply_cycle_config / _load_pcg / _load_json）
 ##   阶段 c（未实装）—— 世界状态创建（_world_rng / _unit / _turn_manager / RunState.ensure_initialized）
 ##   阶段 d（未实装）—— 子系统实例化（_init_subsystems 全段 14 子模块）
-##   阶段 e（未实装）—— 启动末尾（_deploy_initial_enemy_packs / 首回合启动 / OverlayTransitionUI 揭幕）
+##   阶段 e（未实装）—— 启动末尾（首回合启动 / ContentSpawner 接线 / 视野启动 / OverlayTransitionUI 揭幕）
 ##
 ## 字段归属约定：
 ##   WorldMap 的字段（22 子模块字段 + 57 状态字段）仍声明在 WorldMap.gd 内；
@@ -247,16 +247,15 @@ func load_configs() -> void:
 # 阶段 b：cycle 应用 + 地图加载
 # ─────────────────────────────────────
 
-## 阶段 b 入口：cycle 应用 + 起终点读取 + 地图加载 + schema 配置注入 + enemy_core 缓存
+## 阶段 b 入口：cycle 应用 + 起终点读取 + 地图加载 + schema 配置注入
 ## 抽离自 WorldMap._ready 原 L468-L499 区段（含 _apply_cycle_config / _load_pcg /
-## _load_json / _cache_enemy_core_origin_pos 4 个函数）
+## _load_json 3 个函数）
 ##
 ## 内部按顺序：
 ##   1. _apply_cycle_config_internal —— cycle_config 覆盖 self.map_cfg + 写 _world_map._current_cycle_*
 ##   2. 读取出生点首选坐标 → _world_map._start_pos
 ##   3. _load_pcg_internal / _load_json_internal 分流 → 写 _world_map._schema 与 _world_rng
 ##   4. 注入 _world_map._schema.terrain_costs / slot_allowed_terrains
-##   5. _cache_enemy_core_origin_pos_internal —— 缓存 _world_map._enemy_core_origin_pos
 ##
 ## 失败：_world_map._schema 保持 null；调用方 _ready 据此报错跳出
 func load_map() -> void:
@@ -281,10 +280,8 @@ func load_map() -> void:
 	if _world_map._schema != null:
 		_world_map._schema.terrain_costs = terrain_costs
 		_world_map._schema.slot_allowed_terrains = slot_allowed
-
-	# P0 第二阶段：PCG 完成后缓存敌方 CORE_TOWN 原始位置
-	# 供 EnemyReinforcement.spawn_batch 用作 spawn 锚（不查 owner，避免玩家占领后失效）
-	_cache_enemy_core_origin_pos_internal()
+	# L1.3c 阶段 C：敌核心锚缓存已退役——增援改从玩家视野外暗影环带采样（EnemyReinforcement.spawn_batch），
+	# 不再依赖 PCG 后缓存的固定锚位置
 
 
 ## P0 第二阶段（整局节奏重设计）：用 cycle_config.csv 覆盖 map_cfg 的周期级字段
@@ -406,38 +403,6 @@ func _load_json_internal() -> void:
 	_world_map._schema = MapLoader.load_from_file(path)
 	if _world_map._schema == null:
 		push_error("WorldMap: JSON 地图加载失败，路径：" + path)
-
-
-## L1.3c 阶段 A 过渡 shim：敌方增援 spawn 锚 = 距出生点最远的持久 slot 位置
-##
-## 背景：PCG 预置敌方 CORE_TOWN 已退役（L1.3c 拍板"敌方无老家"），原"缓存敌核心位置作 spawn 锚"
-## 语义失效。阶段 C 将把增援锚替换为"玩家视野外暗影环带"（设计 §五阶段 C），本 shim 仅保证
-## A 落地后敌人仍能 spawn、游戏可玩：取距出生点最远的持久 slot（确定性——slot 分布由 seed 唯一决定，
-## 平距时取遍历序首个），敌人从世界边缘方向出现，与"从远方威胁逼近"的体验方向一致。
-##
-## 抽离自 WorldMap._cache_enemy_core_origin_pos
-func _cache_enemy_core_origin_pos_internal() -> void:
-	if _world_map._schema == null:
-		_world_map._enemy_core_origin_pos = EnemyReinforcement.NO_ANCHOR
-		return
-	var spawn: Vector2i = _world_map._start_pos
-	var best_pos: Vector2i = EnemyReinforcement.NO_ANCHOR
-	var best_dist: int = -1
-	for entry in _world_map._schema.persistent_slots:
-		var slot: PersistentSlot = entry as PersistentSlot
-		if slot == null:
-			continue
-		# 跳过玩家方 slot（codex P1 修复）：极端配置下只剩玩家锚点时，
-		# 不能让敌人在玩家出生点附近刷出；无中立 slot 则保持 NO_ANCHOR（增援跳过）
-		if slot.owner_faction == Faction.PLAYER:
-			continue
-		var dist: int = absi(slot.position.x - spawn.x) + absi(slot.position.y - spawn.y)
-		if dist > best_dist:
-			best_dist = dist
-			best_pos = slot.position
-	if best_dist < 0:
-		push_warning("WorldMap: 无中立持久 slot 可作增援锚，保持 NO_ANCHOR；reinforcement 将跳过")
-	_world_map._enemy_core_origin_pos = best_pos
 
 
 ## L1.3c 阶段 B：创建 ContentSpawner 并订阅 chunk 首次生成信号
@@ -661,9 +626,9 @@ func init_world_subsystems() -> void:
 	_world_map._enemy_ai.name = "EnemyAI"
 	_world_map.add_child(_world_map._enemy_ai)
 	_world_map._enemy_ai.init(_world_map._world_view, _world_map._turn_manager)
-	# P0 第二阶段：从 cycle_config 注入当前周期的 reinforcement_interval（覆盖 EnemyAI 默认值）
-	# 早期曾由 build_config 提供 enemy_reinforcement_interval，现已废弃（cycle 级配置优先）
-	_world_map._enemy_ai.reinforcement_interval = _world_map._current_cycle_reinforcement_interval
+	# L1.3c 阶段 C：增援间隔注入已退役——改由 EnemyReinforcement.SPAWN_CFG 实时读（调参面板可调）
+	# cycle_config.csv 的 reinforcement_interval 列 + _current_cycle_reinforcement_interval 字段
+	# 就此 superseded（vestige，留 ③ L1.3d 重做威胁曲线时随 cycle 表一并清）
 
 	# 事件面板 UI（探索体验·F MVP）—— MVP-α.5：切预制件实例化
 	# 挂载位置：所有交互面板之后、VictoryUI 之前——
@@ -874,13 +839,15 @@ func init_world_subsystems() -> void:
 # 阶段 e：启动末尾收口
 # ─────────────────────────────────────
 
-## 抽离自 WorldMap._ready 原 L481-L503（23 行）+ _deploy_initial_enemy_packs 函数（20 行）
+## 抽离自 WorldMap._ready 原 L481-L503（23 行）
 ##
 ## 副作用（按顺序）：
 ##   1. 写 _world_map._label_font（地图标签字体）
-##   2. _deploy_initial_packs_internal —— 预置初始敌方 pack（含 force_tier 末周期强敌逻辑）
-##   3. _world_map._turn_manager.start_faction_turn(PLAYER) —— 启动首个玩家回合
-##   4. OverlayTransitionUI.play_with_blackout_start —— 揭幕过渡（仅应用首次启动）
+##   2. _world_map._turn_manager.start_faction_turn(PLAYER) —— 启动首个玩家回合
+##      （L1.3c 阶段 C：开局预置敌方 pack 已退役，敌人全动态从暗影环带刷出）
+##   3. _wire_content_spawner_internal —— chunk 内容钩子接线（玩家视野源注册前）
+##   4. _exploration_coordinator.init_vision_runtime —— 注册玩家 VisionSource + 首次 chunk aggregate
+##   5. OverlayTransitionUI.play_with_blackout_start —— 揭幕过渡（仅应用首次启动）
 ##
 ## 完成后 WorldMap._ready 收口为 ≤ 12 行：
 ##   var bootstrap: MapBootstrap = MapBootstrap.new(self)
@@ -891,10 +858,9 @@ func finalize_startup() -> void:
 	# 初始化地图标签字体：使用顶部 const MAIN_FONT（preload 形式，编辑期校验路径）
 	_world_map._label_font = WorldMap.MAIN_FONT
 
-	# M7：开局预置敌方部队包（增援锚周围随机空地；L1.3c 阶段 C 将退役改暗影刷新）
-	# 注（codex P3 修正）：资源 slot 由后续 ContentSpawner 流式撒（落位时避让 _level_slots），
-	# 与本步先后顺序不冲突
-	_deploy_initial_packs_internal()
+	# L1.3c 阶段 C：开局预置敌方 pack 已退役——敌人全动态，从玩家视野外暗影环带流式刷出
+	# （EnemyReinforcement.spawn_batch 默认分支）。开局保护期"自然成立"：视野外无敌、
+	# 视野内永不凭空出怪；末周期强敌承诺由 L1.3a climax boss（anchor 模式分支）承接
 
 	# M7：启动首个玩家回合（TickRegistry 跑 M4/M5 tick → emit faction_turn_started(PLAYER)
 	# → _on_faction_turn_started 接管 HUD / reachable 刷新）
@@ -921,27 +887,3 @@ func finalize_startup() -> void:
 		# 例：max_cycles=3, _cycle_index=0 → respawns_left=2 → 显示 3 团火苗
 		var icon_data: Dictionary = {"icon": "🔥", "count": RunState.respawns_left() + 1}
 		OverlayTransitionUI.play_with_blackout_start(lines, icon_data)
-
-
-## M7 开局预置敌方部队包（敌方 AI 设计 §3.1）
-## P0 第二阶段：数量从 cycle_config 当前周期 initial_enemy_pack_count 读
-## 若核心影响范围内空地不足时，能放几支放几支（不强制）
-##
-## P1-1a 修复：has_enemy_core 周期（末周期）强制第 1 个 pack tier=3（最强敌人）
-## 实现"末周期必有强敌"设计承诺（整局节奏重设计_MVP §2.5）；其余 pack 走权重抽
-##
-## 抽离自 WorldMap._deploy_initial_enemy_packs
-func _deploy_initial_packs_internal() -> void:
-	var target_count: int = _world_map._current_cycle_initial_pack_count
-	var placed: int = 0
-	# has_enemy_core 周期：第 1 个 pack 强制 tier=3；其余按权重抽
-	# 通过 force_tier 参数（仅本路径使用）覆盖 EnemyReinforcement 内部权重抽样
-	for i in range(target_count):
-		var force_tier: int = -1
-		if _world_map._current_cycle_has_enemy_core and i == 0:
-			force_tier = 3
-		var pack: LevelSlot = EnemyReinforcement.spawn_batch(_world_map._world_view, force_tier)
-		if pack != null:
-			placed += 1
-	if placed < target_count:
-		push_warning("WorldMap._deploy_initial_enemy_packs: 仅预置 %d / %d 支（核心影响范围空地不足）" % [placed, target_count])

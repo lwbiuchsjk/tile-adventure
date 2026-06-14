@@ -55,7 +55,7 @@ script = ExtResource("2_entry")
 tres_path = "res://assets/config/enemy_spawn_param_resource.tres"
 group = &"玩家与敌方"
 skip_fields = PackedStringArray()
-realtime = false
+realtime = true
 redraw_targets = []
 
 [sub_resource type="Resource" id="entry_quality_upgrade"]

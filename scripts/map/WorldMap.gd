@@ -168,11 +168,8 @@ var _turn_manager: TurnManager = null
 ## 当前可达格集合 {Vector2i: float(消耗)}
 var _reachable_tiles: Dictionary = {}
 
-## 敌方增援 spawn 锚（L1.3c 阶段 A 过渡 shim：距出生点最远的持久 slot 位置；
-## 阶段 C 将替换为"玩家视野外暗影环带"采样，本字段届时退役）
-## 在 _load_pcg 之后由 MapBootstrap._cache_enemy_core_origin_pos_internal 写入
-## 哨兵：NO_ANCHOR = 未缓存/无 slot（出生居中后负坐标合法，不能用 (-1,-1)）
-var _enemy_core_origin_pos: Vector2i = EnemyReinforcement.NO_ANCHOR
+## L1.3c 阶段 C：敌方增援 spawn 锚字段已退役——增援改从玩家视野外暗影环带采样
+## （EnemyReinforcement.spawn_batch 默认分支直接以玩家位置 + 环带半径定位，不再缓存固定锚）
 
 ## P0 第二阶段：周期级配置原始行数据（按 cycle_index 索引）
 var _cycle_config_rows: Array = []
@@ -461,7 +458,10 @@ const BATTLE_PARAM_CFG: BattleParamResource = preload("res://assets/config/battl
 ## 整局 / 玩家 / 敌方生成 / 分数 数值参数（MVP-D D.2 批 2：迁自 run/player/enemy_spawn/score_config.csv）
 const RUN_PARAM_CFG: RunParamResource = preload("res://assets/config/run_param_resource.tres")
 const PLAYER_PARAM_CFG: PlayerParamResource = preload("res://assets/config/player_param_resource.tres")
-const ENEMY_SPAWN_PARAM_CFG: EnemySpawnParamResource = preload("res://assets/config/enemy_spawn_param_resource.tres")
+# L1.3c 阶段 C：改 static var（非 const）——entry_enemy_spawn realtime=true，增援 ring/cap 字段
+# 经 EnemyReinforcement.SPAWN_CFG 实时读；本引用喂 init_from_config（troop_count 启动拷入 generator，
+# 仍 init-once、改值需重启），保持 var preload 一致性以满足面板覆盖校验
+static var ENEMY_SPAWN_PARAM_CFG: EnemySpawnParamResource = preload("res://assets/config/enemy_spawn_param_resource.tres")
 const SCORE_PARAM_CFG: ScoreParamResource = preload("res://assets/config/score_param_resource.tres")
 
 ## 经济类数值参数（MVP-D D.2 批 3：迁自 quality_upgrade/build/level_reward/turn_reward/supply/inventory/difficulty_config.csv）

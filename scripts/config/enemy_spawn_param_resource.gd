@@ -11,3 +11,15 @@ extends Resource
 @export_range(1, 20, 1) var troop_count_min: int = 1
 ## 单关卡敌方部队数量上限
 @export_range(1, 20, 1) var troop_count_max: int = 3
+
+## L1.3c 阶段 C：增援间隔（敌方回合数）——每 N 个敌方回合从暗影环带刷 1 批增援
+## 原由 cycle_config.csv 注入（威胁数值，设计 §五标留 ③）；为调参验证迁入 Resource 实时可调
+## ⚠ ③ L1.3d 重做威胁曲线（扎营×视野分段表）时，本字段并入或退役
+@export_range(1, 30, 1) var enemy_reinforcement_interval: int = 5
+## L1.3c 阶段 C：敌方 pack 全局上限——场上敌方 pack 数 ≥ 此值时常规增援停刷
+## 结构性参数（参与刷怪节奏，重启生效）。注：climax boss 不受此上限约束（sudden-death 必现强敌）
+@export_range(1, 50, 1) var enemy_pack_global_cap: int = 12
+## L1.3c 阶段 C：暗影环带增援内半径（曼哈顿距，玩家视野半径外起算，保证敌人"从暗影中来"）
+@export_range(1, 30, 1) var enemy_spawn_ring_min: int = 6
+## L1.3c 阶段 C：暗影环带增援外半径（曼哈顿距上界，增援采样范围的外圈）
+@export_range(2, 40, 1) var enemy_spawn_ring_max: int = 10

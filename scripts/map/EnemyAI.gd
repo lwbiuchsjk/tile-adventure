@@ -18,7 +18,8 @@ extends Node
 ## 解耦方式：
 ##   作为 Node 挂在 WorldMap 下，通过 init(world_view) 注入 WorldView facade（MVP-β）
 ##   选择 Node 风格（vs 静态类）的原因：需要连接 TurnManager 信号 + 持有对 EnemyMovement / WorldMap 的直接引用
-##   配置类数据：stone_per_turn 从 build_config.csv 读取；reinforcement_interval 由 WorldMap 从 cycle_config.csv 注入（P0 第二阶段）
+##   配置类数据：stone_per_turn 从 build_config.csv 读取；增援间隔（L1.3c 阶段 C）改由
+##   EnemyReinforcement.SPAWN_CFG.enemy_reinforcement_interval 实时读（调参面板可调），原 cycle_config 注入已退役
 ##
 ## MVP 边界：
 ##   - 敌方 AI 只对 ENEMY_1 势力生效；多敌方扩展按 Faction.ENEMY_N 顺延
@@ -29,8 +30,8 @@ extends Node
 ## 每敌方回合石料入账（配置化，默认 3，见敌方 AI 设计 §8.2）
 var stone_per_turn: int = 3
 
-## 增援间隔（敌方回合数，默认 5，见 §3.2）
-var reinforcement_interval: int = 5
+## L1.3c 阶段 C：增援间隔已迁出实例字段——改由 EnemyReinforcement.SPAWN_CFG 实时读
+## （调参面板可调，realtime=true）；原 cycle_config 注入路径退役
 
 ## WorldView facade 引用（init 时注入）—— AI 访问世界的唯一入口（MVP-β）
 ## 强类型 against WorldView：访问点编译期可校验，不再字符串穿透 WorldMap 私字段
@@ -49,9 +50,9 @@ func init(world_view: WorldView, turn_manager: TurnManager) -> void:
 
 
 ## 从 build_config.csv 加载数值（可选，不传则用默认值）
+## 注（L1.3c 阶段 C）：增援间隔已迁至 EnemyReinforcement.SPAWN_CFG，不再在此读
 func load_config(build_cfg: Dictionary) -> void:
 	stone_per_turn = int(build_cfg.get("enemy_stone_per_turn", str(stone_per_turn)))
-	reinforcement_interval = int(build_cfg.get("enemy_reinforcement_interval", str(reinforcement_interval)))
 
 
 # ─────────────────────────────────────────
@@ -75,14 +76,16 @@ func _on_faction_turn_started(faction: int) -> void:
 # 步骤 2：增援判定
 # ─────────────────────────────────────────
 
-## 每 reinforcement_interval 个敌方回合生成 1 批增援
+## 每 enemy_reinforcement_interval 个敌方回合生成 1 批增援
 ## turn_index 从 TurnManager.enemy_faction_turn_count 读；注意 start_faction_turn 在触发信号前已 +1，
 ## 故此处读到的是"本回合计数"（首个敌方回合 = 1）
+## L1.3c 阶段 C：间隔从 EnemyReinforcement.SPAWN_CFG 实时读（调参面板可调）；maxi(1,...) 防除零
 func _step_reinforcement() -> void:
 	if _world_view == null or _world_view.get_turn_manager() == null:
 		return
+	var interval: int = maxi(1, EnemyReinforcement.SPAWN_CFG.enemy_reinforcement_interval)
 	var count: int = _world_view.get_turn_manager().enemy_faction_turn_count
-	if count > 0 and count % reinforcement_interval == 0:
+	if count > 0 and count % interval == 0:
 		EnemyReinforcement.spawn_batch(_world_view)
 
 

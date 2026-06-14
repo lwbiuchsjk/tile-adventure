@@ -6,11 +6,11 @@ extends RefCounted
 ##   tile-advanture-design/城建锚实装/M7_敌方AI.md §范围「增援」
 ##   tile-advanture-design/敌方AI基础行为设计.md §3.2 / §3.3 增援生成规则
 ##
-## 规则：
+## 规则（L1.3c 阶段 C 起）：
 ##   - 触发时机：每 5 敌方回合（由 EnemyAI._step_reinforcement 决定，本类不判断时机）
-##   - 位置：敌方核心 persistent slot 的影响范围内（曼哈顿距离 ≤ influence_range）
-##     且 is_passable 地形、无部队包 / 玩家单位 / 持久 slot 占用的空地
-##   - 数量：MVP 一批 1 个 LevelSlot
+##   - 位置：玩家视野外暗影环带——视野态 == SHADOW ∧ 距玩家 ∈ [ring_min, ring_max] ∧ 地形可走
+##     ∧ 无部队包 / 玩家单位 / 持久 slot 占用的空地（敌人"从黑暗中、从远方"出现）
+##   - 数量：单批 1 个 LevelSlot；场上敌方 pack 数 ≥ enemy_pack_global_cap 时停刷
 ##   - 随机池：复用 enemy_troop_pool.csv（通过 EnemyTroopGenerator.generate_troops）
 ##
 ## 静态纯函数；所有状态通过 WorldView facade 读写（MVP-β）
@@ -18,23 +18,36 @@ extends RefCounted
 ## 无效锚哨兵（L1.3c 阶段 A：出生居中后负坐标合法，不能再用 (-1,-1)/"x<0" 表示无效锚）
 const NO_ANCHOR: Vector2i = Vector2i(-2147483648, -2147483648)
 
+## L1.3c 阶段 C：敌方生成参数（全局上限 + 暗影环带半径）
+## 用 static var preload（非 const）：调参面板 entry_enemy_spawn 设 realtime=true，
+## 面板反射 set 需避开 const 的编译期内联（D5 const cache bug）——static var 直读运行时值，
+## 拖动滑块即时影响下一次 spawn_batch（cap / ring 每拍重读，无需重启）
+static var SPAWN_CFG: EnemySpawnParamResource = preload("res://assets/config/enemy_spawn_param_resource.tres")
+
 
 ## 生成一批增援并注入 WorldView 暴露的 _level_slots 字典
 ## world_view: WorldView facade（强类型，访问点编译期可校验 —— MVP-β）
 ## force_tier: -1（默认）= 按 cycle 加权抽 tier；≥ 0 = 强制使用指定 tier（跳过抽样）
-##             用于 P1-1a 修复：末周期 initial deploy 第 1 个 pack 强制 tier=3 保证最强敌人出现
-## 返回：实际 spawn 的 LevelSlot；未找到空地 / 配置缺失时返回 null
+##             climax boss 走 anchor 模式分支时传 force_tier=3 保证最强敌人出现
+## 返回：实际 spawn 的 LevelSlot；无合法空地 / 触顶上限 / 配置缺失时返回 null
 ##
-## P0 第二阶段（整局节奏重设计）：
-##   - spawn 锚改为 world_view.get_enemy_core_origin_pos()（PCG 缓存的原始位置，不查 owner）
-##     原因：玩家占领前两周期 CORE_TOWN 后 owner 翻转，按 owner 查找会失效；用原始位置保证 spawn 持续
+## tier 抽样（整局节奏重设计，威胁数值仍读 cycle 冻结表，递增曲线留 ③ L1.3d）：
 ##   - tier 按当前 cycle 从 world_view.get_enemy_tier_ratio_rows() 加权抽样（默认路径）
-##   - force_tier ≥ 0 时跳过权重抽样直接使用（initial deploy 末周期强制 tier 3）
+##   - force_tier ≥ 0 时跳过权重抽样直接使用
 ##
 ## L1.3a 阶段 C：新增可选 anchor_pos + anchor_range——指定 spawn 锚点（玩家/据点附近），
 ## 用于 climax boss"防守向·向玩家进军"。anchor_pos 有效（≠ NO_ANCHOR）且 anchor_range > 0 时
-## 以锚点 + 半径取空地；否则退回默认（增援锚位置 + influence_range，常规增援路径不变）。
+## 以锚点 + 半径取空地；否则走默认增援分支。
 ## L1.3c 阶段 A：锚有效性判定从"x/y ≥ 0"改为哨兵比较——出生居中后负坐标是合法世界坐标。
+##
+## L1.3c 阶段 C：默认增援分支重写——敌人不再从"缓存的敌核心锚"刷出，而是从
+## "玩家视野外暗影环带"采样（视野态 == SHADOW ∧ 距玩家 ∈ [ring_min, ring_max] ∧ 地形可走）。
+## 体验：敌人永远从黑暗中、从远方向玩家走来，视野内绝不凭空出怪。另加全局 pack 上限守卫。
+## ⚠ 锚语义边界（设计 §五阶段 C ⚠ 块）：两条锚分支语义相反且都保留——
+##   - 默认锚分支（本函数 else）：常规增援，"从远方暗影中来"（玩家视野外 SHADOW 环带）；
+##   - anchor 模式分支（调用方显式传 anchor_pos/anchor_range，climax boss 用）：boss"向玩家逼近"，
+##     锚在玩家/据点附近，本阶段不动。
+##   全局 pack 上限只作用于默认锚分支，climax boss（sudden-death 必现强敌）不受限。
 static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos: Vector2i = NO_ANCHOR, anchor_range: int = -1) -> LevelSlot:
 	if world_view == null:
 		return null
@@ -44,42 +57,36 @@ static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos:
 		push_warning("EnemyReinforcement.spawn_batch: _schema 未初始化")
 		return null
 
-	# spawn 中心 + 半径：锚点模式（L1.3a climax）走 anchor，否则走默认增援锚
-	var spawn_center: Vector2i
-	var spawn_radius: int
-	if anchor_pos != NO_ANCHOR and anchor_range > 0:
-		# L1.3a 阶段 C：按指定锚点（玩家/据点）spawn，boss 在其附近逼近
-		spawn_center = anchor_pos
-		spawn_radius = anchor_range
-	else:
-		# 默认增援锚：WorldMap 缓存的锚位置（L1.3c 阶段 A 过渡 shim = 距出生点最远的持久 slot；
-		# 阶段 C 将替换为"玩家视野外暗影环带"）
-		var core_origin: Vector2i = world_view.get_enemy_core_origin_pos()
-		if core_origin == NO_ANCHOR:
-			push_warning("EnemyReinforcement.spawn_batch: 增援锚未缓存（PCG 后应有效），跳过本次")
-			return null
-		# 查锚点上的 PersistentSlot 拿 influence_range 作半径（锚是普通 TOWN/VILLAGE 时
-		# influence_range 可能很小，取下限 4 保证有足够空地候选）
-		var anchor_slot: PersistentSlot = _find_slot_at(schema.persistent_slots, core_origin)
-		if anchor_slot == null:
-			push_warning("EnemyReinforcement.spawn_batch: 锚位置 %s 未找到 PersistentSlot" % core_origin)
-			return null
-		spawn_center = core_origin
-		spawn_radius = maxi(4, anchor_slot.influence_range)
-
-	# 收集范围内的可用空地
 	var level_slots: Dictionary = world_view.get_level_slots()
 	var resource_slots: Dictionary = world_view.get_resource_slots()
 	var unit: UnitData = world_view.get_unit()
 	# 占位哨兵用 NO_ANCHOR（codex P2 修复）：负坐标合法后 (-1,-1) 是真实世界格，会误判占用
 	var unit_pos: Vector2i = unit.position if unit != null else NO_ANCHOR
 
-	var candidates: Array[Vector2i] = _find_passable_empty_tiles(
-		schema, spawn_center, spawn_radius,
-		level_slots, resource_slots, unit_pos
-	)
+	# 候选空地收集：锚点模式（climax）走菱形邻域；默认模式走玩家视野外暗影环带
+	var candidates: Array[Vector2i]
+	if anchor_pos != NO_ANCHOR and anchor_range > 0:
+		# L1.3a/L1.3c：anchor 模式分支（climax boss 向玩家逼近）——不受全局上限约束、不走暗影环带
+		candidates = _find_passable_empty_tiles(
+			schema, anchor_pos, anchor_range,
+			level_slots, resource_slots, unit_pos
+		)
+	else:
+		# L1.3c 阶段 C：默认增援分支——玩家视野外暗影环带采样
+		# 全局 pack 上限守卫（仅本分支；触顶停刷，敌人数量不无限膨胀）
+		if _count_enemy_packs(level_slots) >= SPAWN_CFG.enemy_pack_global_cap:
+			return null
+		# 无玩家单位时无法定位环带（理论上不应发生）——静默跳过本拍
+		if unit == null:
+			return null
+		candidates = _find_shadow_ring_tiles(
+			world_view, schema, unit.position,
+			SPAWN_CFG.enemy_spawn_ring_min, SPAWN_CFG.enemy_spawn_ring_max,
+			level_slots, resource_slots
+		)
+
 	if candidates.is_empty():
-		push_warning("EnemyReinforcement.spawn_batch: spawn 中心 %s 半径 %d 范围内无空地，跳过本次" % [spawn_center, spawn_radius])
+		# 暗影环带暂无合法格（视野全亮 / 被占满）是常态，静默跳过本拍，不刷 warning
 		return null
 
 	# 随机选一格
@@ -131,16 +138,59 @@ static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos:
 # 内部工具
 # ─────────────────────────────────────────
 
-## P0 第二阶段：按位置查 persistent_slot（不查 owner）
-## 替代旧的 _find_enemy_core(查 owner=ENEMY_1)；spawn 锚改为原始位置后无需 owner 过滤
-static func _find_slot_at(persistent_slots: Array, pos: Vector2i) -> PersistentSlot:
-	for entry in persistent_slots:
-		var slot: PersistentSlot = entry as PersistentSlot
-		if slot == null:
+## L1.3c 阶段 C：统计场上敌方 pack 数（全局上限守卫用）
+## 仅计 _level_slots 中 faction == ENEMY_1 的 LevelSlot；climax boss 也计入（仅占 1，不影响语义）
+static func _count_enemy_packs(level_slots: Dictionary) -> int:
+	var n: int = 0
+	for slot_v in level_slots.values():
+		var slot: LevelSlot = slot_v as LevelSlot
+		if slot != null and slot.faction == Faction.ENEMY_1:
+			n += 1
+	return n
+
+
+## L1.3c 阶段 C：玩家视野外暗影环带候选格收集
+## 条件全满足才入选：曼哈顿距玩家 ∈ [ring_min, ring_max] ∧ 视野态 == SHADOW（玩家不可见）
+##   ∧ 地形可走（schema.is_passable 路由 ChunkPCG 纯函数直算，不触发 chunk 加载）∧ 无占用
+## 体验保证：敌人只从玩家看不见的远方暗影中刷出，视野内永不凭空出怪
+static func _find_shadow_ring_tiles(
+	world_view: WorldView, schema, player_pos: Vector2i,
+	ring_min: int, ring_max: int,
+	level_slots: Dictionary, resource_slots: Dictionary
+) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	# 预扫描 persistent_slots 占用的格
+	var persistent_occupied: Dictionary = {}
+	for entry in schema.persistent_slots:
+		var ps: PersistentSlot = entry as PersistentSlot
+		if ps != null:
+			persistent_occupied[ps.position] = true
+
+	# 曼哈顿环带枚举：外圈用 ring_max 限定行/列范围，内圈用 ring_min 剔除近身格
+	for dy in range(-ring_max, ring_max + 1):
+		var dx_max: int = ring_max - absi(dy)
+		if dx_max < 0:
 			continue
-		if slot.position == pos:
-			return slot
-	return null
+		for dx in range(-dx_max, dx_max + 1):
+			var dist: int = absi(dx) + absi(dy)
+			if dist < ring_min:
+				continue   # 环带内圈：距玩家太近（视野内/边缘），跳过
+			var pos: Vector2i = Vector2i(player_pos.x + dx, player_pos.y + dy)
+			# 地形不可通行 → 跳过（无限模式路由 ChunkPCG 任意坐标可查）
+			if not schema.is_passable(pos.x, pos.y):
+				continue
+			# 必须落在暗影（玩家不可见）—— "从黑暗中出现"的体验红线
+			if not world_view.is_tile_shadow(pos):
+				continue
+			# 占用判定：_level_slots 任意状态 / _resource_slots / persistent_slot
+			if level_slots.has(pos):
+				continue
+			if resource_slots != null and resource_slots.has(pos):
+				continue
+			if persistent_occupied.has(pos):
+				continue
+			result.append(pos)
+	return result
 
 
 ## P0 第二阶段：按当前 cycle 从 tier_ratio 加权抽 tier

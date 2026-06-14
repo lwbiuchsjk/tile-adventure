@@ -18,6 +18,7 @@ func _init() -> void:
 
 	_test_upgrade_priority_cmp()
 	_test_reinforcement_spawn()
+	_test_reinforcement_global_cap()
 	_test_reinforcement_trigger_condition()
 	_test_greedy_upgrade_exhaust_stone()
 	_test_full_entry_via_faction_signal()
@@ -66,23 +67,50 @@ func _test_upgrade_priority_cmp() -> void:
 	ai.queue_free()
 
 
-## 2. EnemyReinforcement.spawn_batch：在敌方核心影响范围内生成 LevelSlot
+## 2. EnemyReinforcement.spawn_batch（L1.3c 阶段 C）：默认分支从玩家视野外暗影环带采样
+##    断言落点落在 [ring_min, ring_max] 环带内、视野态为 SHADOW、已注册 _level_slots
 func _test_reinforcement_spawn() -> void:
 	print("-- 增援生成")
 
-	var world_mock: Node = _make_world_mock(Vector2i(10, 10), 3)
+	# 玩家在 (16,16)；mock VisionSystem 空 _tile_state → 全图默认 SHADOW（敌人可刷）
+	var world_mock: Node = _make_world_mock(Vector2i(16, 16))
+	var view: WorldView = _wrap_world(world_mock)
+	var cfg: EnemySpawnParamResource = EnemyReinforcement.SPAWN_CFG
 
-	var pack: LevelSlot = EnemyReinforcement.spawn_batch(_wrap_world(world_mock))
+	var pack: LevelSlot = EnemyReinforcement.spawn_batch(view)
 	_assert(pack != null, "生成 LevelSlot 成功")
 	if pack != null:
 		_assert(pack.faction == Faction.ENEMY_1,         "部队包归属 ENEMY_1")
 		_assert(pack.state == LevelSlot.State.UNCHALLENGED, "状态为 UNCHALLENGED")
-		# 位置应在曼哈顿距离 ≤ 3 的核心影响范围内
-		var dist: int = absi(pack.position.x - 10) + absi(pack.position.y - 10)
-		_assert(dist <= 3, "位置在核心影响范围内（曼哈顿距离 ≤ 3）")
+		# 位置应落在玩家视野外暗影环带 [ring_min, ring_max] 内（曼哈顿距）
+		var dist: int = absi(pack.position.x - 16) + absi(pack.position.y - 16)
+		_assert(dist >= cfg.enemy_spawn_ring_min and dist <= cfg.enemy_spawn_ring_max,
+			"落点在暗影环带 [%d,%d] 内（实测 dist=%d）" % [cfg.enemy_spawn_ring_min, cfg.enemy_spawn_ring_max, dist])
+		# 落点必须是玩家不可见的 SHADOW 格（"从黑暗中出现"红线）
+		_assert(view.is_tile_shadow(pack.position), "落点视野态为 SHADOW")
 		# 位置应已注册到 _level_slots 字典
 		var level_slots: Dictionary = world_mock.get("_level_slots") as Dictionary
 		_assert(level_slots.has(pack.position), "_level_slots 已注册新 pack")
+
+	world_mock.queue_free()
+
+
+## 2b. L1.3c 阶段 C：全局 pack 上限守卫——场上敌方 pack 数 ≥ cap 时默认分支停刷
+func _test_reinforcement_global_cap() -> void:
+	print("-- 增援全局上限")
+
+	var world_mock: Node = _make_world_mock(Vector2i(16, 16))
+	var view: WorldView = _wrap_world(world_mock)
+	var cfg: EnemySpawnParamResource = EnemyReinforcement.SPAWN_CFG
+	var level_slots: Dictionary = world_mock.get("_level_slots") as Dictionary
+
+	# 预填 cap 个敌方 pack（位置任意，仅触发计数）
+	for i in range(cfg.enemy_pack_global_cap):
+		var filler: LevelSlot = _make_level_slot(Vector2i(i, 31), Faction.ENEMY_1)
+		level_slots[filler.position] = filler
+
+	var pack: LevelSlot = EnemyReinforcement.spawn_batch(view)
+	_assert(pack == null, "触顶上限后默认分支停刷（返回 null）")
 
 	world_mock.queue_free()
 
@@ -473,7 +501,9 @@ func _wrap_world(mock: Object) -> WorldView:
 
 ## 构造一个"EnemyReinforcement"可用的 world mock
 ## 敌方核心 @ core_pos，influence_range = core_range，无其他占用
-func _make_world_mock(core_pos: Vector2i, core_range: int) -> Node:
+## L1.3c 阶段 C：mock 构造改为以玩家位置为锚——增援默认分支从玩家视野外暗影环带采样
+## player_pos：玩家单位位置（环带中心）；mock VisionSystem 空 _tile_state → 全图默认 SHADOW
+func _make_world_mock(player_pos: Vector2i) -> Node:
 	# 真实 MapSchema，32×32 全平地
 	var schema: MapSchema = MapSchema.new()
 	schema.init(32, 32)
@@ -481,24 +511,18 @@ func _make_world_mock(core_pos: Vector2i, core_range: int) -> Node:
 	schema.terrain_costs = {
 		MapSchema.TerrainType.FLATLAND: 1.0,
 	}
-	# 放敌方核心 persistent slot
-	var core: PersistentSlot = PersistentSlot.new()
-	core.type = PersistentSlot.Type.CORE_TOWN
-	core.level = 3
-	core.owner_faction = Faction.ENEMY_1
-	core.position = core_pos
-	core.influence_range = core_range
-	schema.persistent_slots = [core]
+	schema.persistent_slots = []
 
 	var unit: UnitData = UnitData.new()
-	unit.position = Vector2i(-1, -1)    # 玩家远离核心
+	unit.position = player_pos
 
 	var world: _MockWorld = _MockWorld.new()
 	world._schema = schema
 	world._level_slots = {}
 	world._original_slot_types = {}
 	world._unit = unit
-	world._enemy_core_origin_pos = core_pos
+	# 空 VisionSystem：get_tile_state 对未设置格默认返回 SHADOW → 玩家周围环带全暗影，敌人可刷
+	world._vision_system = VisionSystem.new()
 	world._world_rng = RandomNumberGenerator.new()
 	world._world_rng.seed = 42
 	# EnemyTroopGenerator：用真实配置
@@ -535,8 +559,8 @@ class _MockWorld extends Node:
 	var _original_slot_types: Dictionary = {}
 	## 玩家单位（UnitData 或 null）
 	var _unit
-	## 敌方核心 PCG 原始位置（P0 第二阶段缓存，EnemyReinforcement.spawn_batch 用作 spawn 锚）
-	var _enemy_core_origin_pos: Vector2i = Vector2i(-1, -1)
+	## 视野系统（L1.3c 阶段 C：spawn_batch 暗影环带采样查 is_tile_shadow 用；空实例 → 全图 SHADOW）
+	var _vision_system: VisionSystem = null
 	## 敌方 tier 配比配置行（P0 第二阶段，EnemyReinforcement.spawn_batch 按 cycle 抽 tier 用）
 	var _enemy_tier_ratio_rows: Array = []
 	## 共享 RNG
