@@ -99,119 +99,33 @@ Godot 4.6，GDScript，Git 版本控制
 
 ### 实装任务包的八字段模板
 
-交付其他 agent / 大模型进行实装时，每个模块文档包含：
-
-1. **目标** —— 一句话陈述本模块要完成什么
-2. **需求来源** —— 索引到设计文档具体锚点，不展开原文
-3. **范围** —— 分"覆盖"和"不覆盖"（分工给下游模块）两列
-4. **前置依赖** —— 明确 Mx 完成条件
-5. **交付物** —— 新增 / 修改的文件路径 + 关键类 / 函数签名示意
-6. **实现路径提示** —— 现状代码基准（`scripts/xxx.gd:LN`）+ 推荐改动顺序
-7. **验收标准** —— checkbox 列表，可逐条验证
-8. **不在本模块解决** —— 引用《待跟踪事项索引》对应优先级项，明确分工
-
-模板参考：`tile-advanture-design/城建锚实装/M1_基础数据层.md`
+大型 MVP 跨模块发包时，每个模块文档按八字段组织：目标 / 需求来源（锚到设计文档，不展开原文）/ 范围（覆盖·不覆盖两列）/ 前置依赖 / 交付物（文件路径 + 关键签名）/ 实现路径提示（`scripts/xxx.gd:LN` + 改动顺序）/ 验收标准（checkbox）/ 不在本模块解决（引用《待跟踪索引》分工）。完整模板见 [[城建锚实装/M1_基础数据层]]。
 
 ### 跨文档待跟踪事项索引
 
-设计文档中涉及"备注 / 后续关注 / 暂搁置 / 扩展备忘"的条目，统一汇总到 `待跟踪事项索引.md`，按四级优先级分类：
-
-- **P0 待补**：MVP 落地前或实跑后必须选型 / 补齐，否则体验或机制断裂
-- **P1 实现阶段决策**：MVP 落地时由实现自然给出答案（非设计问题）
-- **P2 暂搁置**：方向明确但主动延后，MVP 外议题
-- **P3 扩展备忘**：未来扩展预留，现阶段不需要动
-
-条目归档时整条移除（不保留历史，git blame 即可追溯）。参考：`tile-advanture-design/待跟踪事项索引.md`
+设计文档的"备注 / 后续关注 / 暂搁置 / 扩展备忘"统一汇总到 `待跟踪事项索引.md`，按 P0 待补 / P1 实现阶段决策 / P2 暂搁置 / P3 扩展备忘 四级分类（定义见该文件头）。条目归档时整条移除（git blame 追溯）。
 
 ## 代码调整与 Codex 协作
 
-适用于"主会话设计 + Codex 实装"工作模式，MVP-α 三阶段（commit 3aa40f8 / 214fa6c / b9276cd）反复验证有效。
+"主会话设计 + Codex 实装"模式（MVP-α 验证有效）。**机械型改动优先委派 Codex**（机械精确删除 / 大量改动 + grep 可清零 / 边界明确无需语义判断；省 token + 跨模型独立审视）；**风险敏感 / 精细 / Edit 复用度高的小批量主会话自己做**。委派走 `codex:codex-rescue` 子代理。
 
-### 1. 委派判断维度
+**Codex prompt 必备字段**（缺则漂移）：① 任务背景 + 设计文档锚点；② 任务范围（编号到 §x.y，不写"按设计文档做"）；③ 强制约束块——绝对禁止任何 git 操作 / 范围严格限定 / section divider 顶格不缩进 / 以函数名+grep 为准不死扣行号；④ 验收标准（grep 清零 + headless parse + 测试套件）；⑤ 返回报告格式（完成度/grep/parse/意外发现/遗留）；⑥ 模型="最新 GPT 模型"。
 
-按全局指令延伸的"机械型 vs 权衡型"判断，**机械型优先委派 Codex**（节省主会话 token + 跨模型独立审视）：
+**委派后核实序列**：`git diff --stat` → 关键文件 diff 比对设计逐项 → grep 清零（分活代码/注释残留）→ 查 Codex 副作用（缩进/残留/类型占位）→ 补主会话该补的 → headless parse → 测试套件回归。
 
-- **委派 Codex**：机械精确删除 / 大量改动 + grep 验证可清零 / 边界明确不需要语义判断 / 测试套件可作回归底线（如 α1 BattleUI 整体下线 / α2 RoundManager 系统下线 + 测试重写）
-- **主会话自己做**：单文件多处注释清理 / 风险敏感操作 / Edit 工具复用度高的小批量改动 / 避免引入新副作用的精细工作（如 α3 跨 6 文件 16 处注释清理）
-- **委派路径**：通过 `codex:codex-rescue` 子代理（不是 skill）—— 见 [[#3. 委派后主会话核实序列]] 处理 Codex 返回
-
-### 2. Codex prompt 必备字段
-
-委派 prompt 必须包含以下字段，缺失任一字段会让 Codex 自由发挥导致漂移：
-
-1. **任务背景** —— 项目上下文 + 设计文档锚点（`xxx/yyy_MVP.md §x.y`）
-2. **任务范围** —— 编号清单（精确到 §x.y），不写"按设计文档做"这种笼统表述
-3. **强制约束块**（违反让任务失败）：
-   - **绝对禁止任何 git 操作**（add / commit / push / status / diff / stash / reset / checkout / restore / rm）
-   - **范围严格限定** —— 不动当前阶段外的章节 / 不动设计文档外的代码
-   - **section divider 缩进保持顶格** —— Codex 删除大段函数时会错加 tab 缩进（α1 教训：7 行错位）
-   - **行号会漂移** —— 以函数名 + 关键字 grep 为准，不死扣行号
-4. **验收标准** —— grep 清零检查（具体关键字）+ Headless parse + 测试套件
-5. **返回报告格式** —— ≤ 字数限制 + 关键字段列表（完成度 / grep 结果 / parse 结果 / 意外发现 / 遗留状态）
-6. **模型选择** —— "最新 GPT 模型"（让 Codex CLI 默认）
-
-### 3. 委派后主会话核实序列
-
-固定 7 步，发现 Codex 副作用立即修：
-
-1. `git diff --stat` —— 改动概况（文件清单 + 行数）
-2. `git diff <key_file>` —— 关键文件 diff 比对设计文档逐项
-3. **grep 清零验证** —— 按设计文档 grep 清单 + 区分活代码 / 注释残留
-4. **检查 Codex 副作用** —— 缩进 / 注释残留 / 类型转换占位（如 α1 缩进 bug / α2 round_id=1 占位）
-5. **修主会话该补的** —— 漏列项 / 副作用，按 [[#4. 漏列项透明处理]] 标注
-6. Headless parse 验证（`/path/to/Godot.exe --headless --path "E:\..." --quit`）
-7. 测试套件回归（M1-M8 或对应模块）
-
-### 4. 漏列项透明处理
-
-设计文档漏列的项（Codex 发现 or 主会话发现），补做必须在 commit message 显式标注**来源**：
-
-- "Codex 补找漏列守卫"（如 α1 第 5 处 is_pending）
-- "主会话补做（设计文档漏列）"（如 α2 删 _test_dynamic_target_adjacent_forced_battle）
-- "主会话补做（P0 第二阶段遗留）"（如 α2 补 _MockWorld 字段）
-
-**不偷偷扩范围**。审计可追溯是底线。
+**漏列项透明处理**：设计文档漏列的补做，commit message 显式标注来源（"Codex 补找" / "主会话补做（设计漏列）"）。不偷偷扩范围，审计可追溯是底线。
 
 ---
 
 ## 分步验证提交
 
-适用于大 MVP 实装。MVP-α 三阶段实战验证：每阶段独立 commit + 4 步验证链 + push 时机分流。
+大 MVP 拆"独立可回滚阶段"：每阶段一 commit、可独立 `revert`、阶段边界在设计文档预先明示、revert 后系统仍可运行。
 
-### 1. 大 MVP 拆"独立可回滚阶段"
+**每阶段 4 步验证链**（任一失败暂停修复后重跑）：① grep 清零（活代码清零，注释残留留下阶段）→ ② headless parse（见 `[WorldMap] 自动 seed`）→ ③ 测试套件回归（无 regression）→ ④ 桌面跑测（GUI/视觉/交互，用户做）。
 
-- **每阶段对应一个 commit**，阶段间无强依赖（单 commit 可独立 `git revert` 而不波及其他）
-- **阶段边界在设计文档撰写时即明示**（如 MVP-α 设计文档 §3「完整流程」段画 3 阶段拆分 + 每阶段独立交付 grep 检查清单）
-- **阶段拆分判据**：(a) 内容上是独立的清理 / 改造模块；(b) 跑测覆盖范围互不重叠；(c) revert 后系统仍可运行（不引入半破坏态）
+验证链 1-3 过 → 主会话主动 commit（托管或明示时）。Commit message：改动清单（按 §x.y）/ 工作流回顾（Codex 委派·主会话补做）/ 验证状态 / 影响面分类 / `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`。
 
-### 2. 每阶段验证链（固定 4 步）
-
-按顺序跑，任一步失败暂停 + 修复后重跑：
-
-1. **grep 清零检查** —— 按设计文档 grep 清单（如 §5.x 阶段交付 grep 检查），活代码必须清零，注释残留留下一阶段
-2. **Headless parse 启动验证** —— 看 `[WorldMap] 自动 seed = X` 输出 = parse + _ready 通过
-3. **测试套件回归** —— M1-M8 全套（或对应模块），无 regression
-4. **桌面跑测**（GUI 相关功能）—— 由用户做；headless 不能完整验证 GUI / 视觉 / 交互的部分
-
-### 3. commit 时机
-
-验证链 1-3 步全过 → 主会话主动 commit（用户托管模式或用户明示提交时）。Commit message 必备字段：
-
-- 改动清单（按 §x.y 分组）
-- 工作流回顾（含 Codex 委派情况 / 主会话补做项）
-- 验证状态（grep / parse / 测试套件结果）
-- 影响面分类（参照 [[#工作流程]] 的小/大改动定义）
-- `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`
-
-### 4. push 时机分流
-
-| 场景 | push 时机 |
-|---|---|
-| 阶段内容仅涉及代码删除 / 注释 / 配置 + headless 验证链通过 | **commit 通过后可立即 push**（用户明示推送或明示托管模式） |
-| 阶段涉及**核心状态机** / GUI 相关 fix（headless 无法完整验证）| **commit 后不 push**，等用户桌面跑测验证通过再 push |
-| Bug fix 涉及 fade / Tween / 时序敏感代码 | 同上，桌面验证 → push |
-
-桌面验证未通过期间发现问题可 `git reset --hard HEAD~1` 撤回；已 push 后则需 `git revert HEAD` + 重新推送，多一步操作。
+**push 时机**：纯删除/注释/配置 + headless 过 → 可立即 push；涉及核心状态机 / GUI / fade·Tween·时序敏感 → commit 后等桌面验证再 push（未 push 可 `reset --hard HEAD~1` 撤回，已 push 需 `revert`）。
 
 ## 测试与 Godot 调用
 
@@ -246,22 +160,9 @@ GODOT_EXE="/mnt/e/Godot/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_
 
 启动后 stdout 出现 `[WorldMap] 自动 seed = NNNN` 即代表 parse + `_ready` 跑通；`WARNING: ObjectDB instances leaked at exit` 是退出时的资源释放警告，与本次改动无关，可忽略。
 
-### 4. 测试套件清单（当前）
+### 4. 测试套件
 
-`test/` 下共 10 个测试套件，全部 `extends SceneTree`，独立可跑：
-
-- `test_m1_data_layer.gd` —— M1 数据层（配置加载 / 字段校验）
-- `test_m2_map_gen.gd` —— M2 PCG 地图生成
-- `test_m3_turn_framework.gd` —— M3 回合框架（TurnManager + TickRegistry）
-- `test_m4_occupation.gd` —— M4 占据系统
-- `test_m5_build.gd` —— M5 升级建造
-- `test_m6_production.gd` —— M6 产出 / 背包
-- `test_m7_enemy_ai.gd` —— M7 敌方 AI（含 P0 第二阶段重写后的 _pick_target_for）
-- `test_m8_victory_judge.gd` —— M8 胜负判定（含 cycle 守卫 + check_enemy_packs_clear 兜底胜利）
-- `test_run_state.gd` —— RunState 整局态（cycle 推进 / 英雄池抽取 / 重生占位 / 扎营里程碑入队 / sink；MVP-ε P3 测试补全）
-- `test_narrative_provider.gd` —— NarrativeProvider 叙事文本池（ensure_loaded 幂等 / pick 占位符替换 / fallback / 缺字段跳过；MVP-ε P3 测试补全）
-
-**测试覆盖说明**：M1-M8 是城建锚实装阶段遗留的命名，对应当时的模块拆分；ε 批补全 RunState + NarrativeProvider 两份 headless 测试；DayNightState / OverlayTransitionUI 等仍因依赖帧驱动 / SceneTree 难独立测，留 P3。
+`test/` 下若干 `extends SceneTree` 套件（独立可跑）：M1-M8（数据层 / 地图生成 / 回合框架 / 占据 / 建造 / 产出 / 敌方 AI / 胜负判定，城建锚阶段遗留命名）+ RunState + NarrativeProvider。逐个清单以 test/ 目录实际文件为准。DayNightState / OverlayTransitionUI 等依赖帧驱动 / SceneTree 难独立测，留 P3。
 
 ### 5. 跑测命令模板（验证链 4 步使用）
 
@@ -281,51 +182,15 @@ done
 
 ## 调参面板字段维护
 
-MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：功能开发与「纳入调参面板」两步剥离——功能开发者**不感知**调参面板；纳入面板是**独立、可选、可撤销**的步骤。
+MVP-D 确立的**剥离原则**（项目级）：功能开发与"纳入调参面板"两步剥离——开发者不感知面板；纳入是独立、可选、可撤销的步骤。
 
-### 新增功能涉及调参的流程
+- **开发时**：`extends Resource` 定义 schema（`@export_range` → 面板自动 Slider），文件头埋一行 `## @tunable: <建议 group>`（仅声明候选 + 建议归类，**≠ 注册**；现有 group：战斗数值 / 整局节奏 / 玩家与敌方 / 部队经济 / 视觉动画，新建直接写）；使用方 `const CFG = preload(...)`。
+- **纳入面板（可推迟）**：编辑 `assets/config/param_panel/_panel_registry.tres` 加 `ParamPanelRegistryEntry`，定 `group` / `skip_fields` / `realtime`（true 需对应 const→var preload）/ `redraw_targets`。
+- **整理检索**：`grep -rn "@tunable" scripts/config/` 列候选，对比 registry 知待纳入；校验脚本 `tools/check_param_panel_coverage.py`（warning 不阻断，手动跑）正向查 registry、反向扫 @tunable 防遗忘。
+- **const cache bug 限制**：`const X=preload(.tres)` 后 `X.field` 值类型（Color/float/int）走编译期 inline，调参不实时（默认 `realtime:false` 接受，重启生效）。
+- 新 MVP 设计文档**不需要**"调参面板字段映射"段（与面板纳入剥离）。
 
-**步骤 1：功能开发（与调参无关，但顺手埋标记）**
-
-1. 普通 `extends Resource` 定义 schema + `@export` 字段（`@export_range` 给范围 → 面板自动推断 Slider）
-2. **文件头埋调参标记**：`extends Resource` 后加一行 `## @tunable: <建议 group>`（轻量埋点，不依赖面板、不注册，仅声明"调参候选 + 建议归类"；详见下方 §调参埋点标记 @tunable）
-3. 使用方 `const CFG = preload("...tres")` 引用（项目统一风格，重启生效）
-4. 完成 —— 不碰面板（是否进面板交给步骤 2 整理流程）
-
-**步骤 2：纳入面板（独立步骤，可推迟）**
-
-1. 编辑 `assets/config/param_panel/_panel_registry.tres`，加 1 个 `ParamPanelRegistryEntry`
-2. 决定 `group`（面板分类 category）/ `skip_fields`（不展示的字段）/ `realtime`（默认 false 重启生效；true 需把对应 const preload 改 var preload）/ `redraw_targets`（特殊刷新节点）
-3. 下次启动面板（F1）即见新条目
-
-### 调参埋点标记 @tunable
-
-剥离原则下"纳入面板"易被遗忘 → 用**埋点标记**让整理时精确检索（而非全量扫描所有 Resource 去猜哪些该进面板）：
-
-- **格式**：调参 Resource schema 文件头 `extends Resource` 后一行 `## @tunable: <建议 group>`
-- **语义**：声明"这是调参候选 + 建议归入哪个 group"。**打标记 ≠ 注册**（仍剥离）——标记只是开发时顺手埋的备忘，是否进面板由步骤 2 独立决定
-- **现有 group**：战斗数值 / 整局节奏 / 玩家与敌方 / 部队经济 / 视觉动画（新建 group 直接写即可）
-- **整理时检索**：`grep -rn "@tunable" scripts/config/` → 所有调参候选 + 建议 group 一览，再对比 registry / ParamPanelScene 即知哪些待纳入（无需全量翻 Resource）
-
-### 两条通道与去重
-
-- **Push 通道**：`assets/config/param_panel/*.tres`（25 个 `ParamPanelScene`，场景任务型，跨 Resource 聚合字段，手填中文名）
-- **Pull 通道**：`_panel_registry.tres` 按 Resource 整份自省（每 Resource 一场景，文件名作显示名，按 `group` 分 category）
-- **去重**：同一 Resource path 在 Push 已收录则 Pull 跳过（Push 优先）；去重收集走 `_get_snapshot_fields`（含 Combo 联动字段）
-
-### const cache bug 已知限制（D5 拍板）
-
-`const X = preload(.tres)` 后 `X.field` 对值类型字段（Color/float/int）走编译期 inline，反射 set 改值后直读拿旧值 → 默认 `realtime: false` 接受此限制（F2 写盘 + 重启生效，面板标「⚠ 重启生效」）。需实时调参的 Resource 标 `realtime: true` + 把对应 const preload 改 var preload。详见 [[参数Resource化/MVP-D_CSV数值与auto-include]] §const cache bug 已知限制。
-
-### 设计文档衔接
-
-新 MVP 设计文档**不需要**「调参面板字段映射」段——功能本身（schema + 业务逻辑）与面板纳入剥离，纳入由面板维护者另行编辑 registry。
-
-### 校验脚本
-
-`tools/check_param_panel_coverage.py`（warning 不阻断，未挂 pre-commit，按需手动跑）：
-- **正向**：扫 `_panel_registry.tres`，检查每条 `tres_path` 存在 + `group` 非空 + `realtime: true` 条目对应使用方用 `var` preload
-- **反向（防遗忘）**：扫所有带 `## @tunable` 标记的 Resource，对比 Push（25 ParamPanelScene）+ Pull（registry），报告"标记了调参但两边都未纳入面板"的 Resource —— 精确定位待整理项，不做全量扫描
+机制细节（双通道去重 / const cache bug 根因）见 [[参数Resource化/MVP-D_CSV数值与auto-include]]。
 
 # 当前进度
 
@@ -334,7 +199,7 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 
 ## 活跃（≤10 条硬上限）
 
-- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — **✅ L1.2 整体闭环**（多源视野+据点+不 reload 昏迷复活）；**🔧 L1.3 进行中**（原拆 3 份，2026-06-08 增拆为 4 份）：**L1.3a ①「扎营时钟+胜负模型」整体闭环 ✅**（4 阶段 `ee74728`→`aa2d311`，桌面全验；扎营主时钟取代 cycle + climax sudden-death + 双失败 + 命数脱钩 + 同图同英雄 + cycle 退役 + 招募有界）；**L1.3b 无限化地基 ✅ 整体闭环**（②③ 共同前置；病根=`MapSchema.terrain_grid` 预分配全图，拍板甲方案=无界坐标+稀疏 chunk+多 VisionSource）：五阶段 A 数据层 `3b47f0b`（地形权威收敛 ChunkPCG + MapSchema 双模无界化[病根 fix]）/ B 渲染切视口 `999660f` / C 移动切 chunk `5552b8f`（走出 32×32 + 负坐标 floori）/ D slot 迁稀疏 dict `e878fa9` / E 战斗边界解耦 `b88932a` + 桌面回归修复 `6474c68`（相机平滑/重绘时序，教训入 memory）；`_schema` 全图权威全退完，桌面验收通过；**L1.3c ②「世界内容地基」设计落盘 ✅**（2026-06-11 体验拍板暗影压力模型 P=f(扎营,视野) + ②③ 重切：② 世界内容地基[出生居中+内容上 chunk+敌方暗影刷新最小版] / ③ 暗影压力系统[威胁递增+暗影据点+climax 整合]；**L1.3c ✅ 整体闭环（2026-06-14）**：阶段 A 生成器重写 `a4bc213`[出生居中+网格抖动撒点+敌核心退役+NO_ANCHOR 哨兵] + 阶段 B chunk 内容钩子 `872f55d`[was_ever_generated 信号+ContentSpawner 流式撒持久/资源 slot+资源生成改道] + 阶段 C 敌方生成解耦 `637b409`[增援默认锚→玩家视野外暗影环带采样+全局 pack 上限+开局预置退役+敌核心锚整链退役；climax anchor 分支严守不动；interval 来源迁移+4 字段调参面板 realtime] + 阶段 D slot_grid 冗余清理 `fa1aa3d`[FUNCTION/RESOURCE 双写退役→单一权威源 _level_slots/_resource_slots + _original_slot_types 整链退役 + 附带修复首夜昼夜滤镜回归(空敌方回合同步结束在信号内嵌套 PLAYER→_finish_phase_internal 统一 call_deferred 消除重入)；codex P1+P3 闭环]，4 阶段全桌面验收+push；下一步 = L1.3d ③ 暗影压力系统设计[威胁递增+暗影据点+climax 整合+cycle vestige 随威胁表替换清]）；储备 4 条设计候选（议题 9 暗影流变/10 多焦点/11 实体稀疏表/13 多据点=世界存档）+ slot_grid 冗余清理已拍板随 ② 阶段 D 顺手清；+ 关联 L0 入口 6 事件系统（预启动）
+- [无限地图_推进进度](tile-advanture-design/进度/无限地图_推进进度.md) — **🔧 L1.3 进行中**：L1.2 + L1.3a/b/c 已整体闭环（2026-06-14）；**下一步 = L1.3d ③ 暗影压力系统设计**（威胁递增 + 压力 P=f(扎营,视野) + 暗影据点 + climax 整合 + cycle vestige 清）。阶段细节见进度文档 / 进度看板（`tile-advanture-design/_progress_board/`）。关联 L0 入口 6 事件系统（预启动）
 
 ## 预启动（方向已认可，等启动时机）
 
