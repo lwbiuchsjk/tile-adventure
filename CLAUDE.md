@@ -368,6 +368,7 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
    - **活跃**：正在推进中的工作；每条对应 `tile-advanture-design/进度/<XXX>_推进进度.md`
    - **预启动**：方向已认可、等启动时机；不创建进度文档，仅在此一行索引到 L0 路线图入口；启动时才迁入「活跃」+ 新建进度文档
    - **已归档**：完成 + 验收通过的推进线
+7. **进度看板同步（第 3 个同步目标，与进度文档同 commit）**：凡触发上方「更新时机」（节点状态变化 / 当前焦点移动 / 新增节点·推进线·入口 / 加 commit / 阻塞解除/新增·归档进度线）时，**除更新进度文档 + 本节索引外，同步更新 `tile-advanture-design/_progress_board/progress.yaml` 的手录部分**（entries / lines / nodes〔状态·current·commits·impl〕/ todos.match / meta.vision），放进**同一个 submodule commit**。改完跑 `python3 _progress_board/check_board.py` 应全绿（结构 + 一致性 + 锚漂移 + 镜像源）。**L3 全景 / 储备区 / 框架方案三块自动镜像 `待跟踪事项索引.md`/`设计候选库.md`/`_MOC.md`，无需手动同步**。机制说明见 [[进度看板工具_MVP]]。
 
 # 探索系统状态速查
 
@@ -389,6 +390,11 @@ MVP-D 确立的**剥离原则**（项目级，所有调参 Resource 适用）：
 | `tools/check_design_submodule.py` | 检查 staged 中的 `tile-advanture-design` 条目是否被记录为 `120000`（symlink），是则阻断并给出修正命令——WSL git 把 Windows junction 误识为 symlink 引发 |
 | `tools/check_variant_types.py` | 检测 `scripts/**/*.gd` 中 `var x = expr` 无类型 Variant 推断（MVP-ε G2-4 引入）。白名单：字面量 / 构造器 / 显式 `as TypeName` 转型；阻断：`var x = obj.get(...)` 等 Variant 返回值未加显式类型注解。`--report` 模式仅报告不阻断 |
 
-设计 submodule（`tile-advanture-design/`）有自己的 pre-commit hook，调用 `_scripts/check_doc_tags.py` 校验本次 staged 的 `.md` 文件 frontmatter 是否符合 `标签体系.md` 白名单。
+设计 submodule（`tile-advanture-design/`）有自己的 pre-commit hook，依次调用：
+
+| 脚本 | 职责 | 阻断? |
+|---|---|---|
+| `_scripts/check_doc_tags.py` | 校验 staged `.md` frontmatter 是否符合 `标签体系.md` 白名单 | 是 |
+| `_scripts/check_progress_board_sync.py` | **进度看板漂移守卫**：staged 改了 `进度/*.md` 但未同步 `_progress_board/progress.yaml` 时提醒（见进度维护规则 #7）。纯文字订正可忽略 | 否（仅提醒） |
 
 背景、触发场景、手动修正方法、新环境启用步骤见 [[工程开发积累]] 第 6 条。`.git/hooks/` 不入 repo，跨机器克隆后需手动重建（脚本模板在该文档内）。
