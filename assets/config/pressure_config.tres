@@ -1,0 +1,8 @@
+[gd_resource type="Resource" script_class="PressureConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/config/pressure_config.gd" id="1_pressure"]
+
+[resource]
+script = ExtResource("1_pressure")
+camp_level_thresholds = Array[int]([3, 6, 9])
+vision_level_thresholds = Array[int]([2, 4])
