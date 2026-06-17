@@ -12,10 +12,11 @@ extends Resource
 ## 单关卡敌方部队数量上限
 @export_range(1, 20, 1) var troop_count_max: int = 3
 
-## L1.3c 阶段 C：增援间隔（敌方回合数）——每 N 个敌方回合从暗影环带刷 1 批增援
-## 原由 cycle_config.csv 注入（威胁数值，设计 §五标留 ③）；为调参验证迁入 Resource 实时可调
-## ⚠ ③ L1.3d 重做威胁曲线（扎营×视野分段表）时，本字段并入或退役
+## L1.3c 阶段 C：增援间隔基数（敌方回合数）——P=0 时每 N 个敌方回合从暗影环带刷 1 批增援
+## L1.3d-1 阶段 B：升级为「随暗影压力递减」的基数——实际 interval = maxi(min, 基数 - P)，P 越高刷越频
 @export_range(1, 30, 1) var enemy_reinforcement_interval: int = 5
+## L1.3d-1 阶段 B：增援间隔下限——P 再高 interval 也不低于此值（防高压期每回合刷怪压垮玩家）
+@export_range(1, 20, 1) var enemy_reinforcement_interval_min: int = 2
 ## L1.3c 阶段 C：敌方 pack 全局上限——场上敌方 pack 数 ≥ 此值时常规增援停刷
 ## 结构性参数（参与刷怪节奏，重启生效）。注：climax boss 不受此上限约束（sudden-death 必现强敌）
 @export_range(1, 50, 1) var enemy_pack_global_cap: int = 12

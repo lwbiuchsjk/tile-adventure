@@ -5,7 +5,7 @@ extends SceneTree
 ## 验证范围（M7 数据层）：
 ##   1. 升级优先级比较（城镇 > 村庄 / 同类等级低先）
 ##   2. EnemyReinforcement.spawn_batch 找空地 + 写入 _level_slots
-##   3. 增援触发条件（turn_index % 5 == 0 且 > 0）
+##   3. 增援触发条件（count % interval == 0 且 > 0，interval = reinforcement_interval_for_pressure(P)）
 ##   4. 贪心升级按排序 + 石料耗尽停止
 ##   （2026-05-17 REPELLED 死代码清理批：删除原"#4 REPELLED 冷却 tick"测试，
 ##    mark_repelled / tick_cooldown / State.REPELLED 已全部从 LevelSlot 移除）
@@ -115,15 +115,29 @@ func _test_reinforcement_global_cap() -> void:
 	world_mock.queue_free()
 
 
-## 3. 增援触发条件：turn_index % 5 == 0 且 > 0
+## 3. 增援触发条件：count % interval == 0 且 > 0，interval = reinforcement_interval_for_pressure(P)
 func _test_reinforcement_trigger_condition() -> void:
-	print("-- 增援触发条件")
-	# 直接测数学条件（设计伪码）
+	print("-- 增援触发条件（interval 由 reinforcement_interval_for_pressure 决定，随 P 变）")
+	# L1.3d-1 阶段 B：触发间隔不再硬编码 5，而是 reinforcement_interval_for_pressure(P)。
+	# 本用例读真实函数（防 EnemyAI._step_reinforcement 触发逻辑回归 + 防"P 不影响 interval"回归）。
+	# P=0：interval = 基数 → 在其倍数回合触发（turn=0 不触发）
+	var iv0: int = EnemyReinforcement.reinforcement_interval_for_pressure(0)
+	_assert(iv0 == EnemyReinforcement.SPAWN_CFG.enemy_reinforcement_interval, "P=0 interval = 基数")
 	var trigger_points: Array[int] = []
 	for turn_index in range(1, 21):
-		if turn_index > 0 and turn_index % 5 == 0:
+		if turn_index % iv0 == 0:
 			trigger_points.append(turn_index)
-	_assert(trigger_points == [5, 10, 15, 20], "20 回合内 5/10/15/20 触发增援（turn=0 不触发）")
+	# 期望点用公式自证（不硬编码具体数字，跟随基数变化）
+	var expect: Array[int] = []
+	var k: int = iv0
+	while k <= 20:
+		expect.append(k)
+		k += iv0
+	_assert(trigger_points == expect, "P=0 触发点 = 基数 %d 的倍数 %s（turn=0 不触发）" % [iv0, str(expect)])
+	# 高 P：interval 缩短到下限 → 触发更频（证明 P 真正驱动 interval）
+	var iv_hi: int = EnemyReinforcement.reinforcement_interval_for_pressure(9)
+	_assert(iv_hi <= iv0, "高 P interval(%d) ≤ 基数(%d)：P 越高刷越频" % [iv_hi, iv0])
+	_assert(iv_hi == EnemyReinforcement.SPAWN_CFG.enemy_reinforcement_interval_min, "高 P interval 触下限")
 
 
 ## 4. 贪心升级：按优先级排序 + 石料耗尽停止

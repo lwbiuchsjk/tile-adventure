@@ -123,7 +123,7 @@ func load_configs() -> void:
 	# 加载敌人强度配置（generator 初始化后再注入，见下方）
 	enemy_tier_rows = ConfigLoader.load_csv(WorldMap.CONFIG_ENEMY_TIER)
 
-	# P0 第二阶段：加载 enemy_tier_ratio_config（按 cycle 抽 tier 用，EnemyReinforcement.spawn_batch 消费）
+	# 加载 enemy_tier_ratio_config（L1.3d-1 阶段 B：按 pressure_level 抽 tier 用，EnemyReinforcement.spawn_batch 消费）
 	_world_map._enemy_tier_ratio_rows = ConfigLoader.load_csv(WorldMap.CONFIG_ENEMY_TIER_RATIO)
 
 	# B 重生周期 MVP：英雄池 + 整局周期参数
@@ -438,13 +438,22 @@ func _wire_content_spawner_internal() -> void:
 	var chunk_size: int = WorldMap.VISION_CFG.chunk_size if WorldMap.VISION_CFG.chunk_size > 0 \
 		else ChunkManager.DEFAULT_CHUNK_SIZE
 
+	# L1.3d-1 阶段 B：暗影压力 P 取值器（懒求值，运行期撒 slot 时查 garrison 强度档）
+	# 绑 _world_view（运行期已就绪）；null 守卫回退 P=0
+	var wm: WorldMap = _world_map
+	var pressure_provider: Callable = func() -> int:
+		if wm._world_view == null:
+			return 0
+		return wm._world_view.get_pressure_level()
+
 	var spawner: ContentSpawner = ContentSpawner.new()
 	spawner.setup(
 		_world_map._schema, gcfg, anchor_pos, chunk_size,
 		_world_map._resource_slots, _world_map._level_slots,
 		_world_map._resource_slot_config_rows, CONTENT_CFG.resource_quota_per_chunk,
 		_world_map._garrison_config, town_pool_rows,
-		Callable(_world_map._renderer, "queue_redraw")
+		Callable(_world_map._renderer, "queue_redraw"),
+		pressure_provider
 	)
 	spawner.attach(_world_map._chunk_manager)
 	_world_map._content_spawner = spawner
@@ -554,13 +563,15 @@ func init_world_subsystems() -> void:
 			if slot == null:
 				continue
 			BuildSystem.apply_level_fields(slot, slot.level)
-			# 持久 slot 援军（L1.2）：按 type × 当前周期抽样储备名册（此时 owner 染色已完成）
+			# 持久 slot 援军（L1.2）：按 type × 暗影压力 P 抽样储备名册（此时 owner 染色已完成）
 			# 对所有 slot 抽样——玩家方直接用；中立 / 敌方 slot 被玩家占据后也能提供援军。
 			# 敌方援军（L1.4）：按 slot PCG 初始 owner 选表——初始敌方 owned 用独立强度表 _world_map._enemy_garrison_config，
 			#   初始中立 / 玩家用 _world_map._garrison_config。储备一旦快照即固定（归属透明），后续切阵营不重抽。
+			# L1.3d-1 阶段 B：开局批 = 基线压力 P=0（camp=0 + 近出生点为难度地板）；
+			#   运行期新区 slot 由 ContentSpawner 按当时 P 上档（出生易、远方难的梯度）。
 			var roster_cfg: Dictionary = _world_map._enemy_garrison_config if slot.owner_faction == Faction.ENEMY_1 else _world_map._garrison_config
 			slot.reinforcement_roster = ReinforcementRoster.sample(
-				slot.type as int, RunState.cycle_index(),
+				slot.type as int, 0,
 				roster_cfg, town_pool_rows, roster_rng
 			)
 
@@ -680,6 +691,13 @@ func init_world_subsystems() -> void:
 	_world_map.add_child(_world_map._core_objective_overlay)
 	# 传底部 HudBar 引用：边框下边界跟随其实际顶沿（布局自然，替代 bottom_reserve 手调）
 	_world_map._core_objective_overlay.setup(_world_map._camera, _world_map._world_view, WorldMap.TILE_SIZE, _world_map.get_node_or_null("UILayer/HudBar"))
+
+	# L1.3d-1 阶段 B 桌面验证：暗影压力测试信息面板（Ctrl+I 切换）——仅 debug build 创建，release 不编入
+	if OS.is_debug_build():
+		_world_map._pressure_debug_panel = PressureDebugPanel.new()
+		_world_map._pressure_debug_panel.name = "PressureDebugPanel"
+		_world_map.add_child(_world_map._pressure_debug_panel)
+		_world_map._pressure_debug_panel.setup(_world_map._world_view)
 
 	# 入口 4 MVP（2026-05-09）：探索态行动栏 HBoxContainer（攻击 + 扎营平行排布）
 	# 居中屏幕底部偏上；child 数 0 / 1 / 2 都自然布局

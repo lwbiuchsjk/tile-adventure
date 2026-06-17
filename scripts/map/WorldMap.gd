@@ -174,8 +174,8 @@ var _reachable_tiles: Dictionary = {}
 ## P0 第二阶段：周期级配置原始行数据（按 cycle_index 索引）
 var _cycle_config_rows: Array = []
 
-## P0 第二阶段：enemy_tier_ratio_config 原始行数据（按 cycle_index × tier 配 count 权重）
-## EnemyReinforcement.spawn_batch 抽 tier 时使用
+## enemy_tier_ratio_config 原始行数据（L1.3d-1 阶段 B：按 pressure_level × tier 配 count 权重）
+## EnemyReinforcement.spawn_batch 按当前暗影压力 P 抽 tier 时使用
 var _enemy_tier_ratio_rows: Array = []
 
 ## P0 第二阶段：缓存当前周期的 initial_enemy_pack_count（由 _apply_cycle_config 注入）
@@ -347,6 +347,9 @@ var _night_vision: NightVisionLayer = null
 
 ## 核心目标传达 L1.5（§2.3）：屏幕暗角 + 离屏敌方核心方向边缘箭头（CanvasLayer=7）
 var _core_objective_overlay: CoreObjectiveOverlay = null
+
+## L1.3d-1 阶段 B 桌面验证：暗影压力测试信息面板（Ctrl+I 切换，仅 debug build 创建）
+var _pressure_debug_panel: PressureDebugPanel = null
 
 ## MVP-γ 阶段 1：战斗瞬时视觉态载体（3 字典：偏移 / 渐隐 / HP 补间）
 ## 由 BattleAnimDirector 写、_draw_battle_* 读；跨战斗复用，战斗结束 clear()
@@ -1585,6 +1588,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			# ── L1.2 Phase 3 跑测便利：调试快捷键（仅 OS.is_debug_build()；release 编译不进入）──
 			# Ctrl + 组合键构造昏迷/命数/占领/据点前置态，免去真实战斗。详见 _handle_debug_key
 			if OS.is_debug_build() and key.ctrl_pressed:
+				# L1.3d-1 阶段 B 桌面验证：Ctrl+I 切换暗影压力测试面板（不受"干净探索态"守卫，任意态可切）
+				if key.keycode == KEY_I:
+					if _pressure_debug_panel != null:
+						_pressure_debug_panel.toggle()
+					return
 				if _handle_debug_key(key.keycode):
 					return
 			# E MVP [F] 键独立处理：探索态触发主动战斗 / 战斗态尝试手动退出

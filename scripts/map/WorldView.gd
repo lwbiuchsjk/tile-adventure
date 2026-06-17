@@ -75,7 +75,7 @@ func get_enemy_generator() -> EnemyTroopGenerator:
 	return _wm.get("_enemy_generator") as EnemyTroopGenerator
 
 
-## 敌方 tier 配比配置行（按 cycle 加权抽 tier 用）
+## 敌方 tier 配比配置行（L1.3d-1 阶段 B：按 pressure_level 加权抽 tier 用）
 func get_enemy_tier_ratio_rows() -> Array:
 	return _wm.get("_enemy_tier_ratio_rows") as Array
 
@@ -206,6 +206,22 @@ func get_vision_state(tile: Vector2i) -> int:
 	if vs == null:
 		return VisionSystem.TileState.NORMAL
 	return vs.get_tile_state(tile)
+
+
+## L1.3d-1 阶段 B：当前视野源数量（据点 + 占领持久 slot + 玩家队伍各 1 源）。
+## 暗影压力 P 的第二轴（视野规模 ≈ 占领规模）。
+## null 守卫：_vision_system 未就绪时回退 1（仅玩家队伍源），保证 P 第二轴下界。
+func get_vision_source_count() -> int:
+	var vs: VisionSystem = _wm.get("_vision_system") as VisionSystem
+	if vs == null:
+		return 1
+	return maxi(1, vs.get_sources().size())
+
+
+## L1.3d-1 阶段 B：当前暗影压力等级 P = ShadowPressure.compute_pressure(扎营次数, 视野源数)。
+## 增援 tier 抽样 / interval / 撒点 garrison 强度的统一难度索引（取代冻结的 cycle_index）。
+func get_pressure_level() -> int:
+	return ShadowPressure.compute_pressure(RunState.total_camp_count(), get_vision_source_count())
 
 
 ## L1.1 阶段 3：格是否对玩家不可见（FOG 或 SHADOW）

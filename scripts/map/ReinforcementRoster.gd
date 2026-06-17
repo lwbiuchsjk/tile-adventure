@@ -6,8 +6,11 @@ extends RefCounted
 ##
 ## 职责：
 ##   - build_config：把 garrison_config.csv 原始行解析为嵌套查表字典
-##   - sample：按 slot_type × cycle 查表，从 town_troop_pool 加权抽兵种 + 区间随机品质，
+##   - sample：按 slot_type × pressure_level 查表，从 town_troop_pool 加权抽兵种 + 区间随机品质，
 ##             产出一份"援军储备名册"（Array of {troop_type, quality} 规格条目）
+##
+## L1.3d-1 阶段 B：难度索引由 cycle_index 改为 pressure_level（暗影压力等级 P）——
+##   garrison 强度随撒点时刻的 P 上档；开局批（MapBootstrap）按基线 P=0 抽样。
 ##
 ## 与 EnemyTroopGenerator 的一致性：
 ##   兵种由 town_troop_pool 各行 weight 加权决定（忽略池行的品质维度），
@@ -16,32 +19,32 @@ extends RefCounted
 
 
 ## 把 garrison_config.csv 原始行（Array[Dictionary]）解析为嵌套查表字典：
-##   { slot_type(int): { cycle_index(int): {count_min, count_max, quality_min, quality_max} } }
+##   { slot_type(int): { pressure_level(int): {count_min, count_max, quality_min, quality_max} } }
 ## 调用方：WorldMap._ready 加载配置阶段
 static func build_config(rows: Array) -> Dictionary:
 	var cfg: Dictionary = {}
 	for entry in rows:
 		var row: Dictionary = entry as Dictionary
-		if not row.has("slot_type") or not row.has("cycle_index"):
-			push_warning("ReinforcementRoster.build_config: 行缺 slot_type/cycle_index，已跳过 -> " + str(row))
+		if not row.has("slot_type") or not row.has("pressure_level"):
+			push_warning("ReinforcementRoster.build_config: 行缺 slot_type/pressure_level，已跳过 -> " + str(row))
 			continue
 		var st: int = int(row["slot_type"])
-		var cy: int = int(row["cycle_index"])
+		var pl: int = int(row["pressure_level"])
 		if not cfg.has(st):
 			cfg[st] = {}
-		var by_cycle: Dictionary = cfg[st] as Dictionary
+		var by_pressure: Dictionary = cfg[st] as Dictionary
 		var count_min: int = int(row.get("count_min", "0"))
 		var count_max: int = int(row.get("count_max", "0"))
 		var quality_min: int = int(row.get("quality_min", "0"))
 		var quality_max: int = int(row.get("quality_max", "0"))
 		# 轻量守卫（codex P3）：CSV 写反区间时交换 + 告警，避免 randi_range(min>max) 落到未定义行为
 		if count_min > count_max:
-			push_warning("ReinforcementRoster.build_config: slot_type=%d cycle=%d 的 count_min(%d) > count_max(%d)，已交换" % [st, cy, count_min, count_max])
+			push_warning("ReinforcementRoster.build_config: slot_type=%d P=%d 的 count_min(%d) > count_max(%d)，已交换" % [st, pl, count_min, count_max])
 			var t: int = count_min; count_min = count_max; count_max = t
 		if quality_min > quality_max:
-			push_warning("ReinforcementRoster.build_config: slot_type=%d cycle=%d 的 quality_min(%d) > quality_max(%d)，已交换" % [st, cy, quality_min, quality_max])
+			push_warning("ReinforcementRoster.build_config: slot_type=%d P=%d 的 quality_min(%d) > quality_max(%d)，已交换" % [st, pl, quality_min, quality_max])
 			var t2: int = quality_min; quality_min = quality_max; quality_max = t2
-		by_cycle[cy] = {
+		by_pressure[pl] = {
 			"count_min":   count_min,
 			"count_max":   count_max,
 			"quality_min": quality_min,
@@ -51,19 +54,19 @@ static func build_config(rows: Array) -> Dictionary:
 
 
 ## 抽样一份援军储备名册
-## slot_type / cycle：查 garrison_cfg（build_config 产出的嵌套字典）
+## slot_type / pressure：查 garrison_cfg（build_config 产出的嵌套字典）
 ## pool_rows：town_troop_pool.csv 行（troop_type, quality, weight）—— 仅用 troop_type + weight 定兵种分布
 ## rng：调用方注入（地图生成阶段用确定性 seed → 保证 seed 复现）
-## 返回 Array of { "troop_type": int, "quality": int }；未配置 type×cycle / 池空 / count<=0 → 空数组
-static func sample(slot_type: int, cycle: int, garrison_cfg: Dictionary, pool_rows: Array, rng: RandomNumberGenerator) -> Array:
+## 返回 Array of { "troop_type": int, "quality": int }；未配置 type×pressure / 池空 / count<=0 → 空数组
+static func sample(slot_type: int, pressure: int, garrison_cfg: Dictionary, pool_rows: Array, rng: RandomNumberGenerator) -> Array:
 	var roster: Array = []
 	# 查表（用 has 守卫避免 .get 返回 Variant 触发类型检查）
 	if not garrison_cfg.has(slot_type):
 		return roster
-	var by_cycle: Dictionary = garrison_cfg[slot_type] as Dictionary
-	if not by_cycle.has(cycle):
+	var by_pressure: Dictionary = garrison_cfg[slot_type] as Dictionary
+	if not by_pressure.has(pressure):
 		return roster
-	var cfg: Dictionary = by_cycle[cycle] as Dictionary
+	var cfg: Dictionary = by_pressure[pressure] as Dictionary
 
 	var count_min: int = int(cfg.get("count_min", 0))
 	var count_max: int = int(cfg.get("count_max", 0))

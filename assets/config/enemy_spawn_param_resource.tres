@@ -9,7 +9,8 @@
 script = ExtResource("1_spawn")
 troop_count_min = 1
 troop_count_max = 3
-enemy_reinforcement_interval = 2
+enemy_reinforcement_interval = 5
+enemy_reinforcement_interval_min = 2
 enemy_pack_global_cap = 12
 enemy_spawn_ring_min = 4
 enemy_spawn_ring_max = 8

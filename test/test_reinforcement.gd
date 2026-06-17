@@ -7,7 +7,7 @@ extends SceneTree
 ##   T1 抽样快照  —— ReinforcementRoster.build_config / sample：数量范围 / 品质区间 / 兵种来源 / 未配置返回空
 ##   T2 触发判定  —— ReinforcementRoster.is_in_trigger_range：曼哈顿点到矩形最近距离边界
 ##   T3 储备扣减  —— ReinforcementRoster.apply_consumption：已入场条目移除 / 未入场条目保留
-##   T4 敌方独立表（L1.4）—— 敌方表数值独立于玩家表（同 type×cycle 区间不同；敌方配核心行玩家表无）
+##   T4 敌方独立表（L1.4）—— 敌方表数值独立于玩家表（同 type×P 区间不同；敌方配核心行玩家表无）
 ##   T6 工厂阵营化（L1.4）—— make_reinforcement_unit：默认 PLAYER / 显式 ENEMY_1；source_level=null / character=null
 
 var _failed: int = 0
@@ -48,18 +48,18 @@ func _test_build_config() -> void:
 	print("-- build_config 嵌套查表")
 	var cfg: Dictionary = ReinforcementRoster.build_config(_mock_garrison_rows())
 	_assert(cfg.has(1), "解析出 slot_type=1（城镇）")
-	var by_cycle: Dictionary = cfg[1] as Dictionary
-	_assert(by_cycle.has(0), "城镇含 cycle=0")
-	var entry: Dictionary = by_cycle[0] as Dictionary
-	_assert(int(entry["count_min"]) == 2 and int(entry["count_max"]) == 2, "城镇 cycle0 数量 2-2")
-	_assert(int(entry["quality_min"]) == 0 and int(entry["quality_max"]) == 0, "城镇 cycle0 品质 0-0")
+	var by_pressure: Dictionary = cfg[1] as Dictionary
+	_assert(by_pressure.has(0), "城镇含 P=0")
+	var entry: Dictionary = by_pressure[0] as Dictionary
+	_assert(int(entry["count_min"]) == 2 and int(entry["count_max"]) == 2, "城镇 P0 数量 2-2")
+	_assert(int(entry["quality_min"]) == 0 and int(entry["quality_max"]) == 0, "城镇 P0 品质 0-0")
 
 
 ## build_config 对写反的区间（min>max）交换 + 告警（codex P3 守卫）
 func _test_build_config_swaps_reversed_range() -> void:
 	print("-- build_config 反向区间交换守卫（下面 2 条 push_warning 为预期）")
 	var rows: Array = [
-		{"slot_type": "0", "cycle_index": "0", "count_min": "3", "count_max": "1", "quality_min": "2", "quality_max": "0"},
+		{"slot_type": "0", "pressure_level": "0", "count_min": "3", "count_max": "1", "quality_min": "2", "quality_max": "0"},
 	]
 	var cfg: Dictionary = ReinforcementRoster.build_config(rows)
 	var entry: Dictionary = (cfg[0] as Dictionary)[0] as Dictionary
@@ -72,13 +72,13 @@ func _test_sample_count_range() -> void:
 	print("-- sample 数量范围")
 	var cfg: Dictionary = ReinforcementRoster.build_config(_mock_garrison_rows())
 	var rng: RandomNumberGenerator = _seeded_rng(1)
-	# 城镇 cycle1 = count 2-3
+	# 城镇 P1 = count 2-3
 	for i in range(50):
 		var roster: Array = ReinforcementRoster.sample(1, 1, cfg, _mock_pool_rows(), rng)
 		if roster.size() < 2 or roster.size() > 3:
-			_assert(false, "城镇 cycle1 数量越界：%d（应 2-3）" % roster.size())
+			_assert(false, "城镇 P1 数量越界：%d（应 2-3）" % roster.size())
 			return
-	_assert(true, "城镇 cycle1 数量 50 次均落在 2-3")
+	_assert(true, "城镇 P1 数量 50 次均落在 2-3")
 
 
 ## sample 品质落在 [quality_min, quality_max]
@@ -86,15 +86,15 @@ func _test_sample_quality_range() -> void:
 	print("-- sample 品质区间")
 	var cfg: Dictionary = ReinforcementRoster.build_config(_mock_garrison_rows())
 	var rng: RandomNumberGenerator = _seeded_rng(2)
-	# 城镇 cycle2 = quality 1-1（恒 SR）
+	# 城镇 P2 = quality 1-1（恒 SR）
 	for i in range(50):
 		var roster: Array = ReinforcementRoster.sample(1, 2, cfg, _mock_pool_rows(), rng)
 		for entry_v in roster:
 			var entry: Dictionary = entry_v as Dictionary
 			if int(entry["quality"]) != 1:
-				_assert(false, "城镇 cycle2 品质越界：%d（应恒 1）" % int(entry["quality"]))
+				_assert(false, "城镇 P2 品质越界：%d（应恒 1）" % int(entry["quality"]))
 				return
-	_assert(true, "城镇 cycle2 品质 50 次均为 1（SR）")
+	_assert(true, "城镇 P2 品质 50 次均为 1（SR）")
 
 
 ## sample 抽出的 troop_type 必来自池
@@ -114,17 +114,17 @@ func _test_sample_troop_type_from_pool() -> void:
 	_assert(true, "兵种 50 次均来自池 {0,3}")
 
 
-## 未配置的 type×cycle 返回空数组
+## 未配置的 type×P 返回空数组
 func _test_sample_unconfigured_returns_empty() -> void:
-	print("-- 未配置 type×cycle 返回空")
+	print("-- 未配置 type×P 返回空")
 	var cfg: Dictionary = ReinforcementRoster.build_config(_mock_garrison_rows())
 	var rng: RandomNumberGenerator = _seeded_rng(4)
 	# mock 配置无 slot_type=2（核心）行
 	var roster: Array = ReinforcementRoster.sample(2, 0, cfg, _mock_pool_rows(), rng)
 	_assert(roster.is_empty(), "核心（未配置）返回空 roster")
-	# 配置内无 cycle=9
+	# 配置内无 P=9
 	var roster2: Array = ReinforcementRoster.sample(1, 9, cfg, _mock_pool_rows(), rng)
-	_assert(roster2.is_empty(), "城镇 cycle9（未配置）返回空 roster")
+	_assert(roster2.is_empty(), "城镇 P9（未配置）返回空 roster")
 
 
 ## count_min==count_max 时数量确定
@@ -132,13 +132,13 @@ func _test_sample_count_min_eq_max_deterministic() -> void:
 	print("-- count_min==count_max 数量确定")
 	var cfg: Dictionary = ReinforcementRoster.build_config(_mock_garrison_rows())
 	var rng: RandomNumberGenerator = _seeded_rng(5)
-	# 村庄 cycle0 = count 1-1
+	# 村庄 P0 = count 1-1
 	for i in range(20):
 		var roster: Array = ReinforcementRoster.sample(0, 0, cfg, _mock_pool_rows(), rng)
 		if roster.size() != 1:
-			_assert(false, "村庄 cycle0 数量应恒 1，实得 %d" % roster.size())
+			_assert(false, "村庄 P0 数量应恒 1，实得 %d" % roster.size())
 			return
-	_assert(true, "村庄 cycle0 数量恒 1")
+	_assert(true, "村庄 P0 数量恒 1")
 
 
 # ─────────────────────────────────────
@@ -212,26 +212,26 @@ func _test_consumption_partial_retains() -> void:
 # T4 敌方独立表（敌方援军_MVP / L1.4）
 # ─────────────────────────────────────
 
-## 敌方表数值独立于玩家表：同 type×cycle 抽样区间不同 + 敌方配核心行（玩家 mock 表无）
+## 敌方表数值独立于玩家表：同 type×P 抽样区间不同 + 敌方配核心行（玩家 mock 表无）
 func _test_enemy_table_independent_strength() -> void:
 	print("-- 敌方独立表：数值独立于玩家表")
 	var player_cfg: Dictionary = ReinforcementRoster.build_config(_mock_garrison_rows())
 	var enemy_cfg: Dictionary = ReinforcementRoster.build_config(_mock_enemy_garrison_rows())
 	var rng: RandomNumberGenerator = _seeded_rng(11)
-	# 玩家 mock 表无核心（slot_type=2）行 → 返回空；敌方表有核心 cycle0 = count 3-4 / quality 1-1
+	# 玩家 mock 表无核心（slot_type=2）行 → 返回空；敌方表有核心 P0 = count 3-4 / quality 1-1
 	var player_core: Array = ReinforcementRoster.sample(2, 0, player_cfg, _mock_pool_rows(), rng)
 	_assert(player_core.is_empty(), "玩家表无核心行 → 核心抽样空")
 	for i in range(50):
 		var enemy_core: Array = ReinforcementRoster.sample(2, 0, enemy_cfg, _mock_pool_rows(), rng)
 		if enemy_core.size() < 3 or enemy_core.size() > 4:
-			_assert(false, "敌方核心 cycle0 数量越界：%d（应 3-4）" % enemy_core.size())
+			_assert(false, "敌方核心 P0 数量越界：%d（应 3-4）" % enemy_core.size())
 			return
 		for entry_v in enemy_core:
 			var entry: Dictionary = entry_v as Dictionary
 			if int(entry["quality"]) != 1:
-				_assert(false, "敌方核心 cycle0 品质越界：%d（应恒 1）" % int(entry["quality"]))
+				_assert(false, "敌方核心 P0 品质越界：%d（应恒 1）" % int(entry["quality"]))
 				return
-	_assert(true, "敌方核心 cycle0 50 次均落在 count 3-4 / quality 1（独立于玩家表）")
+	_assert(true, "敌方核心 P0 50 次均落在 count 3-4 / quality 1（独立于玩家表）")
 
 
 # ─────────────────────────────────────
@@ -263,20 +263,20 @@ func _test_make_reinforcement_unit_faction() -> void:
 # 辅助 / mock 数据
 # ─────────────────────────────────────
 
-## mock garrison_config 行（村庄 cycle0 + 城镇 cycle0/1/2；无核心行）
+## mock garrison_config 行（村庄 P0 + 城镇 P0/1/2；无核心行）
 func _mock_garrison_rows() -> Array:
 	return [
-		{"slot_type": "0", "cycle_index": "0", "count_min": "1", "count_max": "1", "quality_min": "0", "quality_max": "0"},
-		{"slot_type": "1", "cycle_index": "0", "count_min": "2", "count_max": "2", "quality_min": "0", "quality_max": "0"},
-		{"slot_type": "1", "cycle_index": "1", "count_min": "2", "count_max": "3", "quality_min": "0", "quality_max": "1"},
-		{"slot_type": "1", "cycle_index": "2", "count_min": "3", "count_max": "3", "quality_min": "1", "quality_max": "1"},
+		{"slot_type": "0", "pressure_level": "0", "count_min": "1", "count_max": "1", "quality_min": "0", "quality_max": "0"},
+		{"slot_type": "1", "pressure_level": "0", "count_min": "2", "count_max": "2", "quality_min": "0", "quality_max": "0"},
+		{"slot_type": "1", "pressure_level": "1", "count_min": "2", "count_max": "3", "quality_min": "0", "quality_max": "1"},
+		{"slot_type": "1", "pressure_level": "2", "count_min": "3", "count_max": "3", "quality_min": "1", "quality_max": "1"},
 	]
 
 
-## mock enemy_garrison_config 行（含核心 cycle0 = count 3-4 / quality 1-1，区别于玩家表）
+## mock enemy_garrison_config 行（含核心 P0 = count 3-4 / quality 1-1，区别于玩家表）
 func _mock_enemy_garrison_rows() -> Array:
 	return [
-		{"slot_type": "2", "cycle_index": "0", "count_min": "3", "count_max": "4", "quality_min": "1", "quality_max": "1"},
+		{"slot_type": "2", "pressure_level": "0", "count_min": "3", "count_max": "4", "quality_min": "1", "quality_max": "1"},
 	]
 
 

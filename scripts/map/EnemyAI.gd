@@ -76,14 +76,16 @@ func _on_faction_turn_started(faction: int) -> void:
 # 步骤 2：增援判定
 # ─────────────────────────────────────────
 
-## 每 enemy_reinforcement_interval 个敌方回合生成 1 批增援
+## 每 interval 个敌方回合生成 1 批增援
 ## turn_index 从 TurnManager.enemy_faction_turn_count 读；注意 start_faction_turn 在触发信号前已 +1，
 ## 故此处读到的是"本回合计数"（首个敌方回合 = 1）
-## L1.3c 阶段 C：间隔从 EnemyReinforcement.SPAWN_CFG 实时读（调参面板可调）；maxi(1,...) 防除零
+## L1.3d-1 阶段 B：interval 随暗影压力 P 递减——interval = maxi(下限, 基数 - P)，P 越高刷越频；
+##   基数 / 下限从 EnemyReinforcement.SPAWN_CFG 实时读（调参面板可调）；maxi 防除零 + 防过频
 func _step_reinforcement() -> void:
 	if _world_view == null or _world_view.get_turn_manager() == null:
 		return
-	var interval: int = maxi(1, EnemyReinforcement.SPAWN_CFG.enemy_reinforcement_interval)
+	var pressure: int = _world_view.get_pressure_level()
+	var interval: int = EnemyReinforcement.reinforcement_interval_for_pressure(pressure)
 	var count: int = _world_view.get_turn_manager().enemy_faction_turn_count
 	if count > 0 and count % interval == 0:
 		EnemyReinforcement.spawn_batch(_world_view)

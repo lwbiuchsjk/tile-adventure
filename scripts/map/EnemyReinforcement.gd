@@ -27,12 +27,12 @@ static var SPAWN_CFG: EnemySpawnParamResource = preload("res://assets/config/ene
 
 ## 生成一批增援并注入 WorldView 暴露的 _level_slots 字典
 ## world_view: WorldView facade（强类型，访问点编译期可校验 —— MVP-β）
-## force_tier: -1（默认）= 按 cycle 加权抽 tier；≥ 0 = 强制使用指定 tier（跳过抽样）
+## force_tier: -1（默认）= 按暗影压力 P 加权抽 tier；≥ 0 = 强制使用指定 tier（跳过抽样）
 ##             climax boss 走 anchor 模式分支时传 force_tier=3 保证最强敌人出现
 ## 返回：实际 spawn 的 LevelSlot；无合法空地 / 触顶上限 / 配置缺失时返回 null
 ##
-## tier 抽样（整局节奏重设计，威胁数值仍读 cycle 冻结表，递增曲线留 ③ L1.3d）：
-##   - tier 按当前 cycle 从 world_view.get_enemy_tier_ratio_rows() 加权抽样（默认路径）
+## tier 抽样（L1.3d-1 阶段 B：威胁强度随暗影压力 P=f(扎营,视野源) 递增，取代 cycle 冻结表）：
+##   - tier 按当前 P 从 world_view.get_enemy_tier_ratio_rows() 加权抽样（默认路径）
 ##   - force_tier ≥ 0 时跳过权重抽样直接使用
 ##
 ## L1.3a 阶段 C：新增可选 anchor_pos + anchor_range——指定 spawn 锚点（玩家/据点附近），
@@ -104,14 +104,15 @@ static func spawn_batch(world_view: WorldView, force_tier: int = -1, anchor_pos:
 		push_warning("EnemyReinforcement.spawn_batch: EnemyTroopGenerator 未初始化")
 		return null
 
-	# P0 第二阶段：按当前 cycle 从 tier_ratio 加权抽 tier；force_tier ≥ 0 时跳过抽样
-	# P1-1a: 末周期 initial deploy 第 1 个 pack 传 force_tier=3 保证最强敌人出现
+	# L1.3d-1 阶段 B：按当前暗影压力 P 从 tier_ratio 加权抽 tier；force_tier ≥ 0 时跳过抽样
+	#   P = f(扎营次数, 视野源数)，取代冻结的 cycle_index——难度随扎营×占领真正递增。
+	#   anchor 模式 climax boss 传 force_tier=3 保证最强敌人出现（不受 P 影响）。
 	var tier: int
 	if force_tier >= 0:
 		tier = force_tier
 	else:
 		var tier_rows: Array = world_view.get_enemy_tier_ratio_rows()
-		tier = _pick_tier_for_cycle(tier_rows, RunState.cycle_index(), rng)
+		tier = _pick_tier_for_pressure(tier_rows, world_view.get_pressure_level(), rng)
 
 	var pack: LevelSlot = LevelSlot.new()
 	pack.position = spawn_pos
@@ -188,23 +189,33 @@ static func _find_shadow_ring_tiles(
 	return result
 
 
-## P0 第二阶段：按当前 cycle 从 tier_ratio 加权抽 tier
+## L1.3d-1 阶段 B：增援间隔随暗影压力 P 递减：interval = maxi(下限, 基数 - P)。
+## 基数 / 下限从 SPAWN_CFG 实时读（调参面板可调）；P 越高刷越频，下限防高压期每回合刷怪压垮玩家。
+## 抽成静态纯函数便于 EnemyAI 调用 + headless 测试。
+static func reinforcement_interval_for_pressure(pressure: int) -> int:
+	return maxi(
+		maxi(1, SPAWN_CFG.enemy_reinforcement_interval_min),
+		SPAWN_CFG.enemy_reinforcement_interval - pressure
+	)
+
+
+## L1.3d-1 阶段 B：按当前暗影压力 P 从 tier_ratio 加权抽 tier（取代原 _pick_tier_for_cycle）
 ##
-## tier_rows 行结构：{cycle_index: int, tier: int, count: int}
-## count 即该 (cycle, tier) 组合的权重；累加同 cycle 的 count 得总权重，加权随机选 tier
+## tier_rows 行结构：{pressure_level: int, tier: int, count: int}
+## count 即该 (P, tier) 组合的权重；累加同 P 的 count 得总权重，加权随机选 tier
 ##
-## 兜底：tier_rows 空 / 当前 cycle 无配置 → 返回 tier 0
-static func _pick_tier_for_cycle(tier_rows: Array, cycle: int, rng: RandomNumberGenerator) -> int:
+## 兜底：tier_rows 空 / 当前 P 无配置 → 返回 tier 0
+static func _pick_tier_for_pressure(tier_rows: Array, pressure: int, rng: RandomNumberGenerator) -> int:
 	if tier_rows == null or tier_rows.is_empty():
 		return 0
-	# 收集当前 cycle 的 (tier, count) 列表 + 累加权重
+	# 收集当前 P 的 (tier, count) 列表 + 累加权重
 	var entries: Array = []   # 每项为 [tier, cumulative_weight]
 	var total_weight: int = 0
 	for row_v in tier_rows:
 		var row: Dictionary = row_v as Dictionary
 		if row == null:
 			continue
-		if int(row.get("cycle_index", "-1")) != cycle:
+		if int(row.get("pressure_level", "-1")) != pressure:
 			continue
 		var count: int = int(row.get("count", "0"))
 		if count <= 0:

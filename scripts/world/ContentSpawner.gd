@@ -45,6 +45,11 @@ var _resource_quota: int = 1
 ## 新增持久 slot 的援军储备表 + 城镇兵池（新 slot 全中立，恒用非敌方表）
 var _garrison_cfg: Dictionary = {}
 var _town_pool_rows: Array = []
+
+## L1.3d-1 阶段 B：当前暗影压力 P 的取值器（注入 Callable，懒求值）。
+## 运行期撒持久 slot 时按当前 P 抽 garrison 强度——新区 slot 防御随压力上档。
+## 未注入（测试 / 早期）时回退 P=0（基线强度）。
+var _pressure_provider: Callable = Callable()
 ## 撒点后请求重绘（通常绑 WorldMapRenderer.queue_redraw；无效 Callable 则跳过）
 var _redraw: Callable = Callable()
 
@@ -75,7 +80,8 @@ func setup(
 	resource_quota: int,
 	garrison_cfg: Dictionary,
 	town_pool_rows: Array,
-	redraw: Callable
+	redraw: Callable,
+	pressure_provider: Callable = Callable()
 ) -> void:
 	_schema = schema
 	_gen_config = gen_config
@@ -88,6 +94,7 @@ func setup(
 	_garrison_cfg = garrison_cfg
 	_town_pool_rows = town_pool_rows
 	_redraw = redraw
+	_pressure_provider = pressure_provider
 	_init_display_counters()
 
 
@@ -159,8 +166,11 @@ func _spawn_persistent_for_chunk(coord: Vector2i) -> bool:
 			# init_world_subsystems 一次性做，运行期新增 slot 在此对齐同一套）
 			cand.display_id = _next_display_id(cand.type)
 			BuildSystem.apply_level_fields(cand, cand.level)
+			# L1.3d-1 阶段 B：garrison 强度按当前暗影压力 P 抽（取代冻结 cycle_index）；
+			# 未注入 provider（测试 / 早期）回退 P=0 基线
+			var pressure: int = int(_pressure_provider.call()) if _pressure_provider.is_valid() else 0
 			cand.reinforcement_roster = ReinforcementRoster.sample(
-				cand.type as int, RunState.cycle_index(),
+				cand.type as int, pressure,
 				_garrison_cfg, _town_pool_rows, roster_rng
 			)
 			_schema.persistent_slots.append(cand)
