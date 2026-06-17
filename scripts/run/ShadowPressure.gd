@@ -12,8 +12,9 @@ class_name ShadowPressure
 ##
 ## 阶段归属：本份（阶段 A）只产出 P；P → 威胁表（tier 权重 + interval）的查表消费在阶段 B 接入。
 
-## 压力分段配置（结构性参数，重启生效；const preload 与项目其余 *_config 一致）。
-const CFG: PressureConfig = preload("res://assets/config/pressure_config.tres")
+## 压力分段配置。用 static var preload（非 const）：调参面板 entry_pressure 设 realtime=true，
+## 面板反射 set 拖滑块即时改难度曲线——避开 const 编译期内联（D5 const cache bug）。
+static var CFG: PressureConfig = preload("res://assets/config/pressure_config.tres")
 
 
 ## 计算当前压力等级 P = camp_level + vision_level。
@@ -23,24 +24,23 @@ static func compute_pressure(camp_count: int, source_count: int) -> int:
 	return camp_level(camp_count) + vision_level(source_count)
 
 
-## 扎营轴分段：扎营次数 → camp_level（读 CFG.camp_level_thresholds）。
+## 扎营轴分段：扎营次数 → camp_level（0-3 档，累计 >= 比较，依赖阈值升序）。
 static func camp_level(camp_count: int) -> int:
-	return _level_from_thresholds(camp_count, CFG.camp_level_thresholds)
-
-
-## 视野轴分段：视野源数 → vision_level（读 CFG.vision_level_thresholds）。
-static func vision_level(source_count: int) -> int:
-	return _level_from_thresholds(source_count, CFG.vision_level_thresholds)
-
-
-## 升序阈值分段通用算子：返回 value 跨过的阈值个数（= 段位）。
-## 依赖 thresholds 升序：一旦 value < 某阈值即可提前 break（后续必更大）。
-## 例：thresholds=[3,6,9]，value=5 → 跨过 3，未跨 6 → 段位 1。
-static func _level_from_thresholds(value: int, thresholds: Array[int]) -> int:
 	var level: int = 0
-	for t: int in thresholds:
-		if value >= t:
-			level += 1
-		else:
-			break
+	if camp_count >= CFG.camp_threshold_1:
+		level += 1
+	if camp_count >= CFG.camp_threshold_2:
+		level += 1
+	if camp_count >= CFG.camp_threshold_3:
+		level += 1
+	return level
+
+
+## 视野轴分段：视野源数 → vision_level（0-2 档，累计 >= 比较，依赖阈值升序）。
+static func vision_level(source_count: int) -> int:
+	var level: int = 0
+	if source_count >= CFG.vision_threshold_1:
+		level += 1
+	if source_count >= CFG.vision_threshold_2:
+		level += 1
 	return level

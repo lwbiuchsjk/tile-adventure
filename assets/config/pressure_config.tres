@@ -4,5 +4,8 @@
 
 [resource]
 script = ExtResource("1_pressure")
-camp_level_thresholds = Array[int]([3, 6, 9])
-vision_level_thresholds = Array[int]([2, 4])
+camp_threshold_1 = 3
+camp_threshold_2 = 6
+camp_threshold_3 = 9
+vision_threshold_1 = 2
+vision_threshold_2 = 4

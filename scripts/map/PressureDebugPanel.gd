@@ -10,9 +10,6 @@ extends CanvasLayer
 ##
 ## 非玩法逻辑：纯只读展示，不写任何状态；release 编译不创建（MapBootstrap 用 OS.is_debug_build() 守卫）。
 
-## 压力分段阈值（只用于展示「阈值 [..]」提示，与 ShadowPressure 同源）
-const PRESSURE_CFG: PressureConfig = preload("res://assets/config/pressure_config.tres")
-
 var _world_view: WorldView = null
 var _label: Label = null
 
@@ -66,10 +63,13 @@ func _refresh() -> void:
 	var base_iv: int = EnemyReinforcement.SPAWN_CFG.enemy_reinforcement_interval
 	var min_iv: int = EnemyReinforcement.SPAWN_CFG.enemy_reinforcement_interval_min
 
+	var cfg: PressureConfig = ShadowPressure.CFG
+	var camp_th: String = "[%d,%d,%d]" % [cfg.camp_threshold_1, cfg.camp_threshold_2, cfg.camp_threshold_3]
+	var vis_th: String = "[%d,%d]" % [cfg.vision_threshold_1, cfg.vision_threshold_2]
 	var lines: Array[String] = [
 		"══ 暗影压力测试面板 (Ctrl+I) ══",
-		"扎营次数: %d  → camp_level %d   阈值 %s" % [camp, camp_l, str(PRESSURE_CFG.camp_level_thresholds)],
-		"视野源数: %d  → vision_level %d   阈值 %s" % [sources, vis_l, str(PRESSURE_CFG.vision_level_thresholds)],
+		"扎营次数: %d  → camp_level %d   阈值 %s" % [camp, camp_l, camp_th],
+		"视野源数: %d  → vision_level %d   阈值 %s" % [sources, vis_l, vis_th],
 		"压力 P = %d + %d = %d" % [camp_l, vis_l, p],
 		"─ P=%d 威胁档 ─" % p,
 		"  增援 tier 权重: %s" % _tier_weights_text(p),

@@ -1,6 +1,6 @@
-[gd_resource type="Resource" script_class="ParamPanelRegistry" load_steps=23 format=3 uid="uid://dpanelregistryroot"]
+[gd_resource type="Resource" script_class="ParamPanelRegistry" load_steps=24 format=3 uid="uid://dpanelregistryroot"]
 
-; MVP-D D.3：registry 注册 20 份 Resource（12 新数值 + 8 现有视觉）
+; MVP-D D.3：registry 注册 21 份 Resource（13 新数值 + 8 现有视觉）
 ; group 归类（4 组新数值 + 1 组现有视觉，中粒度方案）：
 ;   战斗数值 / 整局节奏 / 玩家与敌方 / 部队经济 / 视觉动画（现有）
 ; 8 个现有视觉 Resource 已被 25 ParamPanelScene（Push 通道）覆盖 → Pull 通道去重跳过；
@@ -40,6 +40,14 @@ tres_path = "res://assets/config/score_param_resource.tres"
 group = &"整局节奏"
 skip_fields = PackedStringArray()
 realtime = false
+redraw_targets = []
+
+[sub_resource type="Resource" id="entry_pressure"]
+script = ExtResource("2_entry")
+tres_path = "res://assets/config/pressure_config.tres"
+group = &"整局节奏"
+skip_fields = PackedStringArray()
+realtime = true
 redraw_targets = []
 
 [sub_resource type="Resource" id="entry_player"]
@@ -172,4 +180,4 @@ redraw_targets = []
 
 [resource]
 script = ExtResource("1_registry")
-entries = Array[Resource]([SubResource("entry_battle"), SubResource("entry_difficulty"), SubResource("entry_run"), SubResource("entry_score"), SubResource("entry_player"), SubResource("entry_enemy_spawn"), SubResource("entry_quality_upgrade"), SubResource("entry_build"), SubResource("entry_level_reward"), SubResource("entry_turn_reward"), SubResource("entry_supply"), SubResource("entry_inventory"), SubResource("entry_battle_anim"), SubResource("entry_battle_visual"), SubResource("entry_influence"), SubResource("entry_map_base"), SubResource("entry_night_vision"), SubResource("entry_overlay_transition"), SubResource("entry_resource_render"), SubResource("entry_unit_enemy")])
+entries = Array[Resource]([SubResource("entry_battle"), SubResource("entry_difficulty"), SubResource("entry_run"), SubResource("entry_score"), SubResource("entry_pressure"), SubResource("entry_player"), SubResource("entry_enemy_spawn"), SubResource("entry_quality_upgrade"), SubResource("entry_build"), SubResource("entry_level_reward"), SubResource("entry_turn_reward"), SubResource("entry_supply"), SubResource("entry_inventory"), SubResource("entry_battle_anim"), SubResource("entry_battle_visual"), SubResource("entry_influence"), SubResource("entry_map_base"), SubResource("entry_night_vision"), SubResource("entry_overlay_transition"), SubResource("entry_resource_render"), SubResource("entry_unit_enemy")])
