@@ -1,19 +1,15 @@
-# 周期级配置 (P0 第二阶段 / 整局节奏重设计 MVP)
-# 每行一个 cycle (周期),与代码内 RunState._cycle_index 对应
+# 单图配置 (L1.3a 退化单行 / L1.3d-1 阶段 C 清 cycle 时钟列)
+# 恒读 cycle_index=0 行 (cycle 范式退役、无周期推进); 供 map_cfg 地图几何 + has_enemy_core 视觉门控
 #
 # 字段说明:
-#   cycle_index           主键 (0/1/2 与 RunState._cycle_index 一致)
-#   map_width/height      地图尺寸 (列/行)
-#   start_x/y             玩家初始 spawn 锚 + 通达性校验起点
-#   end_x/y               PCG 通达性校验终点 (须在地图边界内,通常落右下区)
-#   persistent_*          已退役列 (L1.3c 阶段 A 撒点参数改 content_config.tres; 列保留不再消费)
-#   has_enemy_core        bool: L1.3c 阶段 A 起恒 false——PCG 预置敌方 CORE_TOWN 已退役
-#                          (敌方无老家, 敌人改运行期刷新; 该列与视觉门控/force_tier 读点保留待阶段 C 清理)
-#   initial_enemy_pack_count 开局预置敌方 pack 数
-#   reinforcement_interval 增援间隔 (敌方回合数)
+#   cycle_index           主键 (恒 0)
+#   map_width/height      地图尺寸 -> map_cfg -> PCG (L1.3b 无限化后是否 vestige 待评估,见待跟踪)
+#   start_x/y             spawn 锚 + 通达校验起点 (L1.3c 出生居中后多为 vestige,见待跟踪)
+#   end_x/y               PCG 通达校验终点
+#   persistent_*          已退役列 (L1.3c 撒点改 content_config.tres; 列保留不再消费)
+#   has_enemy_core        bool: L1.3c 起恒 false (敌核心退役); 渲染门控 vestige 待跟踪
 #
-# 数值为 MVP 起步占位,跑测调参 (见整局节奏重设计_MVP §8)
-cycle_index,map_width,map_height,start_x,start_y,end_x,end_y,persistent_total_count,persistent_town_count,persistent_village_count,has_enemy_core,initial_enemy_pack_count,reinforcement_interval
-0,32,32,0,0,30,22,26,7,18,false,5,5
-1,26,26,1,1,22,18,20,5,15,true,5,4
-2,20,20,1,1,16,14,16,4,12,true,7,3
+# L1.3d-1 阶段 C 移除列: initial_enemy_pack_count / reinforcement_interval
+#   (敌人全动态从暗影刷 L1.3c-C; 增援间隔随压力 P L1.3d-1-B; 开局不预置 pack)
+cycle_index,map_width,map_height,start_x,start_y,end_x,end_y,persistent_total_count,persistent_town_count,persistent_village_count,has_enemy_core
+0,32,32,0,0,30,22,26,7,18,false

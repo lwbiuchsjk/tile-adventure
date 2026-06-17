@@ -3,12 +3,12 @@ extends SceneTree
 ##
 ## 运行：tools/run_godot.ps1 --headless -s test/test_run_state.gd
 ##
-## 验证范围（RunState 核心 API，L1.3a 阶段 D cycle 范式退役后）：
-##   1. ensure_initialized / reset 生命周期（cycle_index 冻结 0 / 命数 K 注入）
+## 验证范围（RunState 核心 API，L1.3d-1 阶段 C cycle 时钟死代码清理后）：
+##   1. ensure_initialized / reset 生命周期（命数 K 注入；cycle_index/max_cycles 已退役）
 ##   2. 独立命数 respawns_left / consume_respawn_life（脱钩 cycle）
 ##   3. 英雄池抽取 draw_new_leader / draw_recruit / used_hero_ids 跟踪
 ##   4. 重生事件占位 consume_pending_respawn_intro 幂等清零（冻结保留）
-##   5. 扎营计数 record_camp / get_current_cycle_camp_count / total_camp_count
+##   5. 扎营计数 record_camp / total_camp_count
 ##   6. recruit 适配 check_recruit_milestone（按 interval 命中 + lifetime 去重 + 招募次数硬上限）
 ##   7. sink 注册 / 清理（recruit / stronghold）
 
@@ -55,10 +55,9 @@ func _init() -> void:
 func _test_initial_state_after_init() -> void:
 	print("-- ensure_initialized 写入默认状态")
 	_reset()
-	_assert(RunState.cycle_index() == 0, "cycle_index 冻结为 0")
 	_assert(RunState.respawns_left() == 3, "respawns_left = 独立命数 K（默认 3，脱钩 cycle）")
 	_assert(not RunState.is_pending_respawn_intro(), "重生占位标志初始 false")
-	_assert(RunState.get_current_cycle_camp_count() == 0, "扎营计数 = 0")
+	_assert(RunState.total_camp_count() == 0, "扎营计数 = 0")
 	_assert(RunState.total_camp_count() == 0, "lifetime 主时钟 = 0")
 
 
@@ -68,15 +67,15 @@ func _test_reset_clears_state() -> void:
 	_reset()
 	RunState.record_camp()
 	RunState.draw_new_leader()
-	_assert(RunState.get_current_cycle_camp_count() == 1, "扎营 1 次")
+	_assert(RunState.total_camp_count() == 1, "扎营 1 次")
 	_assert(not RunState.active_used_hero_ids().is_empty(), "used_hero_ids 非空")
 	RunState.reset()
-	_assert(RunState.get_current_cycle_camp_count() == 0, "reset 后扎营计数归零")
+	_assert(RunState.total_camp_count() == 0, "reset 后扎营计数归零")
 	_assert(RunState.total_camp_count() == 0, "reset 后 lifetime 主时钟归零")
 	_assert(RunState.active_used_hero_ids().is_empty(), "used_hero_ids 清空")
-	# 再次 ensure_initialized 写入新数据
-	RunState.ensure_initialized(5, _mock_hero_pool(), _make_rng(42))
-	_assert(RunState.max_cycles() == 5, "reset 后 ensure_initialized 写入 max=5")
+	# 再次 ensure_initialized 写入新数据（验证 reset 后可重新初始化）
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42))
+	_assert(RunState.respawns_left() == 3, "reset 后 ensure_initialized 重新注入命数 K=3")
 
 
 ## 3. respawns_left 递减（L1.3a：独立命数，consume_respawn_life 扣减、脱钩 cycle）
@@ -152,7 +151,7 @@ func _test_record_camp() -> void:
 	RunState.record_camp()
 	RunState.record_camp()
 	RunState.record_camp()
-	_assert(RunState.get_current_cycle_camp_count() == 3, "扎营累计 3 次")
+	_assert(RunState.total_camp_count() == 3, "扎营累计 3 次")
 	_assert(RunState.total_camp_count() == 3, "lifetime 主时钟 = 3")
 
 
@@ -260,7 +259,7 @@ func _test_stronghold_cross_init_preserved() -> void:
 	RunState.set_stronghold(Vector2i(4, 4))
 	_assert(RunState.has_stronghold(), "设定据点")
 	# 再次 ensure_initialized（不 reset）—— _initialized=true 直接 return，据点字段不被清
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42))
 	_assert(RunState.has_stronghold(), "跨 ensure_initialized 据点保留")
 	_assert(RunState.stronghold_pos() == Vector2i(4, 4), "据点坐标保留")
 
@@ -277,10 +276,9 @@ func _test_consume_respawn_life() -> void:
 	RunState.record_camp()
 	_assert(RunState.respawns_left() == 3, "初始命数 3（独立计数 K）")
 	RunState.consume_respawn_life()
-	_assert(RunState.cycle_index() == 0, "consume 不推 cycle（脱钩，cycle 冻结 0）")
-	_assert(RunState.respawns_left() == 2, "命数 3 → 2")
+	_assert(RunState.respawns_left() == 2, "命数 3 → 2（独立计数，不推 cycle）")
 	_assert(not RunState.is_pending_respawn_intro(), "不置 _pending_respawn_intro（无 reload）")
-	_assert(RunState.get_current_cycle_camp_count() == 2, "扎营计数不被归零")
+	_assert(RunState.total_camp_count() == 2, "扎营计数不被归零")
 	# 扣到命数耗尽
 	RunState.consume_respawn_life()
 	RunState.consume_respawn_life()
@@ -305,7 +303,7 @@ func _test_consume_respawn_life_preserves_stronghold() -> void:
 func _reset() -> void:
 	RunState.clear_sinks()
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42))
 
 
 ## 4 个英雄的 mock 池

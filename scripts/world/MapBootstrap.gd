@@ -126,21 +126,21 @@ func load_configs() -> void:
 	# 加载 enemy_tier_ratio_config（L1.3d-1 阶段 B：按 pressure_level 抽 tier 用，EnemyReinforcement.spawn_batch 消费）
 	_world_map._enemy_tier_ratio_rows = ConfigLoader.load_csv(WorldMap.CONFIG_ENEMY_TIER_RATIO)
 
-	# B 重生周期 MVP：英雄池 + 整局周期参数
+	# B 重生周期 MVP：英雄池 + 整局参数
 	# RunState.ensure_initialized 幂等：首次进入写入；重生场景 reload 时
-	# _initialized=true，沿用上一周期累积的 _cycle_index / _used_hero_ids 等
+	# _initialized=true，沿用累积的 _used_hero_ids / 据点 / 扎营计数等整局态
 	hero_pool_rows = ConfigLoader.load_csv(WorldMap.CONFIG_HERO_POOL)
 	# 入口 2 MVP 2.3(2026-05-11):加载事件叙事池(NarrativeProvider 静态工具类内部 _initialized 防重复加载)
 	narrative_rows = ConfigLoader.load_csv(WorldMap.CONFIG_NARRATIVE_POOL)
 	NarrativeProvider.ensure_loaded(narrative_rows)
-	var max_cycles_v: int = WorldMap.RUN_PARAM_CFG.max_cycles
 	# L1.3a 阶段 A：命数独立计数 K 从 run_cfg 注入（脱钩 cycle，收口待跟踪 P1-2）
 	var no_stronghold_respawns_v: int = WorldMap.RUN_PARAM_CFG.no_stronghold_respawns
 	# MVP-δ 阶段 2：coma_duration_sec / coma_hp_threshold_ratio 从 run_cfg 注入移到
 	# PlayerLifecycle.setup 内（_player_lifecycle 在 _init_player 调用点创建）
 	# rng 传 null：RunState 内部 randomize 一个独立 RNG，不被地图 PCG seed 干扰
 	# （重生抽队长应与地图 PCG 解耦，否则同 seed 重开会抽到同一队长序列）
-	RunState.ensure_initialized(max_cycles_v, hero_pool_rows, null, no_stronghold_respawns_v)
+	# L1.3d-1 阶段 C：移除 max_cycles 参（cycle 范式退役）
+	RunState.ensure_initialized(hero_pool_rows, null, no_stronghold_respawns_v)
 
 	# 加载资源点配置
 	_world_map._resource_slot_config_rows = ConfigLoader.load_csv(WorldMap.CONFIG_RESOURCE_SLOT)
@@ -311,16 +311,15 @@ func _apply_cycle_config_internal() -> void:
 
 	if cycle_row.is_empty():
 		push_warning("WorldMap: cycle_config 未找到 cycle_index=%d 对应行，使用 map_config 兜底" % current_cycle)
-		# 兜底：spawn 节奏字段用默认值（initial pack 5 / interval 5）
-		_world_map._current_cycle_initial_pack_count = 5
-		_world_map._current_cycle_reinforcement_interval = 5
 		_world_map._current_cycle_has_enemy_core = false
 		return
 
-	# 用 cycle row 覆盖 map_cfg 中对应字段（后续 _load_pcg 读 map_cfg 拿到本周期值）
+	# 用 cycle row 覆盖 map_cfg 中对应字段（后续 _load_pcg 读 map_cfg 拿到地图几何值）
 	# L1.3c 阶段 A：persistent_* 数量/配额覆盖随八阶段生成器退役删除——
 	# 撒点参数（cell_size / spawn_rate / town_ratio）改由 content_config.tres 提供，
 	# cycle_config 中的 persistent_total/town/village_count 列保留但不再被消费
+	# L1.3d-1 阶段 C：initial_enemy_pack_count / reinforcement_interval 列消费退役——
+	# 敌人全动态从暗影刷（L1.3c 阶段 C）、增援间隔随 P（L1.3d-1 阶段 B），开局不预置 pack
 	var override_keys: Array[String] = [
 		"map_width", "map_height", "start_x", "start_y", "end_x", "end_y",
 	]
@@ -328,21 +327,7 @@ func _apply_cycle_config_internal() -> void:
 		if cycle_row.has(key):
 			map_cfg[key] = str(cycle_row[key])
 
-	# 缓存周期级字段
-	# initial_enemy_pack_count: 钳制 ≥ 0（0 = 本周期不预置初始 pack，合理边界）
-	# reinforcement_interval: 钳制 ≥ 1（避免 EnemyAI._step_reinforcement 的 count % interval 除零崩溃）
-	var raw_pack: int = int(cycle_row.get("initial_enemy_pack_count", "5"))
-	var raw_interval: int = int(cycle_row.get("reinforcement_interval", "5"))
-	if raw_pack < 0:
-		push_warning("WorldMap: cycle_config[%d].initial_enemy_pack_count 非法 %d，钳制为 0" % [current_cycle, raw_pack])
-	if raw_interval < 1:
-		push_warning("WorldMap: cycle_config[%d].reinforcement_interval 非法 %d，钳制为 1 防除零" % [current_cycle, raw_interval])
-	_world_map._current_cycle_initial_pack_count = maxi(0, raw_pack)
-	_world_map._current_cycle_reinforcement_interval = maxi(1, raw_interval)
-
-	# P0 第二阶段 P1-2a 修复：缓存 has_enemy_core，视觉绘制改用该字段（替代硬编码 is_last_cycle()）
-	# VictoryJudge.check_on_slot_owner_changed 仍用 RunState.is_last_cycle()——static 路径不便注入
-	# MVP 期 has_enemy_core 与 is_last_cycle() 同义；若未来配置错位需 VictoryJudge 也切到该字段
+	# 缓存 has_enemy_core 视觉门控（敌核心 vestige：L1.3c 起恒 false，完整退役 + 渲染解耦留待跟踪）
 	_world_map._current_cycle_has_enemy_core = str(cycle_row.get("has_enemy_core", "false")).to_lower() == "true"
 
 
@@ -637,9 +622,9 @@ func init_world_subsystems() -> void:
 	_world_map._enemy_ai.name = "EnemyAI"
 	_world_map.add_child(_world_map._enemy_ai)
 	_world_map._enemy_ai.init(_world_map._world_view, _world_map._turn_manager)
-	# L1.3c 阶段 C：增援间隔注入已退役——改由 EnemyReinforcement.SPAWN_CFG 实时读（调参面板可调）
+	# 增援间隔由 EnemyReinforcement.reinforcement_interval_for_pressure(P) 决定（L1.3d-1 阶段 B）；
 	# cycle_config.csv 的 reinforcement_interval 列 + _current_cycle_reinforcement_interval 字段
-	# 就此 superseded（vestige，留 ③ L1.3d 重做威胁曲线时随 cycle 表一并清）
+	# 已于 L1.3d-1 阶段 C 退役清除
 
 	# 事件面板 UI（探索体验·F MVP）—— MVP-α.5：切预制件实例化
 	# 挂载位置：所有交互面板之后、VictoryUI 之前——
@@ -902,6 +887,6 @@ func finalize_startup() -> void:
 		var line: String = _world_map._player_lifecycle.format_respawn_line_for_current_leader()
 		var lines: PackedStringArray = PackedStringArray([line])
 		# 火苗团数 = 过渡完成后的玩家总命数；游戏开始无消耗 → 当前 respawns_left + 1（含当前队长）
-		# 例：max_cycles=3, _cycle_index=0 → respawns_left=2 → 显示 3 团火苗
+		# 例：命数 K=2 → respawns_left=2 → 显示 3 团火苗（独立命数计数，脱钩 cycle）
 		var icon_data: Dictionary = {"icon": "🔥", "count": RunState.respawns_left() + 1}
 		OverlayTransitionUI.play_with_blackout_start(lines, icon_data)

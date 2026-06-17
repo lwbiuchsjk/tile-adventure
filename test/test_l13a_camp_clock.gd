@@ -43,15 +43,15 @@ func _test_respawns_remaining_inject() -> void:
 	print("-- ensure_initialized 注入命数 K")
 	# 显式传入 K=5
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42), 5)
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42), 5)
 	_assert(RunState.respawns_remaining() == 5, "显式传入 K=5 → respawns_remaining=5")
 	# 默认参（不传）→ 3
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42))
 	_assert(RunState.respawns_remaining() == 3, "默认参 → respawns_remaining=3")
 	# 负值兜底 → 0
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42), -2)
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42), -2)
 	_assert(RunState.respawns_remaining() == 0, "负值 K → maxi 兜底为 0")
 
 
@@ -65,7 +65,7 @@ func _test_total_camp_count_accumulate() -> void:
 	RunState.record_camp()
 	_assert(RunState.total_camp_count() == 3, "扎营 3 次 → total_camp_count=3")
 	# 与 per-cycle 计数并存（不冲突）
-	_assert(RunState.get_current_cycle_camp_count() == 3, "per-cycle 计数同步 = 3")
+	_assert(RunState.total_camp_count() == 3, "per-cycle 计数同步 = 3")
 
 
 ## 3. _total_camp_count lifetime 累加，且不被命数路径污染（L1.3a 阶段 D：cycle 退役后无归零方）
@@ -128,7 +128,7 @@ func _test_respawns_remaining_consume() -> void:
 func _reset() -> void:
 	RunState.clear_sinks()
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42))
 
 
 func _mock_hero_pool() -> Array:

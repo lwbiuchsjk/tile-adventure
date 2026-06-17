@@ -38,16 +38,6 @@ static var _hero_pool: Array[Dictionary] = []
 ## 已担任过队长的英雄 ID 列表
 static var _used_hero_ids: Array[int] = []
 
-## 当前周期编号（0 = 首发；max_cycles - 1 = 末周期无保护）
-static var _cycle_index: int = 0
-
-## 整局最多周期数（含末周期）；ensure_initialized 写入
-static var _max_cycles: int = 3
-
-## 当前累计扎营次数；record_camp 时 +1（L1.3a 阶段 D：cycle 范式退役后 == _total_camp_count，
-## 冗余保留供 HUD / 调试读取当前扎营计数；不再被任何"周期归零"清零）
-static var _current_cycle_camp_count: int = 0
-
 ## 重生事件占位标志（昏迷 reload 范式遗留）；L1.3a 阶段 D 后 advance_cycle 退役、已无人置位（冻结保留，
 ## 不级联清理 WorldMap respawn_intro 信号线）。用 consume_pending_respawn_intro 取值并清零
 static var _pending_respawn_intro: bool = false
@@ -124,29 +114,27 @@ static var _rng: RandomNumberGenerator = null
 # ─────────────────────────────────────
 
 ## 首次进入或重生场景重载时调用
-## - _initialized=false：写入 max_cycles / hero_pool / 全部计数清零
-## - _initialized=true：原样返回（重生 reload 走到这里，保持 _used_hero_ids / _cycle_index 等）
+## - _initialized=false：写入 hero_pool / 全部计数清零
+## - _initialized=true：原样返回（重生 reload 走到这里，保持 _used_hero_ids 等整局态）
 ##
 ## hero_pool_rows 期望来自 ConfigLoader.load_csv("hero_pool.csv")；浅拷贝以避免外部修改穿透
 ##
-## L1.3a 阶段 A：新增可选参 no_stronghold_respawns_value 注入命数独立计数（默认 3 保持向后兼容，
+## L1.3a 阶段 A：可选参 no_stronghold_respawns_value 注入命数独立计数（默认 3 保持向后兼容，
 ## 老调用方 / 测试不传时退回默认；MapBootstrap 显式传 run_cfg.no_stronghold_respawns）
-static func ensure_initialized(max_cycles_value: int, hero_pool_rows: Array, rng: RandomNumberGenerator, no_stronghold_respawns_value: int = 3) -> void:
+## L1.3d-1 阶段 C：移除 max_cycles_value 参（cycle 范式退役，_max_cycles 已无消费方）
+static func ensure_initialized(hero_pool_rows: Array, rng: RandomNumberGenerator, no_stronghold_respawns_value: int = 3) -> void:
 	if _initialized:
 		return
-	_max_cycles = maxi(1, max_cycles_value)
 	# ConfigLoader.load_csv 返回无类型 Array，逐行强转为 Dictionary 写入 typed _hero_pool
 	# 这样后续读取 _hero_pool 时无需再次 cast，对齐项目 CLAUDE.md 类型化规范
 	_hero_pool = []
 	for entry in hero_pool_rows:
 		_hero_pool.append(entry as Dictionary)
 	_used_hero_ids = []
-	_cycle_index = 0
-	_current_cycle_camp_count = 0
 	_pending_respawn_intro = false
 	_already_recruited_camps = []
-	# L1.2 Phase 1：据点跨周期 reload 保留靠 _initialized=true 直接 return（上方 line 112-113）；
-	# 此处清零是"首次进入"的初始态，与 _used_hero_ids / _cycle_index 同语义
+	# L1.2 Phase 1：据点跨场景 reload 保留靠 _initialized=true 直接 return（上方）；
+	# 此处清零是"首次进入"的初始态，与 _used_hero_ids 同语义
 	_stronghold_pos = Vector2i.ZERO
 	_has_stronghold = false
 	# L1.3a 阶段 A：扎营主时钟 / 命数独立 / climax 标志的"首次进入"初始态
@@ -172,8 +160,6 @@ static func reset() -> void:
 	_initialized = false
 	_hero_pool = []
 	_used_hero_ids = []
-	_cycle_index = 0
-	_current_cycle_camp_count = 0
 	_pending_respawn_intro = false
 	_already_recruited_camps = []
 	# L1.2 Phase 1：整局重开清据点（与 _used_hero_ids 等整局态同语义）
@@ -183,24 +169,11 @@ static func reset() -> void:
 	_total_camp_count = 0
 	_respawns_remaining = 0
 	_climax_triggered = false
-	# _max_cycles 不重设；下一次 ensure_initialized 会按新配置覆盖
 
 
 # ─────────────────────────────────────
 # 周期 / 重生保护查询
 # ─────────────────────────────────────
-
-## 当前周期编号（L1.3a 阶段 D：cycle 范式退役，_cycle_index 冻结在 0——无人推进；
-## 保留访问器供 EnemyReinforcement 抽 tier / MapBootstrap / ReinforcementRoster 读固定单图配置；
-## tier 随周期递增的逻辑退役，敌方威胁改扎营时钟驱动留子 MVP ②）
-static func cycle_index() -> int:
-	return _cycle_index
-
-
-## 整局最多周期数（L1.3a 阶段 D：cycle 退役后冻结，仅 ensure_initialized 签名兼容保留）
-static func max_cycles() -> int:
-	return _max_cycles
-
 
 ## 剩余重生保护次数
 ##
@@ -329,16 +302,9 @@ static func is_pending_respawn_intro() -> bool:
 # ─────────────────────────────────────
 
 ## 累加扎营次数；由 EC.start_camp 调用
-## L1.3a：同步累加 lifetime 主时钟 _total_camp_count（climax 触发 + recruit 适配读它）；
-## _current_cycle_camp_count 冗余跟随（cycle 退役后无归零方，== _total_camp_count）
+## L1.3a：累加 lifetime 主时钟 _total_camp_count（climax 触发 + recruit 适配读它）
 static func record_camp() -> void:
-	_current_cycle_camp_count += 1
 	_total_camp_count += 1
-
-
-## 当前累计扎营次数（HUD / 调试用；== total_camp_count）
-static func get_current_cycle_camp_count() -> int:
-	return _current_cycle_camp_count
 
 
 # ─────────────────────────────────────

@@ -21,8 +21,8 @@ extends Node2D
 # ─────────────────────────────────────────
 
 const CONFIG_MAP: String = "res://assets/config/map_config.csv"
-## P0 第二阶段（整局节奏重设计）：周期级配置（地图尺寸 / 持久 slot 数量 / spawn 节奏）
-## 按 RunState.cycle_index() 取行；缺失时回退 map_config 字段
+## 单图配置（地图几何 + has_enemy_core 门控）：L1.3a 退化单行，恒读 cycle_index=0 行
+## L1.3d-1 阶段 C：cycle 时钟列（pack/interval）已清；地图几何 vestige 待评估（见待跟踪）
 const CONFIG_CYCLE: String = "res://assets/config/cycle_config.csv"
 const CONFIG_TERRAIN: String = "res://assets/config/terrain_config.csv"
 const CONFIG_SLOT: String = "res://assets/config/slot_config.csv"
@@ -178,15 +178,8 @@ var _cycle_config_rows: Array = []
 ## EnemyReinforcement.spawn_batch 按当前暗影压力 P 抽 tier 时使用
 var _enemy_tier_ratio_rows: Array = []
 
-## P0 第二阶段：缓存当前周期的 initial_enemy_pack_count（由 _apply_cycle_config 注入）
-var _current_cycle_initial_pack_count: int = 5
-
-## P0 第二阶段：缓存当前周期的 reinforcement_interval（由 _apply_cycle_config 注入）
-var _current_cycle_reinforcement_interval: int = 5
-
-## P0 第二阶段（P1-2a 修复）：缓存当前周期 has_enemy_core 标志
-## 视觉绘制（CORE_TOWN 双态）用该字段替代硬编码 RunState.is_last_cycle()——配置驱动 vs 代码硬编码
-## VictoryJudge cycle 过滤仍用 RunState.is_last_cycle()（static 路径不便注入；MVP 期与本字段同义）
+## has_enemy_core 视觉门控（敌核心 vestige：L1.3c 起恒 false；CORE_TOWN 双态绘制用）
+## 完整退役 + 渲染解耦留待跟踪（见《待跟踪事项索引》）
 var _current_cycle_has_enemy_core: bool = false
 
 var _start_pos: Vector2i = Vector2i.ZERO

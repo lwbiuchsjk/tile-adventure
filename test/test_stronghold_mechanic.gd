@@ -158,7 +158,7 @@ func _test_init_scan_registers_preoccupied() -> void:
 	var vs: VisionSystem = ctx["vs"]
 	# 无据点场景
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(1))
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(1))
 	# 2 个玩家占领 + 1 敌方 + 1 中立
 	var slots: Array[PersistentSlot] = [
 		_make_slot(Vector2i(2, 2), Faction.PLAYER),
@@ -179,7 +179,7 @@ func _test_init_scan_with_stronghold() -> void:
 	var binding: StrongholdVisionBinding = ctx["binding"]
 	var vs: VisionSystem = ctx["vs"]
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(1))
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(1))
 	# 据点格 (5,5) 必须是 CORE_TOWN/PLAYER 才被据点分支命中
 	var stronghold_slot: PersistentSlot = _make_slot(Vector2i(5, 5), Faction.PLAYER)
 	stronghold_slot.type = PersistentSlot.Type.CORE_TOWN

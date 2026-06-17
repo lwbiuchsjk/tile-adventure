@@ -143,7 +143,7 @@ func _test_resolver_unregistered_degrades_to_fallback() -> void:
 	print("-- resolver 未注册：退化为无据点路径")
 	_reset_capture()
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42))
 	var lc: PlayerLifecycle = PlayerLifecycle.new()
 	lc.coma_respawn_triggered.connect(_on_respawn)
 	lc.defeat_triggered.connect(_on_defeat)
@@ -184,7 +184,7 @@ func _test_climax_battle_sudden_death() -> void:
 func _make_lifecycle(resolution: Dictionary) -> PlayerLifecycle:
 	_reset_capture()
 	RunState.reset()
-	RunState.ensure_initialized(3, _mock_hero_pool(), _make_rng(42))
+	RunState.ensure_initialized(_mock_hero_pool(), _make_rng(42))
 	var lc: PlayerLifecycle = PlayerLifecycle.new()
 	lc.coma_respawn_triggered.connect(_on_respawn)
 	lc.defeat_triggered.connect(_on_defeat)
